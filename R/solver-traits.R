@@ -185,6 +185,7 @@ auto_dt_reset <- function(integ) {
   I <- .integ_I(integ)
   a <- I$algs[[I$cur]]
   I$dt <- I$start_dt(a, I$caches[[I$cur]])
+  I$stats$nf <- I$stats$nf + 2L
   invisible(integ)
 }
 

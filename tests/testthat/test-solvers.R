@@ -499,21 +499,22 @@ test_that("step limiters change the accepted state", {
 })
 
 test_that("interpolation only Verner stages count as function evaluations", {
+  # 1 for the derivative at the start, 2 for the initial step size estimate
   prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
   for (case in list(list(Vern7(), 10L, 6L), list(Vern9(), 16L, 10L))) {
     alg <- case[[1]]
     sol <- solve(prob, alg, reltol = 1e-8)
     n <- sol$stats$naccept + sol$stats$nreject
-    expect_equal(sol$stats$nf, 1L + n * case[[2]], label = alg$name)
+    expect_equal(sol$stats$nf, 3L + n * case[[2]], label = alg$name)
     # the extra stages of a step are computed once, on the first interpolation
     sol(0.05)
-    expect_equal(sol$stats$nf, 1L + n * case[[2]] + case[[3]], label = alg$name)
+    expect_equal(sol$stats$nf, 3L + n * case[[2]] + case[[3]], label = alg$name)
     sol(0.051)
-    expect_equal(sol$stats$nf, 1L + n * case[[2]] + case[[3]], label = alg$name)
+    expect_equal(sol$stats$nf, 3L + n * case[[2]] + case[[3]], label = alg$name)
     # saveat interpolates during the solve, once per step it falls in
     sv <- solve(prob, alg, reltol = 1e-8, saveat = c(0.05, 0.5))
     nsteps <- length(unique(findInterval(c(0.05, 0.5), sol$t, left.open = TRUE)))
-    expect_equal(sv$stats$nf, 1L + n * case[[2]] + nsteps * case[[3]], label = alg$name)
+    expect_equal(sv$stats$nf, 3L + n * case[[2]] + nsteps * case[[3]], label = alg$name)
   }
 })
 

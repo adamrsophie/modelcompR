@@ -198,13 +198,15 @@ RK4 <- function() {
 # Controller settings of an algorithm: the *_default functions of
 # OrdinaryDiffEqCore/src/alg_utils.jl with the per algorithm overrides the
 # constructors store in the algorithm object. `type` is "PI" (PIController),
-# "I" (IController) or "BDF" (BDFController, OrdinaryDiffEqBDF/src/controllers.jl).
+# "I" (IController), "Predictive" (PredictiveController) or "BDF"
+# (BDFController, OrdinaryDiffEqBDF/src/controllers.jl).
 .ctrl_opts <- function(alg, opts) {
   ord <- alg$order
   beta2 <- opts$beta2 %||% alg$beta2 %||% (2 / (5 * ord))
   list(type = alg$controller %||% "PI",
        pid_beta = opts$pid_beta %||% alg$pid_beta, accept_safety = alg$accept_safety %||% 0.81,
        pid_k = min(ord, alg$adaptive_order %||% ord) + 1,
+       adaptive_order = alg$adaptive_order %||% (ord - 1),
        beta1 = opts$beta1 %||% alg$beta1 %||% (7 / (10 * ord)), beta2 = beta2,
        qmin = opts$qmin %||% alg$qmin %||% (1 / 5), qmax = opts$qmax %||% alg$qmax %||% 10,
        qmax_first = 10000, gamma = opts$gamma %||% alg$gamma %||% 0.9,
@@ -253,7 +255,8 @@ RK4 <- function() {
   out
 }
 
-.ctrl_state <- function() list(errold = 1e-4, q11 = 1, dtreject = NA_real_, err = c(1, 1, 1), dt_factor = 1)
+.ctrl_state <- function() list(errold = 1e-4, q11 = 1, dtreject = NA_real_, err = c(1, 1, 1), dt_factor = 1,
+                               dtacc = 1, erracc = 1, qold = 1, first = TRUE)
 
 # PIDController (integrators/controllers.jl): the step factor from the last
 # three error estimates, limited by 1 + atan(x - 1); a step is accepted when
@@ -279,6 +282,15 @@ RK4 <- function() {
   qmax <- if (first) co$qmax_first else co$qmax
   if (co$type == "BDF") return(list(q = alg$bdf_stepsize(cache, EEst, co, first), cs = cs))
   if (co$type == "PID") return(.ctrl_pid_q(co, cs, EEst))
+  if (co$type == "Predictive") {
+    # PredictiveController: the factor from the error of this step alone
+    cs$first <- first
+    if (EEst == 0) return(list(q = 1 / qmax, cs = cs))
+    q <- if (is.finite(EEst)) .fastpower(EEst, 1 / (co$adaptive_order + 1)) / co$gamma else Inf
+    q <- min(1 / co$qmin, max(1 / qmax, q))
+    cs$qold <- q
+    return(list(q = q, cs = cs))
+  }
   if (!is.finite(EEst)) {
     cs$q11 <- Inf
     cs$dtreject <- dt * co$qmin
@@ -306,6 +318,19 @@ RK4 <- function() {
     cs$err[3L] <- cs$err[2L]; cs$err[2L] <- cs$err[1L]
     return(list(dt = dt * fac, cs = cs))
   }
+  if (co$type == "Predictive") {
+    # Gustafsson's predictive factor from the last accepted step
+    qacc <- q
+    if (!cs$first) {
+      qgus <- (cs$dtacc / dt) * .fastpower((EEst^2) / cs$erracc, 1 / (co$adaptive_order + 1))
+      qgus <- max(1 / co$qmax, min(1 / co$qmin, qgus / co$gamma))
+      qacc <- max(q, qgus)
+    }
+    if (qacc >= co$qsteady_min && qacc <= co$qsteady_max) qacc <- 1
+    cs$dtacc <- dt
+    cs$erracc <- max(1e-2, EEst)
+    return(list(dt = dt / qacc, cs = cs))
+  }
   if (q >= co$qsteady_min && q <= co$qsteady_max) q <- 1
   if (co$type == "PI") cs$errold <- max(EEst, 1e-4)
   list(dt = dt / q, cs = cs)
@@ -316,6 +341,7 @@ RK4 <- function() {
   if (co$type == "BDF") return(alg$bdf_reject(cache, EEst, dt, co))
   if (co$type == "PID") return(dt * cs$dt_factor)
   if (co$type == "I") return(cs$dtreject)
+  if (co$type == "Predictive") return(if (cs$first) 0.1 * dt else dt / cs$qold)
   dt / min(1 / co$qmin, cs$q11 / co$gamma)
 }
 
@@ -435,7 +461,7 @@ solve.ODEProblem <- function(a, b, ...) {
               algebraic = if (mm) rowSums(abs(M)) == 0 else NULL,
               differential_vars = if (is_dae) prob$differential_vars else
                 if (mm) colSums(abs(M)) != 0 else NULL,
-              dtmin = dtmin, lazy_nf = new.env(parent = emptyenv()),
+              dtmin = dtmin, dtmax = dtmax, lazy_nf = new.env(parent = emptyenv()),
               autodiff = Reduce(function(a, b) a %||% b, lapply(algs, `[[`, "autodiff"), NULL))
   ctx$lazy_nf$n <- 0L
   if (any(!is.finite(integ$u))) stop("initial values are not finite: ",
@@ -529,6 +555,8 @@ solve.ODEProblem <- function(a, b, ...) {
   if (is.null(dt)) {
     if (!adaptive) stop(algs[[cur]]$name, "() is a fixed step method; give dt", call. = FALSE)
     dt <- start_dt(algs[[cur]], caches[[cur]])
+    # auto_dt_reset! counts the two evaluations of the initial step estimate
+    stats$nf <- stats$nf + 2L
   }
   dt <- abs(dt)
   next_save <- 1L
@@ -682,15 +710,24 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     }
     stats$naccept <- stats$naccept + 1L
     success_iter <- success_iter + 1L
+    after_reject <- !accept_prev
     accept_prev <- TRUE
     if (!is.null(AS)) alg_choice <- c(alg_choice, cur)
     if (adaptive) {
       # a step shortened to hit a tstop proposes from the controller's dt
-      acc <- .ctrl_accept(co, css[[cur]], qq$q, EEst, if (hit_stop) max(dt, dtcur) else dtcur, a, caches[[cur]])
+      # only after a rejected step: after an accepted step OrdinaryDiffEq
+      # shortens dt twice (apply_step! and loopheader!), so the dt it
+      # restores is the shortened one
+      acc <- .ctrl_accept(co, css[[cur]], qq$q, EEst, if (hit_stop && after_reject) max(dt, dtcur) else dtcur,
+                          a, caches[[cur]])
       css[[cur]] <- acc$cs
       dtnew <- acc$dt
+      # dtnew_modification: the largest stable step of stabilized methods
+      if (!is.null(a$dtnew_mod)) dtnew <- a$dtnew_mod(dtnew, eigen_est)
     } else dtnew <- dt
     tnew <- if (hit_stop) next_stop else integ$t + tdir * dtcur
+    # calc_dt_propose!: the step is the interval it spans in floating point
+    if (adaptive) dtnew <- abs((tnew + tdir * abs(dtnew)) - tnew)
     # apply_solve_step_limiter!: the limiter may change the accepted state
     # (and the parameters), so the FSAL derivative is evaluated again
     limiter <- opts$step_limiter %||% a$step_limiter
@@ -775,9 +812,6 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       # the step size carries over the event (as in OrdinaryDiffEq); the
       # caches, the controller history and multistep histories restart
       if (adaptive) dt <- min(abs(dtnew), dtmax)
-      css[[cur]] <- .ctrl_state()
-      # methods with divided difference error estimates restart their history
-      success_iter <- 0L
       break
     }
     dt <- min(abs(dtnew), dtmax)

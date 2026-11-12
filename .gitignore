@@ -10,3 +10,4 @@ tools/julia/install.log
 .gstack/
 tests/testthat/_problems/
 tests/testthat/testthat-problems.rds
+tools/stabilized-tables.tsv
