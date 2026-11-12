@@ -21,35 +21,87 @@
 # ---------------------------------------------------------------------------
 # Noise process
 
-.noise_new <- function(t0, m, needs_dZ) {
+# The noise of one solve: a Wiener process by default, or the process `proc`
+# (see noise_processes) with its increment distribution and bridge, or a
+# path noise (grid, function, wrapper, tree) whose increments are fixed.
+.noise_new <- function(t0, m, needs_dZ, proc = NULL) {
   ns <- new.env(parent = emptyenv())
   ns$m <- m
   ns$needs_dZ <- needs_dZ
   ns$stack <- list()
   ns$pending <- NULL
   ns$W <- numeric(m)
+  ns$Z <- if (needs_dZ) numeric(m)
+  if (!is.null(proc)) {
+    pe <- .np_env(proc)
+    ns$proc <- proc
+    ns$pe <- pe
+    ns$kind <- pe$kind
+    ns$W <- pe$curW
+    ns$Z <- if (needs_dZ) pe$curZ %||% numeric(length(pe$curW))
+    if (pe$kind == "process") {
+      ns$stack <- pe$S1
+      ns$rswm0 <- identical(pe$rswm$adaptivealg, "RSwM0")
+      ns$no_reject <- isTRUE(pe$simple) || isTRUE(pe$no_reject)
+    }
+    ns$m <- length(ns$W)
+  }
   ns$log_t <- t0
-  ns$log_W <- list(numeric(m))
+  ns$log_W <- list(ns$W)
+  ns$u <- NULL; ns$p <- NULL
   ns
 }
 
 # Tolerance for comparing times: a few rounding errors of t.
 .noise_tol <- function(t) 8 * .Machine$double.eps * max(1, abs(t))
 
-.noise_commit <- function(ns, tend, dW) {
+.noise_commit <- function(ns, tend, dW, dZ = NULL) {
   ns$W <- ns$W + dW
+  if (!is.null(ns$Z) && !is.null(dZ)) ns$Z <- ns$Z + dZ
+  if (!is.null(ns$pe)) {
+    ns$pe$curt <- tend; ns$pe$curW <- ns$W
+    if (!is.null(ns$pe$curZ) && !is.null(ns$Z)) ns$pe$curZ <- ns$Z
+    if (!is.null(ns$pe$on_accept)) ns$pe$on_accept(ns$pe)
+  }
   ns$log_t <- c(ns$log_t, tend)
   ns$log_W[[length(ns$log_W) + 1L]] <- ns$W
 }
 
-# Split an increment over [0, h] at s with the Brownian bridge.
-.noise_split <- function(ns, e, s) {
+# A fresh increment over h from the value W (the distribution of the process).
+.noise_fresh <- function(ns, W, h, t) {
+  if (is.null(ns$pe)) return(stats::rnorm(ns$m, 0, sqrt(h)))
+  old <- ns$pe$curW
+  ns$pe$curW <- W
+  on.exit(ns$pe$curW <- old)
+  .np_call_dist(ns$pe, W, h, ns$u, ns$p, t)
+}
+
+# Split an increment over [0, h] at s with the bridge of the process; W0 is
+# the value at the start of the increment.
+.noise_split <- function(ns, e, s, W0 = ns$W, Z0 = ns$Z, t = NULL) {
   frac <- s / e$h
-  sd <- sqrt(s * (e$h - s) / e$h)
-  w1 <- stats::rnorm(ns$m, e$dW * frac, sd)
-  z1 <- if (ns$needs_dZ) stats::rnorm(ns$m, e$dZ * frac, sd) else NULL
+  if (is.null(ns$pe)) {
+    sd <- sqrt(s * (e$h - s) / e$h)
+    w1 <- stats::rnorm(ns$m, e$dW * frac, sd)
+    z1 <- if (ns$needs_dZ) stats::rnorm(ns$m, e$dZ * frac, sd) else NULL
+  } else {
+    if (is.null(ns$pe$bridge)) stop("this noise process has no bridge, so it cannot be split", call. = FALSE)
+    w1 <- .np_call_bridge(ns$pe, e$dW, W0, e$dW, frac, e$h, ns$u, ns$p, t)
+    z1 <- if (ns$needs_dZ) .np_call_bridge(ns$pe, e$dZ, Z0, e$dZ, frac, e$h, ns$u, ns$p, t) else NULL
+  }
   list(first = list(h = s, dW = w1, dZ = z1),
        rest = list(h = e$h - s, dW = e$dW - w1, dZ = if (ns$needs_dZ) e$dZ - z1 else NULL))
+}
+
+# The increments of a path noise over [t, t + h].
+.noise_path_inc <- function(ns, t, h) {
+  pe <- ns$pe
+  w1 <- as.numeric(pe$path(t + h, ns$u, ns$p))
+  dZ <- if (ns$needs_dZ) {
+    if (is.null(pe$zpath)) stop("this solver needs a second noise path (Z); give the noise a Z", call. = FALSE)
+    as.numeric(pe$zpath(t + h, ns$u, ns$p)) - ns$Z
+  }
+  list(dW = w1 - ns$W, dZ = dZ)
 }
 
 # Settle the previous attempt given the time of the next call.
@@ -59,22 +111,37 @@
   ns$pending <- NULL
   tol <- .noise_tol(pd$t + pd$h)
   if (abs(t - pd$t) <= tol) {
+    # rejected
+    if (isTRUE(ns$no_reject)) stop(class(ns$proc)[1L], " cannot be used with adaptivity rejections", call. = FALSE)
+    if (identical(ns$kind, "path") || isTRUE(ns$rswm0)) return(invisible())
     ns$stack <- c(list(pd[c("h", "dW", "dZ")]), ns$stack)
   } else if (abs(t - (pd$t + pd$h)) <= tol) {
-    .noise_commit(ns, pd$t + pd$h, pd$dW)
+    .noise_commit(ns, pd$t + pd$h, pd$dW, pd$dZ)
   } else if (t > pd$t && t < pd$t + pd$h) {
-    sp <- .noise_split(ns, pd, t - pd$t)
-    .noise_commit(ns, t, sp$first$dW)
-    ns$stack <- c(list(sp$rest), ns$stack)
+    if (identical(ns$kind, "path")) {
+      inc <- .noise_path_inc(ns, pd$t, t - pd$t)
+      .noise_commit(ns, t, inc$dW, inc$dZ)
+      return(invisible())
+    }
+    sp <- .noise_split(ns, pd, t - pd$t, t = pd$t)
+    .noise_commit(ns, t, sp$first$dW, sp$first$dZ)
+    if (!isTRUE(ns$rswm0)) ns$stack <- c(list(sp$rest), ns$stack)
   } else {
-    .noise_commit(ns, pd$t + pd$h, pd$dW)
+    .noise_commit(ns, pd$t + pd$h, pd$dW, pd$dZ)
   }
   invisible()
 }
 
-# Wiener increments over [t, t + h], reusing stored future increments.
-.noise_take <- function(ns, t, h) {
+# Noise increments over [t, t + h], reusing stored future increments; W0 is
+# the value at t.
+.noise_take <- function(ns, t, h, u = NULL, p = NULL) {
+  ns$u <- u; ns$p <- p
   .noise_settle(ns, t)
+  if (identical(ns$kind, "path")) {
+    inc <- .noise_path_inc(ns, t, h)
+    ns$pending <- list(t = t, h = h, dW = inc$dW, dZ = inc$dZ)
+    return(list(dW = inc$dW, dZ = inc$dZ, W0 = ns$W))
+  }
   need <- h
   dW <- numeric(ns$m)
   dZ <- if (ns$needs_dZ) numeric(ns$m) else NULL
@@ -83,11 +150,12 @@
     e <- ns$stack[[1L]]
     if (e$h <= need + tol) {
       dW <- dW + e$dW
-      if (ns$needs_dZ) dZ <- dZ + e$dZ
+      if (ns$needs_dZ) dZ <- dZ + (e$dZ %||% stats::rnorm(ns$m, 0, sqrt(e$h)))
       need <- need - e$h
       ns$stack <- ns$stack[-1L]
     } else {
-      sp <- .noise_split(ns, e, need)
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(ns$m, 0, sqrt(e$h))
+      sp <- .noise_split(ns, e, need, W0 = ns$W + dW, Z0 = if (ns$needs_dZ) ns$Z + dZ, t = t)
       dW <- dW + sp$first$dW
       if (ns$needs_dZ) dZ <- dZ + sp$first$dZ
       ns$stack[[1L]] <- sp$rest
@@ -95,11 +163,11 @@
     }
   }
   if (need > tol) {
-    dW <- dW + stats::rnorm(ns$m, 0, sqrt(need))
-    if (ns$needs_dZ) dZ <- dZ + stats::rnorm(ns$m, 0, sqrt(need))
+    dW <- dW + .noise_fresh(ns, ns$W + dW, need, t)
+    if (ns$needs_dZ) dZ <- dZ + .noise_fresh(ns, ns$Z + dZ, need, t)
   }
   ns$pending <- list(t = t, h = h, dW = dW, dZ = dZ)
-  list(dW = dW, dZ = dZ)
+  list(dW = dW, dZ = dZ, W0 = ns$W)
 }
 
 # ---------------------------------------------------------------------------
@@ -292,37 +360,39 @@ SRIW1 <- function() {
 
 #' @rdname sde_algorithms
 #' @export
-SOSRI <- function() {
-  .new_sde_alg("SOSRI", 1.5, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-    S <- .SOSRI
-    sq <- sqrt(abs(dt))
-    chi1 <- (dW^2 - abs(dt)) / (2 * sq)
-    chi2 <- (dW + dZ / sqrt(3)) / 2
-    chi3 <- (dW^3 - 3 * dW * dt) / (6 * dt)
-    k1 <- f(u, p, t)
-    g1 <- g(u, p, t + S$c11 * dt)
-    H01 <- u + dt * S$a021 * k1 + S$b021 * chi2 * g1
-    H11 <- u + dt * S$a121 * k1 + sq * S$b121 * g1
-    k2 <- f(H01, p, t + S$c02 * dt)
-    g2 <- g(H11, p, t + S$c12 * dt)
-    H02 <- u + dt * (S$a031 * k1 + S$a032 * k2) + chi2 * (S$b031 * g1 + S$b032 * g2)
-    H12 <- u + dt * (S$a131 * k1 + S$a132 * k2) + sq * (S$b131 * g1 + S$b132 * g2)
-    k3 <- f(H02, p, t + S$c03 * dt)
-    g3 <- g(H12, p, t + S$c13 * dt)
-    H03 <- u + dt * (S$a041 * k1 + S$a042 * k2 + S$a043 * k3) +
-      chi2 * (S$b041 * g1 + S$b042 * g2 + S$b043 * g3)
-    H13 <- u + dt * (S$a141 * k1 + S$a142 * k2 + S$a143 * k3) +
-      sq * (S$b141 * g1 + S$b142 * g2 + S$b143 * g3)
-    k4 <- f(H03, p, t + S$c04 * dt)
-    g4 <- g(H13, p, t + S$c14 * dt)
-    E2 <- chi2 * (S$beta31 * g1 + S$beta32 * g2 + S$beta33 * g3 + S$beta34 * g4) +
-      chi3 * (S$beta41 * g1 + S$beta42 * g2 + S$beta43 * g3 + S$beta44 * g4)
-    unew <- u + dt * (S$a1 * k1 + S$a2 * k2 + S$a3 * k3 + S$a4 * k4) + E2 +
-      dW * (S$beta11 * g1 + S$beta12 * g2 + S$beta13 * g3 + S$beta14 * g4) +
-      chi1 * (S$beta21 * g1 + S$beta22 * g2 + S$beta23 * g3 + S$beta24 * g4)
-    E1 <- dt * (k1 + k2 + k3 + k4)
-    list(u = unew, err = delta * E1 + E2, nf = 4L)
-  }, needs_dZ = TRUE, noise = c("diagonal", "scalar"))
+SOSRI <- function()
+  .new_sde_alg("SOSRI", 1.5, TRUE, .four_stage_sri(.SOSRI), needs_dZ = TRUE, noise = c("diagonal", "scalar"))
+
+# The four stage SRI step (FourStageSRIConstantCache of sri.jl) of SOSRI and
+# SOSRI2, with the coefficients S.
+.four_stage_sri <- function(S) function(f, g, u, p, t, dt, dW, dZ, type, delta) {
+  sq <- sqrt(abs(dt))
+  chi1 <- (dW^2 - abs(dt)) / (2 * sq)
+  chi2 <- (dW + dZ / sqrt(3)) / 2
+  chi3 <- (dW^3 - 3 * dW * dt) / (6 * dt)
+  k1 <- f(u, p, t)
+  g1 <- g(u, p, t + S$c11 * dt)
+  H01 <- u + dt * S$a021 * k1 + S$b021 * chi2 * g1
+  H11 <- u + dt * S$a121 * k1 + sq * S$b121 * g1
+  k2 <- f(H01, p, t + S$c02 * dt)
+  g2 <- g(H11, p, t + S$c12 * dt)
+  H02 <- u + dt * (S$a031 * k1 + S$a032 * k2) + chi2 * (S$b031 * g1 + S$b032 * g2)
+  H12 <- u + dt * (S$a131 * k1 + S$a132 * k2) + sq * (S$b131 * g1 + S$b132 * g2)
+  k3 <- f(H02, p, t + S$c03 * dt)
+  g3 <- g(H12, p, t + S$c13 * dt)
+  H03 <- u + dt * (S$a041 * k1 + S$a042 * k2 + S$a043 * k3) +
+    chi2 * (S$b041 * g1 + S$b042 * g2 + S$b043 * g3)
+  H13 <- u + dt * (S$a141 * k1 + S$a142 * k2 + S$a143 * k3) +
+    sq * (S$b141 * g1 + S$b142 * g2 + S$b143 * g3)
+  k4 <- f(H03, p, t + S$c04 * dt)
+  g4 <- g(H13, p, t + S$c14 * dt)
+  E2 <- chi2 * (S$beta31 * g1 + S$beta32 * g2 + S$beta33 * g3 + S$beta34 * g4) +
+    chi3 * (S$beta41 * g1 + S$beta42 * g2 + S$beta43 * g3 + S$beta44 * g4)
+  unew <- u + dt * (S$a1 * k1 + S$a2 * k2 + S$a3 * k3 + S$a4 * k4) + E2 +
+    dW * (S$beta11 * g1 + S$beta12 * g2 + S$beta13 * g3 + S$beta14 * g4) +
+    chi1 * (S$beta21 * g1 + S$beta22 * g2 + S$beta23 * g3 + S$beta24 * g4)
+  E1 <- dt * (k1 + k2 + k3 + k4)
+  list(u = unew, err = delta * E1 + E2, nf = 4L)
 }
 
 #' @rdname sde_algorithms
@@ -730,12 +800,17 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   if (prob$tspan[2L] <= prob$tspan[1L]) stop("SDE problems need tspan[2] > tspan[1]", call. = FALSE)
   m <- m %||% switch(type, diagonal = length(u0), scalar = 1L,
                      general = prob$f$nbrownians %||% ncol(as.matrix(g(u0, prob$p, prob$tspan[1L]))))
-  ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ)
+  proc <- prob$noise_process
+  if (!is.null(proc)) {
+    proc <- .np_copy(proc)
+    if (isTRUE(.np_env(proc)$reset)) .np_reinit(.np_env(proc), prob$tspan[1L])
+  }
+  ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ, proc = proc)
   delta <- opts$delta %||% alg$delta
   adaptive <- alg$adaptive && (opts$adaptive %||% TRUE)
   runner <- .new_alg(alg$name, alg$order, adaptive = adaptive,
     step = function(ctx, t, u, dt, cache) {
-      inc <- .noise_take(ns, t, dt)
+      inc <- .noise_take(ns, t, dt, u, ctx$p)
       if (!is.null(alg$step)) return(alg$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ))
       res <- alg$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
       list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf)
@@ -765,6 +840,7 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
     # the last attempt was accepted, truncated or rejected where the driver stopped
     .noise_settle(ns, t_last$t)
     env$W <- list(t = ns$log_t, W = do.call(rbind, ns$log_W))
+    if (!is.null(ns$proc)) env$noise <- ns$proc
     env$alg <- alg
     env$prob <- prob
     sol

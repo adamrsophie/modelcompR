@@ -61,3 +61,14 @@ PETScAlgorithm	GMRES
 ArpackJL	ArnoldiMethodJL
 KrylovKitEigen	ArnoldiMethodJL
 JacobiDavidsonJL	ArnoldiMethodJL
+ZygoteVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+EnzymeVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+ReverseDiffVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+TrackerVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+MooncakeVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+ReactantVJP	the exact vector Jacobian products (symbolic derivatives, or jac_fn and central differences)
+ZygoteAdjoint	ForwardDiffSensitivity (forward sensitivities of the discretized solve)
+EnzymeAdjoint	ForwardDiffSensitivity (forward sensitivities of the discretized solve)
+ReverseDiffAdjoint	ForwardDiffSensitivity (forward sensitivities of the discretized solve)
+TrackerAdjoint	ForwardDiffSensitivity (forward sensitivities of the discretized solve)
+MooncakeAdjoint	ForwardDiffSensitivity (forward sensitivities of the discretized solve)

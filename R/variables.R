@@ -482,7 +482,11 @@ isparameter <- function(x) {
 isvariable <- function(x) identical(.var_kind(as_sym(x)), "unknown")
 #' @rdname metadata
 #' @export
-isconstant <- function(x) identical(.var_kind(as_sym(x)), "constant")
+isconstant <- function(x) {
+  # SciMLOperators: an operator whose coefficients do not change
+  if (inherits(x, "AbstractSciMLOperator")) return(isTRUE(x$constant))
+  identical(.var_kind(as_sym(x)), "constant")
+}
 #' @rdname metadata
 #' @export
 isbrownian <- function(x) identical(.var_kind(as_sym(x)), "brownian")

@@ -104,7 +104,12 @@ supports_regular_jumps <- function(alg) inherits(alg, "TauLeapingAlgorithm")
 supports_solve_rng <- function(prob, alg) TRUE
 #' @rdname solver_traits
 #' @export
-adaptive_alg <- function(alg) alg
+adaptive_alg <- function(alg) {
+  # DiffEqNoiseProcess: the rejection sampling scheme of an RSWM or a process
+  if (inherits(alg, "AbstractNoiseProcess")) alg <- alg$rswm
+  if (inherits(alg, "RSWM")) return(alg$adaptivealg)
+  alg
+}
 #' @rdname solver_traits
 #' @export
 unwrap_alg <- function(x, ...) {

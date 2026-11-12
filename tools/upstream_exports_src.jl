@@ -51,7 +51,7 @@ open(joinpath(@__DIR__, "upstream_exports_src.tsv"), "w") do io
             end
         end
     end
-    for pkg in ("SciMLOperators", "DiffEqNoiseProcess", "OptimizationBase")
+    for pkg in ("SciMLOperators", "DiffEqNoiseProcess", "OptimizationBase", "SciMLSensitivity")
         for n in sort(exports_of(latest(pkg)))
             println(io, pkg, "\t", n)
         end

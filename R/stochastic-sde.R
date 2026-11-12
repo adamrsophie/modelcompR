@@ -406,13 +406,18 @@ SDEProblem <- function(sys, ..., noise_rate_prototype = NULL, noise = NULL) {
 .sde_problem_raw <- function(f, g = NULL, u0, tspan, p = numeric(), ..., noise_rate_prototype = NULL,
                              noise = NULL) {
   fn <- if (inherits(f, "SDEFunction")) f else SDEFunction(f, g)
-  type <- if (!is.null(noise_rate_prototype)) "general" else if (identical(noise, "scalar")) "scalar" else "diagonal"
   u0 <- as.numeric(unlist(u0))
+  proc <- if (inherits(noise, "AbstractNoiseProcess")) noise
+  # a noise process with one component for a larger state is scalar noise
+  scalar <- identical(noise, "scalar") || (!is.null(proc) && length(.np_env(proc)$W0) == 1L && length(u0) > 1L)
+  type <- if (!is.null(noise_rate_prototype)) "general" else if (scalar) "scalar" else "diagonal"
   fn$noise_type <- type
   fn$nbrownians <- switch(type, general = ncol(as.matrix(noise_rate_prototype)), scalar = 1L,
                           diagonal = length(u0))
-  .new_problem("SDEProblem", f = fn, u0 = u0, tspan = .as_tspan(tspan), p = p, sys = NULL,
-               noise_type = type, kwargs = list(...))
+  prob <- .new_problem("SDEProblem", f = fn, u0 = u0, tspan = .as_tspan(tspan), p = p, sys = NULL,
+                       noise_type = type, kwargs = list(...))
+  prob$noise_process <- proc
+  prob
 }
 
 .sde_problem_sys <- function(sys, op = list(), tspan = NULL, ..., check_initialization = TRUE,

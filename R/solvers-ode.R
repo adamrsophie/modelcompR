@@ -203,6 +203,8 @@ RK4 <- function() {
   ord <- alg$order
   beta2 <- opts$beta2 %||% alg$beta2 %||% (2 / (5 * ord))
   list(type = alg$controller %||% "PI",
+       pid_beta = opts$pid_beta %||% alg$pid_beta, accept_safety = alg$accept_safety %||% 0.81,
+       pid_k = min(ord, alg$adaptive_order %||% ord) + 1,
        beta1 = opts$beta1 %||% alg$beta1 %||% (7 / (10 * ord)), beta2 = beta2,
        qmin = opts$qmin %||% alg$qmin %||% (1 / 5), qmax = opts$qmax %||% alg$qmax %||% 10,
        qmax_first = 10000, gamma = opts$gamma %||% alg$gamma %||% 0.9,
@@ -210,12 +212,73 @@ RK4 <- function() {
        failfactor = opts$failfactor %||% alg$failfactor %||% 2)
 }
 
-.ctrl_state <- function() list(errold = 1e-4, q11 = 1, dtreject = NA_real_)
+# FastPower.fastpower, which the I and PI controllers of OrdinaryDiffEqCore
+# use for EEst^expo: a Float32 approximation of x^y through a fast log2 (David
+# Goldberg's rational formula) and Julia's Float32 exp2 kernel. Float32 values
+# are emulated by rounding doubles with writeBin(size = 4); the products and
+# sums of two Float32 values are exact in double precision, so every fused
+# multiply add rounds once, as in Julia. Matching it bit for bit keeps the
+# step sizes equal to Julia's.
+.f32 <- function(x) readBin(writeBin(as.numeric(x), raw(), size = 4L), "double", n = length(x), size = 4L)
+
+.f32_bits <- function(x) readBin(writeBin(as.numeric(x), raw(), size = 4L), "integer", n = length(x), size = 4L)
+
+.f32_from_bits <- function(b) readBin(writeBin(as.integer(b), raw(), size = 4L), "double", n = length(b), size = 4L)
+
+.fastlog2 <- function(x) {
+  u <- .f32_bits(x)
+  hi <- bitwAnd(u, 0x00400000L) == 0L
+  e <- bitwShiftR(bitwAnd(u, 0x7F800000L), 23L) - ifelse(hi, 127L, 126L)
+  sig <- .f32_from_bits(bitwOr(bitwAnd(u, 0x007FFFFFL), ifelse(hi, 0x3f800000L, 0x3f000000L)))
+  quot <- .f32(.f32(sig * .f32(0.338953) + .f32(1.8596461)) / .f32(sig + .f32(0.523692)))
+  .f32((sig - 1) * quot + e)
+}
+
+.exp2_f32 <- function(x) {
+  cf <- .f32(c(1, 0.6931472, 0.2402265, 0.05550411, 0.009618025, 0.0013333423, 0.00015469732, 1.5316464e-5))
+  N <- round(x)
+  r <- x - N
+  s <- rep(cf[8L], length(x))
+  for (i in 7:1) s <- .f32(r * s + cf[i])
+  out <- .f32(2^N * s)
+  out[x >= 128] <- Inf
+  out[x <= .f32(-126.00001)] <- 0
+  out
+}
+
+.fastpower <- function(x, y) {
+  out <- .exp2_f32(.f32(.f32(y) * .fastlog2(x)))
+  out[x == 0] <- 0
+  out[is.infinite(x) & is.infinite(y)] <- Inf
+  out
+}
+
+.ctrl_state <- function() list(errold = 1e-4, q11 = 1, dtreject = NA_real_, err = c(1, 1, 1), dt_factor = 1)
+
+# PIDController (integrators/controllers.jl): the step factor from the last
+# three error estimates, limited by 1 + atan(x - 1); a step is accepted when
+# the factor is at least accept_safety.
+.ctrl_pid_q <- function(co, cs, EEst) {
+  EEst <- if (is.finite(EEst)) max(EEst, .Machine$double.eps) else Inf
+  cs$err[1L] <- 1 / EEst
+  b <- co$pid_beta; k <- co$pid_k
+  f <- cs$err[1L]^(b[1L] / k) * cs$err[2L]^(b[2L] / k) * cs$err[3L]^(b[3L] / k)
+  if (is.nan(f)) f <- 0
+  cs$dt_factor <- 1 + atan(f - 1)
+  list(q = 1 / cs$dt_factor, cs = cs)
+}
+
+# Whether the controller rejects the step.
+.ctrl_rejects <- function(co, cs, EEst) {
+  if (identical(co$type, "PID")) return(cs$dt_factor < co$accept_safety)
+  EEst > 1
+}
 
 # stepsize_controller!: the factor q with dt_new = dt / q.
 .ctrl_q <- function(co, cs, EEst, first, dt, alg, cache) {
   qmax <- if (first) co$qmax_first else co$qmax
   if (co$type == "BDF") return(list(q = alg$bdf_stepsize(cache, EEst, co, first), cs = cs))
+  if (co$type == "PID") return(.ctrl_pid_q(co, cs, EEst))
   if (!is.finite(EEst)) {
     cs$q11 <- Inf
     cs$dtreject <- dt * co$qmin
@@ -224,12 +287,12 @@ RK4 <- function() {
   if (EEst == 0) return(list(q = 1 / qmax, cs = cs))
   if (co$type == "I") {
     ord <- if (is.environment(cache) && !is.null(cache$order)) cache$order else alg$order
-    q <- min(1 / co$qmin, max(1 / qmax, EEst^(1 / (ord + 1)) / co$gamma))
+    q <- min(1 / co$qmin, max(1 / qmax, .fastpower(EEst, 1 / (ord + 1)) / co$gamma))
     cs$dtreject <- dt / q
     return(list(q = q, cs = cs))
   }
-  q11 <- EEst^co$beta1
-  q <- q11 / cs$errold^co$beta2
+  q11 <- .fastpower(EEst, co$beta1)
+  q <- q11 / .fastpower(cs$errold, co$beta2)
   cs$q11 <- q11
   list(q = min(1 / co$qmin, max(1 / qmax, q / co$gamma)), cs = cs)
 }
@@ -237,6 +300,12 @@ RK4 <- function() {
 # step_accept_controller!: the next step size.
 .ctrl_accept <- function(co, cs, q, EEst, dt, alg, cache) {
   if (co$type == "BDF") return(list(dt = alg$bdf_accept(cache, q, dt, co), cs = cs))
+  if (co$type == "PID") {
+    fac <- cs$dt_factor
+    if (1 / fac >= co$qsteady_min && 1 / fac <= co$qsteady_max) fac <- 1
+    cs$err[3L] <- cs$err[2L]; cs$err[2L] <- cs$err[1L]
+    return(list(dt = dt * fac, cs = cs))
+  }
   if (q >= co$qsteady_min && q <= co$qsteady_max) q <- 1
   if (co$type == "PI") cs$errold <- max(EEst, 1e-4)
   list(dt = dt / q, cs = cs)
@@ -245,6 +314,7 @@ RK4 <- function() {
 # step_reject_controller!: the step size to retry with.
 .ctrl_reject <- function(co, cs, dt, EEst, alg, cache) {
   if (co$type == "BDF") return(alg$bdf_reject(cache, EEst, dt, co))
+  if (co$type == "PID") return(dt * cs$dt_factor)
   if (co$type == "I") return(cs$dtreject)
   dt / min(1 / co$qmin, cs$q11 / co$gamma)
 }
@@ -590,7 +660,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       css[[cur]] <- qq$cs
     }
     EEst_prev <- EEst
-    if (adaptive && EEst > 1) {
+    if (adaptive && .ctrl_rejects(co, css[[cur]], EEst)) {
       stats$nreject <- stats$nreject + 1L
       accept_prev <- FALSE
       dt <- .ctrl_reject(co, css[[cur]], dtcur, EEst, a, caches[[cur]])

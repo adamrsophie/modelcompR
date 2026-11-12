@@ -101,9 +101,12 @@ open(ARGS[1], "w") do io
             r.linear_est || push!(fields, "nonlinear_est=true")
             for (k, v) in sort(collect(m)); push!(fields, "$k=$v"); end
             println(io, nm, "\t", join(fields, "\t"))
+            flush(io)
             println(stderr, "OK ", nm)
+            flush(stderr)
         catch e
             println(stderr, "FAIL ", nm, ": ", first(sprint(showerror, e), 300))
+            flush(stderr)
         end
     end
 end

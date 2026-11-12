@@ -717,7 +717,8 @@ FastShortcutNLLSPolyalg <- function() {
     LevenbergMarquardt =
       .nl_levenberg_marquardt(F, J, x0, abstol, maxiters, lb, ub, lambda0 = alg$damping_initial %||% 1e-3,
                               post = post, ls = ls),
-    stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE))
+    if (!is.null(alg$run)) alg$run(F, J, x0, opts, lb, ub, ls)
+    else stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE))
 }
 
 .nl_problem_fns <- function(prob) {
@@ -1147,7 +1148,7 @@ solve.IntervalNonlinearProblem <- function(a, b, ...) {
   fl <- f(left); fr <- f(right)
   res <- if (isTRUE(fl == 0)) .nl_bracket_result(left, fl, left, right, "ExactSolutionLeft")
   else if (isTRUE(fr == 0)) .nl_bracket_result(right, fr, left, right, "ExactSolutionRight")
-  else if (!is.finite(fl) || !is.finite(fr) || sign(fl) == sign(fr)) {
+  else if (!isTRUE(alg$no_bracket) && (!is.finite(fl) || !is.finite(fr) || sign(fl) == sign(fr))) {
     warning("The interval is not an enclosing interval, opposite signs at the boundaries are required.",
             call. = FALSE)
     .nl_bracket_result(left, fl, left, right, "InitialFailure")
@@ -1156,7 +1157,8 @@ solve.IntervalNonlinearProblem <- function(a, b, ...) {
     Bisection = .nl_bisection(f, left, right, fl, fr, abstol, maxiters, alg$exact_left, alg$exact_right),
     Brent = .nl_brent(f, left, right, fl, fr, abstol, maxiters),
     Falsi = .nl_falsi(f, left, right, fl, fr, abstol, maxiters),
-    stop("not a bracketing algorithm: ", class(alg)[1L], call. = FALSE))
+    if (!is.null(alg$run)) alg$run(f, left, right, fl, fr, abstol, maxiters)
+    else stop("not a bracketing algorithm: ", class(alg)[1L], call. = FALSE))
   .nl_new_solution(c("IntervalNonlinearSolution", "NonlinearSolution"), a, alg, res$u, res$retcode,
                    resid = res$resid, stats = list(nsteps = res$iters),
                    extra = list(left = res$left, right = res$right))

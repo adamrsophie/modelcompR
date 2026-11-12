@@ -12,10 +12,14 @@ args <- commandArgs(TRUE)
 infile <- if (length(args)) args[1L] else "tools/rk_probe.tsv"
 ns <- readLines("NAMESPACE")
 exported <- gsub("[`\"]", "", sub("^export[(](.*)[)]$", "\\1", grep("^export[(]", ns, value = TRUE)))
-hand <- c("Euler", "Midpoint", "RK4", "BS3", "DP5", "Tsit5", "AutoTsit5", "Vern6", "Vern7", "Vern8", "Vern9",
+# the methods this script wrote before are not hand written
+own <- if (file.exists("R/solvers-erk-methods.R"))
+  sub(" <- function.*", "", grep("^[A-Za-z0-9_]+ <- function", readLines("R/solvers-erk-methods.R"), value = TRUE)) else character()
+exported <- setdiff(exported, own)
+hand <- c("Euler", "RK4", "BS3", "DP5", "Tsit5", "AutoTsit5", "Vern6", "Vern7", "Vern8", "Vern9",
           "AutoVern6", "AutoVern7", "AutoVern8", "AutoVern9", "AutoDP5")
-skip <- c("SSPRKMSVS32", "SSPRKMSVS43", "pRRK22", "pRRK33", "pRRK54", "SplitEuler", "ExplicitRK", "RKO65",
-          "FRK65", "Anas5", "KYK2014DGSSPRK_3S2")
+skip <- c("SSPRKMSVS32", "SSPRKMSVS43", "pRRK22", "pRRK33", "pRRK54", "SplitEuler", "ExplicitRK",
+          "FRK65", "Anas5")
 lines <- readLines(infile)
 tabs <- list()
 for (ln in lines) {
