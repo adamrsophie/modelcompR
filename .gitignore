@@ -1,0 +1,12 @@
+.Rhistory
+.RData
+.Rproj.user
+*.Rcheck/
+modelcompR_*.tar.gz
+.DS_Store
+docs/
+documentation/
+tools/julia/install.log
+.gstack/
+tests/testthat/_problems/
+tests/testthat/testthat-problems.rds

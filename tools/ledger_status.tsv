@@ -1,0 +1,328 @@
+name	source	status
+independent_variables	MTKBase	ported
+unknowns	MTKBase	ported
+observables	MTKBase	ported
+parameters	MTKBase	ported
+bound_parameters	MTKBase	ported
+continuous_events	MTKBase	ported
+discrete_events	MTKBase	ported
+analytically_integrated	MTKBase	ported
+@derivatives	MTKBase	ported as Differential
+EvalAt	MTKBase	ported
+CompilerOptions	MTKBase	not applicable
+ODEFunction	MTKBase	ported
+convert_system_indepvar	MTKBase	ported
+System	MTKBase	ported
+OptimizationSystem	MTKBase	ported
+JumpSystem	MTKBase	ported
+SDESystem	MTKBase	ported
+NonlinearSystem	MTKBase	ported
+ODESystem	MTKBase	ported
+DiscreteSystem	MTKBase	ported
+ImplicitDiscreteSystem	MTKBase	ported
+SDEFunction	MTKBase	ported
+DiscreteProblem	MTKBase	ported
+DiscreteFunction	MTKBase	ported
+ImplicitDiscreteProblem	MTKBase	ported
+ImplicitDiscreteFunction	MTKBase	ported
+ODEProblem	MTKBase	ported
+SDEProblem	MTKBase	ported
+NonlinearFunction	MTKBase	ported
+NonlinearProblem	MTKBase	ported
+AbstractNonlinearProblem	MTKBase	ported
+IntervalNonlinearFunction	MTKBase	ported
+IntervalNonlinearProblem	MTKBase	ported
+OptimizationProblem	MTKBase	ported
+constraints	MTKBase	ported
+constraints_to_penalties	MTKBase	ported
+SteadyStateProblem	MTKBase	ported
+JumpProblem	MTKBase	ported
+SymbolicMassActionJump	MTKBase	ported
+flatten	MTKBase	ported
+connect	MTKBase	ported
+domain_connect	MTKBase	ported
+@connector	MTKBase	ported as connector
+Connection	MTKBase	ported
+AnalysisPoint	MTKBase	ported
+Flow	MTKBase	ported
+Stream	MTKBase	ported
+instream	MTKBase	ported
+@component	MTKBase	ported as component
+@mtkcompile	MTKBase	ported as mtkcompile
+@mtkbuild	MTKBase	ported as mtkcompile
+@mtkcomplete	MTKBase	ported as complete
+isinput	MTKBase	ported
+isoutput	MTKBase	ported
+getbounds	MTKBase	ported
+hasbounds	MTKBase	ported
+getnominal	MTKBase	ported
+hasnominal	MTKBase	ported
+setnominal	MTKBase	ported
+getguess	MTKBase	ported
+hasguess	MTKBase	ported
+isdisturbance	MTKBase	ported
+istunable	MTKBase	ported
+getdist	MTKBase	ported
+hasdist	MTKBase	ported
+tunable_parameters	MTKBase	ported
+isirreducible	MTKBase	ported
+getdescription	MTKBase	ported
+hasdescription	MTKBase	ported
+hasunit	MTKBase	ported
+getunit	MTKBase	ported
+hasconnect	MTKBase	ported
+getconnect	MTKBase	ported
+hasmisc	MTKBase	ported
+getmisc	MTKBase	ported
+state_priority	MTKBase	ported
+subset_tunables	MTKBase	ported
+liouville_transform	MTKBase	ported
+change_independent_variable	MTKBase	ported
+add_accumulations	MTKBase	ported
+noise_to_brownians	MTKBase	ported
+Girsanov_transform	MTKBase	ported
+change_of_variables	MTKBase	ported
+fractional_to_ordinary	MTKBase	ported
+linear_fractional_to_ordinary	MTKBase	ported
+respecialize	MTKBase	ported
+PDESystem	MTKBase	ported
+Differential	MTKBase	ported
+expand_derivatives	MTKBase	ported
+Equation	MTKBase	ported
+Term	MTKBase	ported
+SymScope	MTKBase	ported
+LocalScope	MTKBase	ported
+ParentScope	MTKBase	ported
+GlobalScope	MTKBase	ported
+independent_variable	MTKBase	ported
+equations	MTKBase	ported
+observed	MTKBase	ported
+full_equations	MTKBase	ported
+jumps	MTKBase	ported
+cost	MTKBase	ported
+costs	MTKBase	ported
+brownians	MTKBase	ported
+initialization_equations	MTKBase	ported
+guesses	MTKBase	ported
+bindings	MTKBase	ported
+initial_conditions	MTKBase	ported
+hierarchy	MTKBase	ported
+set_defaults	MTKBase	ported
+state_priorities	MTKBase	ported
+irreducibles	MTKBase	ported
+maybe_zeros	MTKBase	ported
+mtkcompile	MTKBase	ported
+expand_connections	MTKBase	ported
+structural_simplify	MTKBase	ported
+MTKVerbosity	MTKBase	ported
+SciMLLogging	MTKBase	not applicable
+solve	MTKBase	ported as solve.ODEProblem
+Pre	MTKBase	ported
+calculate_jacobian	MTKBase	ported
+generate_jacobian	MTKBase	ported
+generate_rhs	MTKBase	ported
+generate_custom_function	MTKBase	ported
+generate_W	MTKBase	ported
+calculate_hessian	MTKBase	ported
+calculate_control_jacobian	MTKBase	ported
+generate_control_jacobian	MTKBase	ported
+calculate_paramjac	MTKBase	ported
+generate_paramjac	MTKBase	ported
+calculate_tgrad	MTKBase	ported
+generate_tgrad	MTKBase	ported
+generate_cost	MTKBase	ported
+calculate_cost_gradient	MTKBase	ported
+generate_cost_gradient	MTKBase	ported
+generate_trajectory	MTKBase	ported
+calculate_cost_hessian	MTKBase	ported
+generate_cost_hessian	MTKBase	ported
+generate_multiobjective_cost	MTKBase	ported
+calculate_multiobjective_jacobian	MTKBase	ported
+generate_multiobjective_jacobian	MTKBase	ported
+calculate_multiobjective_hessian	MTKBase	ported
+generate_multiobjective_hessian	MTKBase	ported
+calculate_massmatrix	MTKBase	ported
+generate_diffusion_function	MTKBase	ported
+generate_control_function	MTKBase	ported
+build_explicit_observed_function	MTKBase	ported
+stochastic_integral_transform	MTKBase	ported
+BipartiteGraph	MTKBase	ported
+equation_dependencies	MTKBase	ported
+variable_dependencies	MTKBase	ported
+eqeq_dependencies	MTKBase	ported
+varvar_dependencies	MTKBase	ported
+asgraph	MTKBase	ported
+asdigraph	MTKBase	ported
+toexpr	MTKBase	ported
+get_variables	MTKBase	ported
+simplify	MTKBase	from symcompR (simplify)
+substitute	MTKBase	ported as substitute_vars
+build_function	MTKBase	ported
+modelingtoolkitize	MTKBase	ported
+generate_initializesystem	MTKBase	ported
+Initial	MTKBase	ported
+isinitial	MTKBase	ported
+InitializationProblem	MTKBase	ported
+alg_equations	MTKBase	ported
+diff_equations	MTKBase	ported
+has_alg_equations	MTKBase	ported
+has_diff_equations	MTKBase	ported
+get_alg_eqs	MTKBase	ported
+get_diff_eqs	MTKBase	ported
+has_alg_eqs	MTKBase	ported
+has_diff_eqs	MTKBase	ported
+homotopy	MTKBase	ported
+limited	MTKBase	ported
+limitnew	MTKBase	ported
+limitold	MTKBase	ported
+@variables	MTKBase	ported as variables
+@parameters	MTKBase	ported as parameters
+@independent_variables	MTKBase	ported as independent_variable
+@constants	MTKBase	ported as constants
+@brownians	MTKBase	ported as brownians
+@brownian	MTKBase	ported as brownians
+@poissonians	MTKBase	ported as Poissonian
+@discretes	MTKBase	ported as discretes
+@named	MTKBase	ported as named
+@nonamespace	MTKBase	ported as nonamespace
+@namespace	MTKBase	ported as namespace
+extend	MTKBase	ported
+compose	MTKBase	ported
+complete	MTKBase	ported
+toggle_namespacing	MTKBase	ported
+debug_system	MTKBase	ported
+Shift	MTKBase	ported
+ShiftIndex	MTKBase	ported
+Sample	MTKBase	ported
+Hold	MTKBase	ported
+SampleTime	MTKBase	ported
+Clock	MTKBase	ported
+SolverStepClock	MTKBase	ported
+TimeDomain	MTKBase	ported
+MTKParameters	MTKBase	not applicable
+reorder_dimension_by_tunables!	MTKBase	ported as reorder_dimension_by_tunables
+reorder_dimension_by_tunables	MTKBase	ported
+HomotopyContinuationProblem	MTKBase	ported
+open_loop	MTKBase	ported
+ap_var	MTKBase	ported
+AbstractDynamicOptProblem	MTKBase	ported
+JuMPDynamicOptProblem	MTKBase	ported
+InfiniteOptDynamicOptProblem	MTKBase	ported
+CasADiDynamicOptProblem	MTKBase	ported
+PyomoDynamicOptProblem	MTKBase	ported
+AbstractCollocation	MTKBase	ported
+JuMPCollocation	MTKBase	ported
+InfiniteOptCollocation	MTKBase	ported
+CasADiCollocation	MTKBase	ported
+PyomoCollocation	MTKBase	ported
+DynamicOptSolution	MTKBase	ported
+MissingGuessValue	MTKBase	ported
+MiscSystemData	MTKBase	ported
+AssignmentAffect	MTKBase	ported
+apply_to_variables	MTKBase	ported
+equations_toplevel	MTKBase	ported
+unknowns_toplevel	MTKBase	ported
+parameters_toplevel	MTKBase	ported
+continuous_events_toplevel	MTKBase	ported
+discrete_events_toplevel	MTKBase	ported
+assertions	MTKBase	ported
+is_alg_equation	MTKBase	ported
+is_diff_equation	MTKBase	ported
+Equality	MTKBase	from symcompR (Equality)
+inputs	MTKBase	ported
+outputs	MTKBase	ported
+bound_inputs	MTKBase	ported
+unbound_inputs	MTKBase	ported
+bound_outputs	MTKBase	ported
+unbound_outputs	MTKBase	ported
+is_bound	MTKBase	ported
+AbstractSystem	MTKBase	ported
+CheckAll	MTKBase	ported
+CheckNone	MTKBase	ported
+CheckComponents	MTKBase	ported
+CheckUnits	MTKBase	ported
+t	MTKBase	ported as t_nounits
+D	MTKBase	ported as D_nounits
+t_nounits	MTKBase	ported
+D_nounits	MTKBase	ported
+SymbolicContinuousCallback	MTKBase	ported
+SymbolicDiscreteCallback	MTKBase	ported
+ImperativeAffect	MTKBase	ported
+VariableType	MTKBase	ported
+MTKVariableTypeCtx	MTKBase	ported
+VariableBounds	MTKBase	ported
+VariableConnectType	MTKBase	ported
+VariableDescription	MTKBase	ported
+VariableInput	MTKBase	ported
+VariableIrreducible	MTKBase	ported
+VariableMisc	MTKBase	ported
+VariableOutput	MTKBase	ported
+VariableStatePriority	MTKBase	ported
+VariableUnit	MTKBase	ported
+collect_scoped_vars!	MTKBase	ported as collect_scoped_vars
+collect_var_to_name!	MTKBase	ported as collect_var_to_name
+collect_vars!	MTKBase	ported as collect_vars
+eqtype_supports_collect_vars	MTKBase	ported
+hasdefault	MTKBase	ported
+getdefault	MTKBase	ported
+setdefault	MTKBase	ported
+setguess	MTKBase	ported
+iscomplete	MTKBase	ported
+isparameter	MTKBase	ported
+modified_unknowns!	MTKBase	ported as modified_unknowns
+renamespace	MTKBase	ported
+namespace_equations	MTKBase	ported
+varmap_to_vars	MTKBase	ported
+check_mutable_cache	MTKBase	not applicable
+store_to_mutable_cache!	MTKBase	not applicable
+should_invalidate_mutable_cache_entry	MTKBase	not applicable
+convert_bindings_for_time_independent_system	MTKBase	ported
+get_w	MTKBase	ported
+Both	MTKBase	ported
+SymbolicADDisallowed	MTKBase	ported
+check_symbolic_ad_allowed	MTKBase	ported
+canonical_constraints	MTKBase	ported
+constraint_residual	MTKBase	ported
+tobrownian	MTKBase	ported
+toparam	MTKBase	ported
+tovar	MTKBase	ported
+ProblemTypeCtx	MTKBase	ported
+HomotopyCtx	MTKBase	ported
+homotopy_enabled	MTKBase	ported
+strip_homotopy	MTKBase	ported
+MTKVerbosityCtx	MTKBase	ported
+tearing	MTK	ported
+dae_index_lowering	MTK	ported
+dummy_derivative	MTK	ported
+sorted_incidence_matrix	MTK	ported
+pantelides_reassemble	MTK	ported
+find_solvables!	MTK	ported as find_solvables
+tearing_substitution	MTK	ported
+but_ordered_incidence	MTK	ported
+lowest_order_variable_mask	MTK	ported
+highest_order_variable_mask	MTK	ported
+StructuralTransformations	MTK	not applicable
+SemilinearODEFunction	MTK	ported
+SemilinearODEProblem	MTK	ported
+analyze_initialization_jacobian	MTK	ported
+alias_elimination	MTK	ported
+linearize	MTK	ported
+linearization_function	MTK	ported
+LinearizationProblem	MTK	ported
+LinearizationOpPoint	MTK	ported
+linearization_ap_transform	MTK	ported
+map_variables_to_equations	MTK	ported
+substitute_component	MTK	ported
+TearingState	MTK	ported
+get_sensitivity_function	MTK	ported
+get_comp_sensitivity_function	MTK	ported
+get_looptransfer_function	MTK	ported
+get_sensitivity	MTK	ported
+get_comp_sensitivity	MTK	ported
+get_looptransfer	MTK	ported
+isolate_subsystem	MTK	ported
+linearize_symbolic	MTK	ported
+reorder_unknowns	MTK	ported
+similarity_transform	MTK	ported
+precompile_ode_problem	MTK	not applicable
+precompile_dae_problem	MTK	not applicable

@@ -1,0 +1,37 @@
+Package: modelcompR
+Title: Symbolic Numeric Modeling in R
+Version: 0.1.0
+Authors@R:
+    person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
+           role = c("aut", "cre", "cph"))
+Description: A native R port of the Julia library 'ModelingToolkit.jl'.
+    Models are written as symbolic equations with variables, parameters and
+    hierarchical components; 'mtkcompile' simplifies them structurally
+    (alias elimination, index reduction, tearing) and generates R functions
+    for ordinary and differential algebraic equations, nonlinear systems,
+    optimization, stochastic, jump, delay, discrete and boundary value
+    problems, which are solved by pure R integrators. Symbolic computation is
+    provided by 'symcompR'. The design and algorithms follow
+    'ModelingToolkit.jl' <https://github.com/SciML/ModelingToolkit.jl>,
+    whose MIT license notice is retained in the package.
+License: GPL-3
+Encoding: UTF-8
+Language: en-US
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.3.0),
+    symcompR (>= 0.1.0)
+Imports:
+    graphics,
+    Matrix,
+    parallel,
+    stats,
+    utils
+Suggests:
+    testthat (>= 3.0.0)
+Remotes:
+    adamrsophie/symcompR
+Config/testthat/edition: 3
+URL: https://github.com/adamrsophie/modelcompR
+BugReports: https://github.com/adamrsophie/modelcompR/issues
+Config/roxygen2/version: 8.1.1

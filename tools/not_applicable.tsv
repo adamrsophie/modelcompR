@@ -1,0 +1,10 @@
+name	reason
+check_mutable_cache	Julia per system mutable cache keyed by Julia types; R systems are immutable values and keep no cache.
+store_to_mutable_cache!	Julia per system mutable cache keyed by Julia types; R systems are immutable values and keep no cache.
+should_invalidate_mutable_cache_entry	Julia per system mutable cache keyed by Julia types; R systems are immutable values and keep no cache.
+CompilerOptions	Julia compiler settings (optlevel, compile, infer) for generated functions; R closures are interpreted, and build_function(cse =) controls code generation.
+SciMLLogging	Julia logging package; MTKVerbosity() holds the verbosity levels of the diagnostics.
+StructuralTransformations	Julia submodule name; its functions (tearing, dae_index_lowering, ...) are exported directly.
+precompile_ode_problem	Julia precompilation workload; R has no ahead of time compilation of packages.
+precompile_dae_problem	Julia precompilation workload; R has no ahead of time compilation of packages.
+MTKParameters	Julia's split parameter object (tunable, discrete, constant and nonnumeric buffers); problems in R carry the named numeric vector prob$p.

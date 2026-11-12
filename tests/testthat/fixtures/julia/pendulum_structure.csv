@@ -1,0 +1,9 @@
+kind,name
+unknown,py(t)
+unknown,px(t)
+unknown,pyˍt(t)
+unknown,pxˍt(t)
+unknown,λ(t)
+observed,pxˍtt(t)
+parameter,g
+parameter,L

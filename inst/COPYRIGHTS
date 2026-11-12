@@ -1,0 +1,41 @@
+modelcompR is an R port of algorithms and behavior from the following Julia
+packages, distributed under the MIT ("Expat") License except where
+noted:
+
+- ModelingToolkit.jl (https://github.com/SciML/ModelingToolkit.jl), version
+  11.47.0, commit d6e93c5bbe0484ad6ee155b860a617af38f963cd, and version 10.32.1, commit 8f31c7f959b5fb664c687949dc236b47c668d056.
+  Copyright (c) 2018-2026 Yingbo Ma, Christopher Rackauckas, Julia Computing,
+  and contributors. License text: inst/MODELINGTOOLKIT-LICENSE.
+- StateSelection.jl (https://github.com/JuliaComputing/StateSelection.jl),
+  including its ModelingToolkitTearing library, commit
+  29b3c90ddaa2c7ca53016027383da9cc93604029 (2026-11-06). Code written there
+  before 2025-12-01, and code taken from ModelingToolkit.jl or Modia.jl, is
+  MIT licensed (inst/STATESELECTION-LICENSE). Changes made there on or after
+  2025-12-01 are licensed under the GNU Affero General Public License,
+  version 3 (inst/STATESELECTION-AGPL-LICENSE).
+  Copyright (c) 2024-2026 JuliaHub, Inc. and other contributors.
+
+  The R files ported from this repository (their headers name
+  StateSelection.jl) are therefore distributed under the GNU AGPL, version 3.
+  Section 13 of the GNU GPL, version 3, permits combining them with the rest
+  of modelcompR, which remains under the GPL; the network interaction
+  requirement of AGPL section 13 applies to the combination as such.
+- OrdinaryDiffEq.jl (https://github.com/SciML/OrdinaryDiffEq.jl), commit
+  4460ff80dad621418e6e3a9b63e4afb2e1f5fc02 (method coefficients).
+  Copyright (c) 2016-2020 Chris Rackauckas, Yingbo Ma, Julia Computing Inc,
+  and contributors. License text: inst/ORDINARYDIFFEQ-LICENSE.
+
+- Further SciML packages whose algorithms and solver names were ported or
+  matched: BipartiteGraphs.jl, NonlinearSolve.jl, SciMLBase.jl,
+  StochasticDiffEq.jl, BoundaryValueDiffEq.jl and SciMLSensitivity.jl
+  (license texts and commits in inst/SCIML-LICENSES), and DiffEqBase.jl,
+  DiffEqCallbacks.jl,
+  JumpProcesses.jl, DelayDiffEq.jl, Optimization.jl and Symbolics.jl, all
+  Copyright (c) their SciML and JuliaSymbolics contributors and distributed
+  under the MIT License.
+
+The MIT License is compatible with the GNU General Public License, and the
+notices above are retained as it requires.
+
+The R code in modelcompR is Copyright (c) 2026 Adam R Sophie and is
+distributed under the GNU General Public License, version 3 (see LICENSE).

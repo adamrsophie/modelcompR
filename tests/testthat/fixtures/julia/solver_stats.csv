@@ -1,0 +1,11 @@
+case,retcode,naccept,nreject,njacs,nw
+rober_FBDF_1e-6,Success,385,18,6,113
+rober_FBDF_tf_1e-6,Success,315,14,4,94
+rober_FBDF_qmax2_1e-6,Success,385,18,6,113
+vdp_FBDF_1e-5,Success,438,71,8,174
+vdp_FBDF_tf_1e-5,Success,413,93,8,183
+roberdae_DFBDF_1e-6,Success,487,10,8,107
+vdpdae_DFBDF_1e-5,Success,466,65,7,162
+dde_lag1_Tsit5,Success,45,3,0,0
+dde_lags2_Tsit5,Success,32,2,0,0
+dde_sd_Tsit5,Success,37,10,0,0

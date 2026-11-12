@@ -1,0 +1,216 @@
+name	reason
+ExtendedJumpArray	Julia array type joining the state and the integrated rates of VR_FRM; in R the state vector is extended and the extra entries are dropped from the solution.
+EnsembleAnalysis	Julia submodule name; its functions (timestep_mean, timepoint_meanvar, componentwise_meancov, ...) are exported directly.
+OptimizationBase	Julia package module reexported by Optimization; its functions (OptimizationCache, OptimizationStats, the optimizer traits, ...) are exported directly.
+AbstractAnalyticalProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "AnalyticalProblem" with its parents), and generic functions dispatch on them.
+AbstractJ	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "J" with its parents), and generic functions dispatch on them.
+AbstractJCommute	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "JCommute" with its parents), and generic functions dispatch on them.
+AbstractJDiagonal	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "JDiagonal" with its parents), and generic functions dispatch on them.
+AbstractADType	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ADType" with its parents), and generic functions dispatch on them.
+AbstractColoringAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ColoringAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractEigenvalueAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EigenvalueAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractMerit	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "Merit" with its parents), and generic functions dispatch on them.
+AbstractSparsityDetector	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SparsityDetector" with its parents), and generic functions dispatch on them.
+AbstractAdjointSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "AdjointSensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractAliasSpecifier	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "AliasSpecifier" with its parents), and generic functions dispatch on them.
+AbstractAnalyticalSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "AnalyticalSolution" with its parents), and generic functions dispatch on them.
+AbstractBVPAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "BVPAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractBVPFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "BVPFunction" with its parents), and generic functions dispatch on them.
+AbstractBVProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "BVProblem" with its parents), and generic functions dispatch on them.
+AbstractClock	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "Clock" with its parents), and generic functions dispatch on them.
+AbstractConstantLagDDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ConstantLagDDEProblem" with its parents), and generic functions dispatch on them.
+AbstractConstantLagSDDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ConstantLagSDDEProblem" with its parents), and generic functions dispatch on them.
+AbstractContinuousCallback	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ContinuousCallback" with its parents), and generic functions dispatch on them.
+AbstractDAEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DAEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractDAEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DAEFunction" with its parents), and generic functions dispatch on them.
+AbstractDAEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DAEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractDAEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DAEProblem" with its parents), and generic functions dispatch on them.
+AbstractDAESolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DAESolution" with its parents), and generic functions dispatch on them.
+AbstractDDEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DDEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractDDEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DDEFunction" with its parents), and generic functions dispatch on them.
+AbstractDDEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DDEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractDDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DDEProblem" with its parents), and generic functions dispatch on them.
+AbstractDDESolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DDESolution" with its parents), and generic functions dispatch on them.
+AbstractDEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractDEOptions	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DEOptions" with its parents), and generic functions dispatch on them.
+AbstractDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DEProblem" with its parents), and generic functions dispatch on them.
+AbstractDiffEqFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiffEqFunction" with its parents), and generic functions dispatch on them.
+AbstractDiffEqInterpolation	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiffEqInterpolation" with its parents), and generic functions dispatch on them.
+AbstractDiscreteCallback	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiscreteCallback" with its parents), and generic functions dispatch on them.
+AbstractDiscreteFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiscreteFunction" with its parents), and generic functions dispatch on them.
+AbstractDiscreteProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiscreteProblem" with its parents), and generic functions dispatch on them.
+AbstractDiscretization	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "Discretization" with its parents), and generic functions dispatch on them.
+AbstractDiscretizationMetadata	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DiscretizationMetadata" with its parents), and generic functions dispatch on them.
+AbstractDynamicalDDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DynamicalDDEProblem" with its parents), and generic functions dispatch on them.
+AbstractDynamicalODEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "DynamicalODEProblem" with its parents), and generic functions dispatch on them.
+AbstractEigenvalueProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EigenvalueProblem" with its parents), and generic functions dispatch on them.
+AbstractEigenvalueSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EigenvalueSolution" with its parents), and generic functions dispatch on them.
+AbstractEnsembleEstimator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EnsembleEstimator" with its parents), and generic functions dispatch on them.
+AbstractEnsembleProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EnsembleProblem" with its parents), and generic functions dispatch on them.
+AbstractEnsembleSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "EnsembleSolution" with its parents), and generic functions dispatch on them.
+AbstractForwardSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ForwardSensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractHistoryFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "HistoryFunction" with its parents), and generic functions dispatch on them.
+AbstractIntegralAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntegralAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractIntegralFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntegralFunction" with its parents), and generic functions dispatch on them.
+AbstractIntegralProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntegralProblem" with its parents), and generic functions dispatch on them.
+AbstractIntegralSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntegralSolution" with its parents), and generic functions dispatch on them.
+AbstractIntervalNonlinearAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntervalNonlinearAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractIntervalNonlinearFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntervalNonlinearFunction" with its parents), and generic functions dispatch on them.
+AbstractIntervalNonlinearProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "IntervalNonlinearProblem" with its parents), and generic functions dispatch on them.
+AbstractJumpProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "JumpProblem" with its parents), and generic functions dispatch on them.
+AbstractLinearAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "LinearAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractLinearProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "LinearProblem" with its parents), and generic functions dispatch on them.
+AbstractLinearSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "LinearSolution" with its parents), and generic functions dispatch on them.
+AbstractNoTimeSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NoTimeSolution" with its parents), and generic functions dispatch on them.
+AbstractNoiseProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NoiseProblem" with its parents), and generic functions dispatch on them.
+AbstractNoiseProcess	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NoiseProcess" with its parents), and generic functions dispatch on them.
+AbstractNonlinearAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NonlinearAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractNonlinearFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NonlinearFunction" with its parents), and generic functions dispatch on them.
+AbstractNonlinearSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "NonlinearSolution" with its parents), and generic functions dispatch on them.
+AbstractODEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractODEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODEFunction" with its parents), and generic functions dispatch on them.
+AbstractODEInputFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODEInputFunction" with its parents), and generic functions dispatch on them.
+AbstractODEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractODEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODEProblem" with its parents), and generic functions dispatch on them.
+AbstractODESolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ODESolution" with its parents), and generic functions dispatch on them.
+AbstractOptimizationAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OptimizationAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractOptimizationCache	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OptimizationCache" with its parents), and generic functions dispatch on them.
+AbstractOptimizationFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OptimizationFunction" with its parents), and generic functions dispatch on them.
+AbstractOptimizationProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OptimizationProblem" with its parents), and generic functions dispatch on them.
+AbstractOptimizationSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OptimizationSolution" with its parents), and generic functions dispatch on them.
+AbstractOverloadingSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "OverloadingSensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractPDENoTimeSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "PDENoTimeSolution" with its parents), and generic functions dispatch on them.
+AbstractPDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "PDEProblem" with its parents), and generic functions dispatch on them.
+AbstractPDESolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "PDESolution" with its parents), and generic functions dispatch on them.
+AbstractPDETimeSeriesSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "PDETimeSeriesSolution" with its parents), and generic functions dispatch on them.
+AbstractParameterizedFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ParameterizedFunction" with its parents), and generic functions dispatch on them.
+AbstractRODEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "RODEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractRODEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "RODEFunction" with its parents), and generic functions dispatch on them.
+AbstractRODEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "RODEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractRODEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "RODEProblem" with its parents), and generic functions dispatch on them.
+AbstractRODESolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "RODESolution" with its parents), and generic functions dispatch on them.
+AbstractSDDEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDDEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSDDEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDDEFunction" with its parents), and generic functions dispatch on them.
+AbstractSDDEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDDEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractSDDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDDEProblem" with its parents), and generic functions dispatch on them.
+AbstractSDEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSDEFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDEFunction" with its parents), and generic functions dispatch on them.
+AbstractSDEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractSDEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SDEProblem" with its parents), and generic functions dispatch on them.
+AbstractSciMLAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SciMLAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSciMLFunction	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SciMLFunction" with its parents), and generic functions dispatch on them.
+AbstractSciMLProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SciMLProblem" with its parents), and generic functions dispatch on them.
+AbstractSciMLSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SciMLSolution" with its parents), and generic functions dispatch on them.
+AbstractSecondOrderODEAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SecondOrderODEAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSecondOrderODEIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SecondOrderODEIntegrator" with its parents), and generic functions dispatch on them.
+AbstractSecondOrderODEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SecondOrderODEProblem" with its parents), and generic functions dispatch on them.
+AbstractSecondOrderSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SecondOrderSensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSensitivitySolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SensitivitySolution" with its parents), and generic functions dispatch on them.
+AbstractShadowingSensitivityAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "ShadowingSensitivityAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSpecialization	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "Specialization" with its parents), and generic functions dispatch on them.
+AbstractSplitODEProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SplitODEProblem" with its parents), and generic functions dispatch on them.
+AbstractSteadyStateAlgorithm	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SteadyStateAlgorithm" with its parents), and generic functions dispatch on them.
+AbstractSteadyStateIntegrator	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SteadyStateIntegrator" with its parents), and generic functions dispatch on them.
+AbstractSteadyStateProblem	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SteadyStateProblem" with its parents), and generic functions dispatch on them.
+AbstractSteadyStateSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "SteadyStateSolution" with its parents), and generic functions dispatch on them.
+AbstractTimeseriesSolution	Julia abstract type for dispatch; R objects carry S3 classes instead (for example class "TimeseriesSolution" with its parents), and generic functions dispatch on them.
+AutoSpecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+FullSpecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+NoSpecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+FunctionWrapperSpecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+AutoDePSpecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+AutoDespecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+AutoRespecialize	Julia specialization level of problem functions (compile time); R closures are not specialized.
+@add_kwonly	Julia macro generating keyword constructors; R functions take keyword arguments directly.
+@def	Julia macro defining code snippets; no R counterpart is needed.
+ADOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+ChainRulesOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+EnzymeOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+MooncakeOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+ReverseDiffOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+TrackerOriginator	tag of the Julia automatic differentiation system that called a function; R has no automatic differentiation (derivatives are symbolic or finite differences).
+set_mooncakeoriginator_if_mooncake	hook of the Mooncake automatic differentiation package; R has no automatic differentiation.
+isfunctionwrapper	Julia FunctionWrappers type test; R functions are not wrapped.
+unwrap_fw	Julia FunctionWrappers unwrapping; R functions are not wrapped.
+wrapfun_iip	Julia FunctionWrappers construction for in place functions; R functions are not wrapped.
+wrapfun_oop	Julia FunctionWrappers construction; R functions are not wrapped.
+parameterless_type	Julia type reflection (the type without parameters); R classes have no type parameters.
+widen_bounded_type_params	Julia type parameter widening for compilation; R has no type parameters.
+Void	Julia singleton for an absent in place return; R functions return values.
+__init	Julia solver package hook behind init(); R dispatches init() with S3 methods.
+__solve	Julia solver package hook behind solve(); R dispatches solve() with S3 methods.
+_concrete_solve_adjoint	Julia automatic differentiation rule of solve() used by SciMLSensitivity; the R port is solve_gradient() and adjoint_sensitivities().
+_concrete_solve_forward	Julia automatic differentiation rule of solve() used by SciMLSensitivity; the R port is solve_gradient() with ForwardDiffSensitivity().
+_unwrap_val	Julia Val type unwrapping; R passes plain values.
+forwarddiff_chunksize	chunk size of the ForwardDiff package; R has no dual numbers (see AutoForwardDiff()).
+forwarddiffs_model	trait of the ForwardDiff package for model functions; R has no dual numbers.
+forwarddiffs_model_time	trait of the ForwardDiff package for model functions; R has no dual numbers.
+isautodifferentiable	trait of Julia automatic differentiation support; R derivatives are symbolic or finite differences.
+unitfulvalue	Unitful.jl value extraction; units in R are metadata checked by validate_units().
+value	ForwardDiff dual number value extraction; R has no dual numbers.
+enable_interpolation_sensitivitymode	Julia flag that makes interpolations differentiable by automatic differentiation; R solutions are differentiated by solve_gradient().
+BasicEnsembleAlgorithm	Julia abstract type for dispatch; R ensemble algorithms carry the S3 class "EnsembleAlgorithm".
+EnsembleAlgorithm	Julia abstract type for dispatch; R ensemble algorithms carry the S3 class "EnsembleAlgorithm".
+DAEInitializationAlgorithm	Julia abstract type for dispatch; R initialization algorithms (BrownFullBasicInit(), ShampineCollocationInit(), CheckInit(), ...) carry the S3 class "DAEInitializationAlgorithm".
+DECache	Julia abstract type of solver caches; R methods keep their caches in lists and environments of the integrator.
+DECallback	Julia abstract type for dispatch; R callbacks carry the S3 class "DECallback".
+DEIntegrator	Julia abstract type for dispatch; R integrators carry the S3 class "DEIntegrator" (see init()).
+DespecializedParameters	Julia wrapper that hides the parameter type from the compiler; R closures are not specialized.
+invoke_with_despecialized_parameters	Julia call through DespecializedParameters to avoid recompilation; R closures are not specialized.
+specialization	Julia specialization level of a problem function (compile time); R closures are not specialized.
+keyword_arg_silent	Julia list of solver keywords whose type mismatch is not warned about; R solver options are checked by the solvers.
+prepare_function	Julia preparation of problem functions for compilation and automatic differentiation; R closures are used as they are.
+StochasticDiffEqAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqCache	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqCompositeAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqConstantCache	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqHighOrder	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqIIF	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqImplicit	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpDiffusionAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpDiffusionAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpNewtonAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqJumpNewtonDiffusionAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqLeaping	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqLowOrder	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqMilstein	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqMutableCache	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqNewtonAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqNewtonAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqROCK	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqRODE	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqRODEAdaptiveAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqRODEAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqRODECompositeAlgorithm	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+StochasticDiffEqWeak	Julia abstract type grouping StochasticDiffEq algorithms or caches for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm" and their own fields (order, noise, interpretation).
+DiffEqBase	Julia package module reexported by StochasticDiffEq; its functions are exported directly.
+SciMLBase	Julia package module reexported by StochasticDiffEq; its functions are exported directly.
+SciMLOperators	Julia package module reexported by StochasticDiffEq; its operators are exported directly.
+DiffEqNoiseProcess	Julia package module reexported by StochasticDiffEq; its noise processes are exported directly.
+StochasticDiffEqCore	Julia package module of the StochasticDiffEq solvers; its functions are exported directly.
+Clocks	Julia submodule name of SciMLBase; its clock types and functions are exported directly.
+StochasticCompositeCache	Julia cache type of composite SDE algorithms; R composite algorithms keep their caches in the integrator.
+StochasticDiffEqCache	Julia cache type; R keeps solver caches in the integrator.
+SDEAlgTypes	Julia type union of SDE algorithms for dispatch; R SDE algorithms carry the S3 class "SDEAlgorithm".
+DiffEqNLSolveTag	ForwardDiff tag type of the nonlinear solver; R has no dual numbers.
+DiffCache	PreallocationTools cache for dual numbers; R has no dual numbers.
+determine_chunksize	ForwardDiff chunk size; R has no dual numbers.
+get_chunksize	ForwardDiff chunk size; R has no dual numbers.
+NLSOLVEJL_SETUP	setup of the NLsolve.jl package for implicit stages; the R implicit methods use their own Newton iteration.
+_resolve_rng	internal helper resolving Julia random number generator arguments; R uses the global generator and seed.
+_sde_init	internal entry point of init() for SDE problems; R dispatches init() with S3 methods.
+_z_prototype	internal prototype array of the noise; R allocates noise vectors when needed.
+warn_compat	Julia package compatibility warning; no R counterpart is needed.
+SensitivityADPassThrough	tag that passes automatic differentiation through solve(); R has no automatic differentiation.
+LinearSolve	Julia package module reexported by NonlinearSolve; its algorithms are exported directly.
+ADTypes	Julia package module of automatic differentiation choices; AutoForwardDiff(), AutoFiniteDiff() and AutoSparse() are exported directly.
+NonlinearSolveBase	Julia package module of the NonlinearSolve infrastructure; its functions are exported directly.
+NonlinearSolveFirstOrder	Julia package module of first order NonlinearSolve algorithms; the algorithms are exported directly.
+NonlinearSolveQuasiNewton	Julia package module of quasi Newton NonlinearSolve algorithms; the algorithms are exported directly.
+NonlinearSolveSpectralMethods	Julia package module of spectral NonlinearSolve algorithms; the algorithms are exported directly.
+SimpleNonlinearSolve	Julia package module of the simple NonlinearSolve algorithms; they are exported directly.
+BracketingNonlinearSolve	Julia package module of bracketing NonlinearSolve algorithms; they are exported directly.
