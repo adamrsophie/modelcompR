@@ -182,26 +182,39 @@ RK4 <- function() {
 # Step size control and initial step, after OrdinaryDiffEqCore
 # (initdt.jl, integrators/controllers.jl, alg_utils.jl).
 
-# ODE_DEFAULT_NORM: the root of the sum of squares over the length (mean()
-# adds a correction pass that rounds differently).
-.rms_norm <- function(x) sqrt(sum(x * x) / length(x))
+# ODE_DEFAULT_NORM of DiffEqBase: the root of the sum of squares over the
+# length. Its loop runs under @fastmath, so LLVM contracts each step to a fused
+# multiply add; vectors shorter than eight elements take the scalar loop, done
+# here. (mean() adds a correction pass that rounds differently.)
+# ponytail: longer vectors run LLVM's vectorized reduction, whose association
+# depends on the CPU; sum() stands in for it.
+.rms_norm <- function(x) {
+  n <- length(x)
+  if (n >= 8L) return(sqrt(sum(x * x) / n))
+  s <- 0
+  for (xi in x) s <- .fma(xi, xi, s)
+  sqrt(s / max(n, 1L))
+}
 
+# calculate_residuals and the norm: the weights abstol + max(|u0|, |u1|) reltol
+# are a fused multiply add under @muladd
 .err_norm <- function(err, u0, u1, abstol, reltol) {
   if (!length(err)) return(0)
-  .rms_norm(err / (abstol + pmax(abs(u0), abs(u1)) * reltol))
+  .rms_norm(err / .fma(pmax(abs(u0), abs(u1)), reltol, abstol))
 }
 
 # _ode_initdt_oop of initdt.jl (Hairer and Wanner's estimate).
 .initial_dt <- function(ctx, t0, u0, f0, tdir, order, abstol, reltol, dtmax, dtmin = 0) {
   if (!length(u0)) return(dtmax)
   smalldt <- max(dtmin, 1e-6)
-  sc <- abstol + abs(u0) * reltol
+  # the weights and the trial state are fused multiply adds under @muladd
+  sc <- .fma(abs(u0), reltol, abstol)
   d0 <- .rms_norm(u0 / sc)
   d1 <- .rms_norm(f0 / sc)
   if (!is.finite(d1)) return(max(dtmin, 1e-12))
   dt0 <- if (d0 < 1e-5 || d1 < 1e-5) smalldt else (d0 / d1) / 100
   dt0 <- min(dt0, dtmax)
-  u1 <- u0 + tdir * dt0 * f0
+  u1 <- .fma(tdir * dt0, f0, u0)
   f1 <- ctx$f(u1, ctx$p, t0 + tdir * dt0)
   if (identical(f0, f1)) return(max(dtmin, 100 * dt0))
   d2 <- .rms_norm((f1 - f0) / sc) / dt0
@@ -286,7 +299,8 @@ RK4 <- function() {
   b <- co$pid_beta; k <- co$pid_k
   f <- cs$err[1L]^(b[1L] / k) * cs$err[2L]^(b[2L] / k) * cs$err[3L]^(b[3L] / k)
   if (is.nan(f)) f <- 0
-  cs$dt_factor <- 1 + atan(f - 1)
+  # default_dt_factor_limiter, with the atan of Julia's Base
+  cs$dt_factor <- 1 + .jl_atan(f - 1)
   list(q = 1 / cs$dt_factor, cs = cs)
 }
 
@@ -325,9 +339,11 @@ RK4 <- function() {
     return(list(q = q, cs = cs))
   }
   q11 <- .fastpower(EEst, co$beta1)
-  q <- q11 / .fastpower(cs$errold, co$beta2)
   cs$q11 <- q11
-  list(q = min(1 / co$qmin, max(1 / qmax, q / co$gamma)), cs = cs)
+  # @fastmath q = clamp(q / gamma, ...) on q = q11 / errold^beta2: LLVM
+  # reassociates (q11 / p) / gamma into q11 / (p * gamma)
+  q <- q11 / (.fastpower(cs$errold, co$beta2) * co$gamma)
+  list(q = min(1 / co$qmin, max(1 / qmax, q)), cs = cs)
 }
 
 # step_accept_controller!: the next step size.

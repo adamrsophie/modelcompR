@@ -180,7 +180,7 @@ test_that("affects are solved with observed equations, and events are namespaced
                   continuous_events = list(list(x ~ 0), list(x ~ Pre(x) + 1)))
   outer <- System(list(), t, name = "outer", systems = list(inner))
   ce <- continuous_events(outer)
-  expect_equal(format(ce[[1]]$conditions[[1]]$lhs), "inner\u208Ax(t)")
+  expect_equal(format(ce[[1]]$conditions[[1]]$lhs), "inner₊x(t)")
   expect_length(continuous_events_toplevel(outer), 0L)
   cs <- mtkcompile(outer)
   so <- solve(ODEProblem(cs, list(), c(0, 2.5)))

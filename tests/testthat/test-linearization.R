@@ -33,7 +33,7 @@ test_that("a mass spring damper linearizes to the analytic state space model", {
   msd <- System(list(D(D(x)) ~ (F - k * x - c * D(x)) / m, y ~ x), t, name = "msd")
   lin <- linearize(msd, list(F), list(y), op = list(x ~ 0.3, D(x) ~ 0, F ~ 0))
   states <- lin$states
-  xi <- match("x(t)", states); vi <- match("x\u02CDt(t)", states)
+  xi <- match("x(t)", states); vi <- match("xˍt(t)", states)
   expect_false(anyNA(c(xi, vi)))
   lin <- reorder_unknowns(lin, states, states[c(xi, vi)])
   expect_equal(lin$A, rbind(c(0, 1), c(-2, -0.5)), tolerance = 1e-12)
@@ -71,7 +71,7 @@ test_that("the linearize docstring example reorders to the documented matrices",
     for (o in observed(lsys0$sys)) if (format(o$lhs) == v && format(o$rhs) %in% lsys0$states) return(format(o$rhs))
     v
   }
-  lsys <- reorder_unknowns(lsys0, lsys0$states, c(state_of("f\u208Ax(t)"), state_of("p\u208Ax(t)")))
+  lsys <- reorder_unknowns(lsys0, lsys0$states, c(state_of("f₊x(t)"), state_of("p₊x(t)")))
   expect_equal(lsys$A, rbind(c(-2, 0), c(1, -2)), tolerance = 1e-12)
   expect_equal(lsys$B, matrix(c(1, 0), 2), tolerance = 1e-12)
   expect_equal(lsys$C, matrix(c(0, 1), 1), tolerance = 1e-12)
@@ -82,7 +82,7 @@ test_that("the linearize docstring example reorders to the documented matrices",
 test_that("sensitivity functions match the linear analysis tutorial", {
   sys <- .feedback()
   expect_s3_class(sys$plant_input, "AnalysisPoint")
-  expect_identical(sys$plant_input$name, "hej\u208Aplant_input")
+  expect_identical(sys$plant_input$name, "hej₊plant_input")
   S <- get_sensitivity(sys, sys$plant_input, verbose = FALSE)
   expect_equal(c(S$A, S$B * S$C, S$D), c(-2, -1, 1), tolerance = 1e-12)
   T <- get_comp_sensitivity(sys, sys$plant_input, verbose = FALSE)
@@ -101,21 +101,21 @@ test_that("analysis points work through the hierarchy", {
   sys <- .feedback()
   nested <- System(list(), t_nounits, systems = list(sys), name = "nested_sys")
   ap <- nested$hej$plant_input
-  expect_identical(ap$name, "nested_sys\u208Ahej\u208Aplant_input")
+  expect_identical(ap$name, "nested_sys₊hej₊plant_input")
   S <- get_sensitivity(nested, ap, verbose = FALSE)
   expect_equal(c(S$A, S$B * S$C, S$D), c(-2, -1, 1), tolerance = 1e-12)
-  L <- get_looptransfer(nested, "hej\u208Aplant_input", verbose = FALSE)
+  L <- get_looptransfer(nested, "hej₊plant_input", verbose = FALSE)
   expect_equal(c(L$A, L$B * L$C, L$D), c(-1, -1, 0), tolerance = 1e-12)
-  expect_identical(complete(nested)$hej$plant_input$name, "hej\u208Aplant_input")
+  expect_identical(complete(nested)$hej$plant_input$name, "hej₊plant_input")
 })
 
 test_that("open_loop breaks the connection of an analysis point", {
   sys <- .feedback()
   ol <- open_loop(sys, sys$plant_input)
-  expect_identical(format(ol$u), "C\u208Aoutput\u208Au(t)")
-  expect_identical(format(ol$du[[1L]]), "P\u208Ainput\u208Au(t)")
+  expect_identical(format(ol$u), "C₊output₊u(t)")
+  expect_identical(format(ol$du[[1L]]), "P₊input₊u(t)")
   ex <- expand_connections(ol$sys)
-  expect_false(any(vapply(equations(ex), function(e) format(e) == "P\u208Ainput\u208Au(t) ~ C\u208Aoutput\u208Au(t)", TRUE)))
+  expect_false(any(vapply(equations(ex), function(e) format(e) == "P₊input₊u(t) ~ C₊output₊u(t)", TRUE)))
   m <- linearize(ol$sys, ol$du, list(ol$u), verbose = FALSE)
   expect_equal(c(m$A, m$B * m$C, m$D), c(-1, -1, 0), tolerance = 1e-12)
   # the same connection opened as a loop opening of linearize
@@ -222,7 +222,7 @@ test_that("control functions and bound inputs", {
   expect_equal(cfi$f(0.5, 1, 3, 2, 0), -8 - 0.5)
   fb <- .feedback()
   cf2 <- generate_control_function(fb, fb$plant_input)
-  expect_identical(vapply(inputs(cf2$io_sys), format, ""), "P\u208Ainput\u208Au(t)")
+  expect_identical(vapply(inputs(cf2$io_sys), format, ""), "P₊input₊u(t)")
   n <- length(cf2$dvs)
   expect_length(cf2$f(rep(0, n), 1, rep(1, length(cf2$ps)), 0), n)
 })

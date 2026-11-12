@@ -220,10 +220,10 @@ test_that("named, nonamespace and namespace mirror the macros", {
   named(once <- decay(k = bump()))
   expect_identical(calls, 1L)
   outer <- System(list(), t, name = "outer", systems = list(sys))
-  expect_identical(format(outer$sys$x), "outer\u208Asys\u208Ax(t)")
+  expect_identical(format(outer$sys$x), "outer₊sys₊x(t)")
   expect_identical(format(nonamespace(outer$sys$x)), "x(t)")
   co <- complete(outer)
-  expect_identical(format(namespace(co$sys$x)), "outer\u208Asys\u208Ax(t)")
+  expect_identical(format(namespace(co$sys$x)), "outer₊sys₊x(t)")
 })
 
 test_that("variable collection, substitution and conversion helpers", {
