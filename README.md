@@ -95,9 +95,9 @@ All 327 public names of ModelingToolkit and ModelingToolkitBase are accounted
 for: 310 are ported, 8 are the Julia dynamic optimization backends (JuMP,
 InfiniteOpt, CasADi, Pyomo), which point to the native collocation backend,
 and 9 are Julia internals with no R meaning. Some ported functions cover
-fewer cases than their Julia counterparts; [PORTING.md](PORTING.md) lists the
-module by module status, what is not yet ported and the deliberate
-differences.
+fewer cases than their Julia counterparts;
+[`tools/upstream_status.tsv`](tools/upstream_status.tsv) records the status
+of every upstream name.
 
 | Area | Highlights |
 |------|------------|

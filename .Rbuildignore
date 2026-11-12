@@ -13,6 +13,5 @@
 ^.*\.DS_Store$
 ^\.Rhistory$
 ^\.RData$
-^PORTING\.md$
 ^LICENSE$
 ^\.gstack$
