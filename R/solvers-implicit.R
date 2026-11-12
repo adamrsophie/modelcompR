@@ -125,7 +125,7 @@
   if (ctx$iter <= 1L || isTRUE(nl$firstcall)) return(c(TRUE, TRUE))
   if (!isTRUE(ctx$adaptive)) return(c(TRUE, TRUE))
   errorfail <- ctx$EEst_prev > 1
-  fresh <- isTRUE(nl$J_t == t)
+  fresh <- isTRUE(nl$J_t == t) && !isTRUE(ctx$derivative_discontinuity)
   if (fresh) {
     jbad <- FALSE
     small <- TRUE
@@ -134,7 +134,9 @@
       abs((1 / gdt) / (1 / nl$W_gdt) - 1) <= nl$new_W_dt_cutoff
     jbad <- nl$status == "TryAgain" && small
   }
-  wbad <- !small || errorfail || nl$status == "Divergence"
+  # stages after the first of a multistage method (isfirststage false) keep W
+  # after a rejected step
+  wbad <- !small || (!isFALSE(nl$isfs) && errorfail) || nl$status == "Divergence"
   c(jbad, jbad || wbad)
 }
 
@@ -143,7 +145,8 @@
 .update_W <- function(nl, ctx, t, uprev, gdt, dae = NULL) {
   nj <- .do_newJW(nl, ctx, t, gdt, cj = dae$cj)
   cnt <- list(nf = 0L, njacs = 0L, nw = 0L)
-  if (nj[1L]) {
+  # out of place, calc_W computes J afresh whenever it forms W
+  if (nj[1L] || (nj[2L] && is.null(dae))) {
     if (is.null(dae)) {
       jj <- .calc_J(ctx, uprev, t)
       nl$J <- jj$J
@@ -279,6 +282,13 @@
   cache
 }
 
+# After an event: the Newton state and the error history are kept, the FSAL
+# derivative is evaluated at the new state.
+.implicit_on_event <- function(ctx, t, u, cache) {
+  cache$fsal <- ctx$f(u, ctx$p, t)
+  list(cache = cache, nf = 1L)
+}
+
 # Derivatives for the Hermite dense output: M^-1 f with a mass matrix, NA
 # for algebraic variables (interpolated linearly, as _dae_hermite_mask).
 .mm_deriv <- function(ctx, f) {
@@ -330,7 +340,7 @@
 .trapezoid_step <- function(ctx, t, u, dt, cache) {
   gdt <- dt / 2
   fprev <- cache$fsal
-  tmp <- .mass_mul(ctx$mass, u) / gdt + fprev
+  tmp <- .mass_mul(ctx$mass, u) * (1 / gdt) + fprev
   nl <- .nlsolve(cache$nl, ctx, t, dt, u, tmp, 1 / 2, 1, t + dt, u)
   out <- list(nf = nl$nf, njacs = nl$njacs, nsolve = nl$nsolve, nw = nl$nw, eigen_est = nl$eigen_est,
               cache = cache)
@@ -349,10 +359,12 @@
       dt3 <- (t - tprev) * (t - tprev2)
       dt4 <- (tprev - tprev2) * (t - tprev2)
       dt5 <- t + dt - tprev2
-      r <- 7 / 12 * dt^3 / 2
+      r <- 7 / 12 * (dt * dt * dt) / 2
       DD31 <- (unew - u) / dt1 - (u - uprev2) / dt2
       DD30 <- (u - uprev2) / dt3 - (uprev2 - uprev3) / dt4
-      EEst <- .err_norm(r * abs((DD31 - DD30) / dt5), u, unew, ctx$abstol, ctx$reltol)
+      # as OrdinaryDiffEqSDIRK (:trap_dd3), the norm of the third divided
+      # difference weighted componentwise
+      EEst <- .err_norm(rep(r * .rms_norm((DD31 - DD30) / dt5), length(u)), u, unew, ctx$abstol, ctx$reltol)
       if (isTRUE(EEst <= 1)) {
         cache$uprev3 <- uprev2
         cache$tprev2 <- tprev
@@ -399,7 +411,7 @@ NULL
 #' @export
 ImplicitEuler <- function(autodiff = NULL) .with_autodiff(autodiff, {
   .new_alg("ImplicitEuler", 1L, step = .implicit_euler_step, interp = .hermite_dae_interp,
-           init = .implicit_init,
+           init = .implicit_init, on_event = .implicit_on_event,
            stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject)
 })
 
@@ -407,7 +419,7 @@ ImplicitEuler <- function(autodiff = NULL) .with_autodiff(autodiff, {
 #' @export
 Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
   .new_alg("Trapezoid", 2L, step = .trapezoid_step, interp = .hermite_dae_interp,
-           init = .implicit_init,
+           init = .implicit_init, on_event = .implicit_on_event,
            stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject)
 })
 
@@ -813,7 +825,10 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
   tdt <- t + dt
   n_pred <- k + 1L
   pred_thetas <- (ts[seq_len(n_pred)] - t) / dt
-  u0 <- if (cache$iters_from_event >= 1L) .eval_lagrange(1, pred_thetas, hist, n_pred) else u
+  # without history the guess is integrator.u: the result of the rejected
+  # attempt when the step is retried
+  u0 <- if (cache$iters_from_event >= 1L) .eval_lagrange(1, pred_thetas, hist, n_pred) else
+    if (isTRUE(cache$u_att_t == t)) cache$u_att else u
   u_corr <- list()
   if (cache$iters_from_event >= 1L && k >= 2L)
     for (i in 1:(k - 1L)) u_corr[[i]] <- .eval_lagrange(-i, pred_thetas, hist, n_pred)
@@ -880,6 +895,8 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
     out$nf <- out$nf + 1L
   }
   # dense output: the Lagrange polynomial through u_new and the history
+  cache$u_att <- unew
+  cache$u_att_t <- t
   dense_order <- if (cache$time_filter) max(k, cache$filter_order) else k
   nk <- min(dense_order + 1L, cache$max_order + 1L)
   thetas <- c(1, (ts[seq_len(nk - 1L)] - t) / dt)
@@ -1037,6 +1054,11 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
     stop("max_order must be between 1 and 5", call. = FALSE)
   .new_alg(name, 1L, step = .bdf_step_wrapped, interp = .bdf_interp,
            init = function(ctx, t, u) .bdf_init(ctx, t, u, max_order, dae, opts),
+           on_event = if (!dae) function(ctx, t, u, cache) {
+             # reinitFBDF! on the derivative discontinuity; the Newton state stays
+             .bdf_restart(cache)
+             .implicit_on_event(ctx, t, u, cache)
+           },
            stiff = TRUE, mass_matrix = !dae, dae = dae, controller = "BDF",
            qmax = qmax, qsteady_min = qsteady_min, qsteady_max = qsteady_max, gamma = 12 / 10,
            bdf_stepsize = .bdf_stepsize, bdf_accept = .bdf_accept, bdf_reject = .bdf_reject,

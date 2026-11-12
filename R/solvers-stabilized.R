@@ -66,8 +66,6 @@ NULL
   if (e == 0L) 2^-1074 else 2^(e - 1075)
 }
 
-.rms_norm <- function(x) sqrt(sum(x^2) / length(x))
-
 # The nonlinear power iteration of maxeig!: sets st$eig and returns the
 # number of function evaluations. `rkc` selects the RKCAlgs variant (start
 # from the derivative, convergence to 1 percent, safety factor 1.2 after

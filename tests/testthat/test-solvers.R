@@ -399,9 +399,9 @@ test_that("FBDF and DFBDF take OrdinaryDiffEq's steps on Robertson and Van der P
   expect_steps_like_julia(sol, "rober_FBDF_1e-6")
   expect_equal(sol$u[[length(sol$t)]], c(1.786592e-02, 7.274751e-08, 9.821340e-01), tolerance = 1e-5,
                ignore_attr = TRUE)
-  # the Jacobian is reused across many factorizations, as for in place
-  # problems in Julia
-  expect_lt(sol$stats$njacs, 20L)
+  # out of place, as R functions are, every new W comes with a fresh
+  # Jacobian (calc_W of OrdinaryDiffEqDifferentiation)
+  expect_equal(sol$stats$njacs, sol$stats$nw)
   expect_gt(sol$stats$nw, 50L)
   # the time filters of DeCaria et al.
   solf <- solve(prob, FBDF(time_filter = TRUE), reltol = 1e-6, abstol = 1e-10)

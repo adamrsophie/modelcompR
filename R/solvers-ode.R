@@ -170,10 +170,13 @@ RK4 <- function() {
 # Step size control and initial step, after OrdinaryDiffEqCore
 # (initdt.jl, integrators/controllers.jl, alg_utils.jl).
 
+# ODE_DEFAULT_NORM: the root of the sum of squares over the length (mean()
+# adds a correction pass that rounds differently).
+.rms_norm <- function(x) sqrt(sum(x * x) / length(x))
+
 .err_norm <- function(err, u0, u1, abstol, reltol) {
   if (!length(err)) return(0)
-  sc <- abstol + pmax(abs(u0), abs(u1)) * reltol
-  sqrt(mean((err / sc)^2))
+  .rms_norm(err / (abstol + pmax(abs(u0), abs(u1)) * reltol))
 }
 
 # _ode_initdt_oop of initdt.jl (Hairer and Wanner's estimate).
@@ -181,15 +184,15 @@ RK4 <- function() {
   if (!length(u0)) return(dtmax)
   smalldt <- max(dtmin, 1e-6)
   sc <- abstol + abs(u0) * reltol
-  d0 <- sqrt(mean((u0 / sc)^2))
-  d1 <- sqrt(mean((f0 / sc)^2))
+  d0 <- .rms_norm(u0 / sc)
+  d1 <- .rms_norm(f0 / sc)
   if (!is.finite(d1)) return(max(dtmin, 1e-12))
-  dt0 <- if (d0 < 1e-5 || d1 < 1e-5) smalldt else 0.01 * d0 / d1
+  dt0 <- if (d0 < 1e-5 || d1 < 1e-5) smalldt else (d0 / d1) / 100
   dt0 <- min(dt0, dtmax)
   u1 <- u0 + tdir * dt0 * f0
   f1 <- ctx$f(u1, ctx$p, t0 + tdir * dt0)
   if (identical(f0, f1)) return(max(dtmin, 100 * dt0))
-  d2 <- sqrt(mean(((f1 - f0) / sc)^2)) / dt0
+  d2 <- .rms_norm((f1 - f0) / sc) / dt0
   if (!is.finite(d2)) d2 <- 1e10
   dt1 <- if (max(d1, d2) <= 1e-15) max(smalldt, dt0 * 1e-3) else 10^(-(2 + log10(max(d1, d2))) / order)
   max(dtmin, min(100 * dt0, dt1, dtmax))
@@ -577,6 +580,7 @@ solve.ODEProblem <- function(a, b, ...) {
   I$alg <- alg
   I$opts <- opts
   I$done <- FALSE
+  I$disc_next <- FALSE
   I$early <- NULL
   # .INTEG_INIT is the initialization code above, run in the integrator
   eval(.INTEG_INIT, I)
@@ -590,7 +594,7 @@ solve.ODEProblem <- function(a, b, ...) {
 # of I, not globals.
 utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
                          "dense", "dtmax", "dtmin_at", "finish", "is_dae", "maxiters", "mm", "opts", "prob",
-                         "push_save", "reltol", "save_end", "save_everystep", "save_start", "saveat", "steps",
+                         "push_save", "reltol", "disc_next", "save_end", "save_everystep", "save_start", "saveat", "steps",
                          "t0", "tdir", "tf", "ts", "us"))
 
 .integ_step <- function(I) {
@@ -657,6 +661,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     ctx$tprev <- integ$tprev
     ctx$uprev2 <- integ$uprev
     ctx$du <- integ$du
+    ctx$derivative_discontinuity <- isTRUE(disc_next)
+    disc_next <- FALSE
     res <- a$step(ctx, integ$t, integ$u, tdir * dtcur, caches[[cur]])
     add_stats(res)
     if (!is.null(res$eigen_est)) eigen_est <- res$eigen_est
@@ -806,8 +812,18 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         }
       }
       ctx$du <- integ$du
-      caches[[cur]] <- a$init(ctx, integ$t, integ$u)
-      stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+      if (!is.null(a$on_event)) {
+        # methods with Newton state keep their caches across the event (as
+        # OrdinaryDiffEq, which only evaluates the FSAL derivative again)
+        # and see a derivative discontinuity on the next step
+        evr <- a$on_event(ctx, integ$t, integ$u, caches[[cur]])
+        caches[[cur]] <- evr$cache
+        stats$nf <- stats$nf + as.integer(evr$nf)
+        disc_next <- TRUE
+      } else {
+        caches[[cur]] <- a$init(ctx, integ$t, integ$u)
+        stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+      }
       integ$u_modified <- FALSE
       # the step size carries over the event (as in OrdinaryDiffEq); the
       # caches, the controller history and multistep histories restart
