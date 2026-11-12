@@ -1,6 +1,7 @@
 # Optimizers for OptimizationProblem, named as in Optimization.jl and
-# OptimizationOptimJL (LBFGS, BFGS, NelderMead; Optimization.LBFGS is the
-# L-BFGS-B method) and Optimization.AugLag. The unconstrained and box
+# Optimization.jl (LBFGS, the L-BFGS-B method) and Optimization.AugLag (the
+# BFGS and NelderMead of OptimizationOptimJL are in
+# optimization-optimjl.R). The unconstrained and box
 # constrained methods wrap stats::optim and stats::nlminb; general
 # constraints are handled by an augmented Lagrangian method written here
 # (the Powell, Hestenes and Rockafellar form for inequalities, as
@@ -29,8 +30,6 @@ print.OptimizationAlgorithm <- function(x, ...) {
 #' * `LBFGSB()` is the limited memory BFGS method with box constraints
 #'   ([stats::optim()] method `"L-BFGS-B"`); `LBFGS()` is another name for
 #'   it. It is the default for problems without constraints.
-#' * `BFGS()` and `NelderMead()` are the `stats::optim()` methods of those
-#'   names; they do not support bounds.
 #' * `Nlminb()` is the PORT quasi Newton method of [stats::nlminb()], with
 #'   box constraints; it uses the symbolic Hessian when the problem has one.
 #' * `AugLag()` is an augmented Lagrangian method for equality and
@@ -54,8 +53,6 @@ print.OptimizationAlgorithm <- function(x, ...) {
 #' rosenbrock <- function(u, p) (p[1] - u[1])^2 + p[2] * (u[2] - u[1]^2)^2
 #' prob <- OptimizationProblem(rosenbrock, c(-1, 2), c(1, 100))
 #' solve(prob, LBFGSB())$u
-#' solve(prob, BFGS())$u
-#' solve(prob, NelderMead())$u
 #' solve(prob, Nlminb())$u
 #' @name optimization_algorithms
 #' @export
@@ -63,12 +60,6 @@ LBFGSB <- function(m = 10L) .opt_alg("LBFGSB", m = as.integer(m))
 #' @rdname optimization_algorithms
 #' @export
 LBFGS <- function(m = 10L) .opt_alg("LBFGS", m = as.integer(m))
-#' @rdname optimization_algorithms
-#' @export
-BFGS <- function() .opt_alg("BFGS")
-#' @rdname optimization_algorithms
-#' @export
-NelderMead <- function() .opt_alg("NelderMead")
 #' @rdname optimization_algorithms
 #' @export
 Nlminb <- function() .opt_alg("Nlminb")
@@ -324,9 +315,6 @@ solve.OptimizationProblem <- function(a, b, ...) {
   if (has_cons && !inherits(alg, "AugLag"))
     stop(alg$name, "() does not handle constraints; use AugLag(), or constraints_to_penalties()", call. = FALSE)
   lb <- a$lb; ub <- a$ub
-  bounded <- !is.null(lb) && any(is.finite(lb)) || !is.null(ub) && any(is.finite(ub))
-  if (bounded && inherits(alg, c("BFGS", "NelderMead")))
-    stop(alg$name, "() does not handle bounds; use LBFGSB(), Nlminb() or AugLag()", call. = FALSE)
   maxiters <- as.integer(opts$maxiters %||% 1000L)
   x0 <- as.numeric(a$u0)
   if (!length(x0)) stop("the problem has no optimization variables", call. = FALSE)
@@ -356,18 +344,7 @@ solve.OptimizationProblem <- function(a, b, ...) {
     rc <- if (r$convergence == 0L) "Success" else if (r$iterations >= maxiters) "MaxIters" else "Failure"
     return(.opt_solution(a, alg, r$par, r$objective, rc, r))
   }
-  method <- if (inherits(alg, "BFGS")) "BFGS" else if (inherits(alg, "NelderMead")) "Nelder-Mead" else
-    stop("not an optimization algorithm: ", class(alg)[1L], call. = FALSE)
-  if (method == "Nelder-Mead" && length(x0) == 1L) {
-    # stats::optim() warns that Nelder-Mead is unreliable in one dimension
-    r <- stats::optim(x0, f, g, method = "BFGS", control = list(maxit = maxiters, reltol = opts$reltol %||% 1e-14))
-  } else {
-    ctrl <- list(maxit = if (method == "Nelder-Mead") max(maxiters, 5000L) else maxiters,
-                 reltol = opts$reltol %||% 1e-14)
-    if (!is.null(opts$abstol)) ctrl$abstol <- opts$abstol
-    r <- stats::optim(x0, f, if (method == "BFGS") g, method = method, control = ctrl)
-  }
-  .opt_solution(a, alg, r$par, r$value, .opt_retcode(r$convergence), r)
+  stop("not an optimization algorithm: ", class(alg)[1L], call. = FALSE)
 }
 
 .opt_solution <- function(prob, alg, u, objective, retcode, original) {

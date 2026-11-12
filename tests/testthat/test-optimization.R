@@ -97,7 +97,10 @@ test_that("equality constraints, mixed constraints and bounds", {
     expect_equal(unname(sol$u), c(0.5, 0.25), tolerance = 1e-6, info = alg$name)
     expect_equal(sol$objective, 0.25, tolerance = 1e-8)
   }
-  expect_error(solve(bp, BFGS()), "does not handle bounds")
+  # as in OptimizationOptimJL, a method without bounds runs inside Fminbox
+  fb <- solve(bp, BFGS())
+  expect_s3_class(fb$alg, "Fminbox")
+  expect_equal(unname(fb$u), c(0.5, 0.25), tolerance = 1e-6)
   expect_error(OptimizationProblem(bs, list(xb ~ 0, yb ~ 0), lb = c(0, 0)), "both `lb` and `ub`")
   bp2 <- OptimizationProblem(bs, list(xb ~ 0, yb ~ 0), lb = c(-2, -2), ub = c(0, 2))
   expect_equal(unname(solve(bp2)$u), c(0, 0), tolerance = 1e-6)

@@ -6,6 +6,7 @@
 \alias{ConjugateGradient}
 \alias{AcceleratedGradientDescent}
 \alias{MomentumGradientDescent}
+\alias{BFGS}
 \alias{Newton}
 \alias{NewtonTrustRegion}
 \alias{NGMRES}
@@ -13,6 +14,7 @@
 \alias{Fminbox}
 \alias{SimulatedAnnealing}
 \alias{ParticleSwarm}
+\alias{NelderMead}
 \alias{SAMIN}
 \alias{IPNewton}
 \alias{Optim}
@@ -47,6 +49,14 @@ MomentumGradientDescent(
   mu = 0.01,
   alphaguess = NULL,
   linesearch = NULL,
+  manifold = NULL
+)
+
+BFGS(
+  alphaguess = NULL,
+  linesearch = NULL,
+  initial_invH = NULL,
+  initial_stepnorm = NULL,
   manifold = NULL
 )
 
@@ -87,6 +97,8 @@ Fminbox(method = NULL, mu0 = NaN, mufactor = 0.001)
 SimulatedAnnealing(neighbor = NULL, temperature = NULL, keep_best = TRUE)
 
 ParticleSwarm(lower = NULL, upper = NULL, n_particles = 0L)
+
+NelderMead(parameters = NULL, initial_simplex = NULL)
 
 SAMIN(
   nt = 5L,
@@ -129,6 +141,11 @@ the ratio of actual and predicted reductions for accepting a step.}
 
 \item{mu}{The momentum of \code{MomentumGradientDescent()}.}
 
+\item{initial_invH}{A function of \code{x} giving the initial inverse Hessian
+of \code{BFGS()} (\code{NULL}: the identity, scaled by \code{initial_stepnorm}).}
+
+\item{initial_stepnorm}{The norm of the first step of \code{BFGS()}.}
+
 \item{initial_delta, delta_hat, delta_min}{The initial, largest and
 smallest trust region radii.}
 
@@ -162,6 +179,12 @@ point (the default adds standard normal noise).}
 
 \item{n_particles}{The number of particles (0 chooses the default).}
 
+\item{parameters}{The simplex parameters of \code{NelderMead()}: a list with
+\code{alpha}, \code{beta}, \code{gamma} and \code{delta} (\code{NULL} for the adaptive ones).}
+
+\item{initial_simplex}{The initial simplex of \code{NelderMead()} (\code{NULL} for
+the affine simplex).}
+
 \item{nt, ns, t0, rt, r_expand, bounds_ratio, neps, coverage_ok, verbosity}{The
 parameters of SAMIN: the temperature is reduced every \code{nt * ns * n}
 evaluations and the search bounds adjusted every \code{ns * n}; the initial
@@ -181,13 +204,14 @@ An optimization algorithm.
 The optimizers of Optim.jl, through OptimizationOptimJL: first order
 methods (\code{GradientDescent()}, \code{ConjugateGradient()},
 \code{AcceleratedGradientDescent()}, \code{MomentumGradientDescent()}, \code{NGMRES()},
-\code{OACCEL()}, and Optim's \code{BFGS} and \code{LBFGS} as \code{Optim$BFGS()} and
-\code{Optim$LBFGS()}), second order methods (\code{Newton()},
+\code{OACCEL()}, \code{BFGS()}, and Optim's \code{LBFGS} as \code{Optim$LBFGS()}, since
+\code{LBFGS()} is the L-BFGS-B method of Optimization.jl), second order
+methods (\code{Newton()},
 \code{NewtonTrustRegion()}), the box constrained \code{Fminbox()} (which wraps a
 first order method in a logarithmic barrier) and the interior point
 \code{IPNewton()} for bounds and nonlinear constraints, and the derivative free
-\code{ParticleSwarm()}, \code{SimulatedAnnealing()}, \code{SAMIN()} and Optim's Nelder
-Mead simplex \code{Optim$NelderMead()}. Optim's own \code{Optim$Adam()} and
+\code{ParticleSwarm()}, \code{SimulatedAnnealing()}, \code{SAMIN()} and the Nelder Mead
+simplex \code{NelderMead()}. Optim's own \code{Optim$Adam()} and
 \code{Optim$AdaMax()} (which OptimizationOptimJL does not export, \code{Adam} being
 the rule of Optimisers) and the Hessian vector product trust region
 \code{Optim$KrylovTrustRegion()} (it uses the \code{hv} of the function, \verb{(x, v, p)},
@@ -213,18 +237,12 @@ holds, \code{"MaxIters"} at the iteration limit and \code{"Failure"} otherwise.
 }
 \section{The Optim module}{
 
-Constructors reached through \verb{Optim$} only (their names are taken by the
-\code{stats::optim} wrappers or by the rules of Optimisers):
+Constructors reached through \verb{Optim$} only (their names are taken by
+Optimization.jl or by the rules of Optimisers); \code{Optim$BFGS} and
+\code{Optim$NelderMead} are \code{BFGS()} and \code{NelderMead()}:
 \describe{
-\item{\code{Optim$BFGS(alphaguess, linesearch, initial_invH, initial_stepnorm, manifold)}}{
-\code{initial_invH} is a function of \code{x} giving the initial inverse
-Hessian and \code{initial_stepnorm} the norm of the first step.}
 \item{\code{Optim$LBFGS(m = 10, alphaguess, linesearch, P, precondprep, manifold, scaleinvH0)}}{
 \code{m} is the memory; \code{scaleinvH0} scales the initial inverse Hessian.}
-\item{\code{Optim$NelderMead(parameters, initial_simplex)}}{\code{parameters} is a
-list with \code{alpha}, \code{beta}, \code{gamma} and \code{delta} (\code{NULL} for the
-adaptive ones) and \code{initial_simplex} the initial simplex (\code{NULL} for
-the affine simplex).}
 \item{\code{Optim$Adam(alpha = 1e-4, beta_mean = 0.9, beta_var = 0.999, epsilon = 1e-8, manifold)},
 \code{Optim$AdaMax(alpha = 0.002, beta_mean, beta_var, epsilon, manifold)}}{
 \code{alpha} is the step or a function of the iteration giving it,

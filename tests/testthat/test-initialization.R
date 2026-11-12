@@ -17,11 +17,11 @@ test_that("the initialization system has the documented unknowns and equations",
   isys <- generate_initializesystem(m$sys, op = list(m$x ~ 0.6), guesses = list(m$y ~ 1))
   expect_true(modelcompR:::.f(isys, "is_initializesystem"))
   expect_null(get_iv(isys))
-  expect_equal(vapply(unknowns(isys), format, ""), c("x(t)", "y(t)", "xˍt(t)"))
+  expect_equal(vapply(unknowns(isys), format, ""), c("x(t)", "y(t)", "x\u02CDt(t)"))
   eqs <- vapply(equations(isys), format, "")
   expect_length(eqs, 3L)
   expect_true("x(t) ~ Initial(x(t))" %in% eqs)
-  expect_true(any(grepl("^xˍt\\(t\\) ~ ", eqs)))
+  expect_true(any(grepl("^x\u02CDt\\(t\\) ~ ", eqs)))
   # the constant of the condition is the value of the Initial parameter
   ix <- Initial(m$x)
   expect_true(isinitial(ix))
@@ -213,7 +213,7 @@ test_that("Initial parameters hold the initial value of a variable", {
   expect_length(parameters(plain, initial_parameters = TRUE), 1L)
   all_init <- add_initialization_parameters(System(list(D(y) ~ -k * y), t, name = "plain"))
   inits <- vapply(Filter(isinitial, parameters(all_init, initial_parameters = TRUE)), format, "")
-  expect_setequal(inits, c("Initial(y(t))", "Initial(yˍt(t))"))
+  expect_setequal(inits, c("Initial(y(t))", "Initial(y\u02CDt(t))"))
 })
 
 test_that("ordinary differential equations are left alone", {

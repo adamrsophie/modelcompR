@@ -8,8 +8,9 @@
 # Julia method. A last stage evaluated at the new state (c = 1, row = b) is
 # the first stage of the next step (FSAL); methods without it take a fresh
 # first stage and interpolate linearly, as their Julia caches keep no end
-# derivative. The low storage and SSP methods are run from their full
-# tableaus, which gives the same steps as their register forms.
+# derivative. The SSP methods are run from their full tableaus; the low
+# storage methods run the register forms of OrdinaryDiffEqLowStorageRK
+# (R/solvers-lowstorage.R), whose rounding differs from the tableau form.
 
 #' Explicit Runge-Kutta methods
 #'
@@ -17,7 +18,9 @@
 #' [solve()] on ODE problems. All take `stage_limiter(u, integ, p, t)` and
 #' `step_limiter(u, integ, p, t)` (functions returning the limited state,
 #' applied to every stage and to every step, as the SSP methods use them)
-#' and `thread` (ignored; R evaluates the stages in turn).
+#' and `thread` (ignored; R evaluates the stages in turn). The low storage
+#' methods apply only the step limiter, as their out of place forms in
+#' OrdinaryDiffEq.
 #'
 #' * Low order (OrdinaryDiffEqLowOrderRK): `Heun()`, `Ralston()`,
 #'   `Ralston4()`, `RKM()`, `OwrenZen3()`, `OwrenZen4()`, `OwrenZen5()`,
@@ -103,9 +106,11 @@ NULL
   if (identical(tb$controller, "PIDController")) {
     ctrl <- list(controller = "PID", pid_beta = tb$pid_beta, accept_safety = tb$pid_accept_safety %||% 0.81)
   }
-  alg <- do.call(.new_alg, c(list(name, tb$order, adaptive = adaptive, step = step,
-                                  interp = if (fsal) .hermite_interp else .sde_linear_interp,
-                                  init = function(ctx, t, u) list()),
+  parts <- list(step = step, interp = if (fsal) .hermite_interp else .sde_linear_interp,
+                init = function(ctx, t, u) list())
+  # the low storage methods run their register forms
+  if (is.null(tableau) && !is.null(.LSRK[[name]])) parts <- .lsrk_parts(name)
+  alg <- do.call(.new_alg, c(list(name, tb$order, adaptive = adaptive), parts,
                              ctrl,
                              list(adaptive_order = tb$adaptive_order, qmax = tb$qmax, qmin = tb$qmin,
                                   gamma = tb$gamma, beta1 = tb$beta1, beta2 = tb$beta2,

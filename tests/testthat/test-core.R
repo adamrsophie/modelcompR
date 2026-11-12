@@ -14,7 +14,7 @@ test_that("second order equations are lowered with MTK names", {
   t <- t_nounits; D <- D_nounits
   y <- Variable("y", t); v <- Variable("v", t); k <- Parameter("k", default = 2)
   sys <- mtkcompile(System(list(D(D(y)) ~ -k * y, v ~ 2 * D(y)), t, name = "osc"))
-  expect_equal(vapply(unknowns(sys), format, ""), c("y(t)", "yˍt(t)"))
+  expect_equal(vapply(unknowns(sys), format, ""), c("y(t)", "y\u02CDt(t)"))
   expect_equal(format(observed(sys)[[1]]$lhs), "v(t)")
   prob <- ODEProblem(sys, list(y ~ 1, D(y) ~ 0), c(0, 5))
   sol <- solve(prob, reltol = 1e-9, abstol = 1e-9)
@@ -42,9 +42,9 @@ test_that("namespacing follows complete()", {
   x <- Variable("x", t); k <- Parameter("k")
   inner <- System(list(D(x) ~ -k * x), t, name = "r1")
   outer <- System(list(), t, name = "top", systems = list(inner))
-  expect_equal(format(outer$r1$x), "top₊r1₊x(t)")
+  expect_equal(format(outer$r1$x), "top\u208Ar1\u208Ax(t)")
   cs <- complete(outer)
-  expect_equal(format(cs$r1$x), "r1₊x(t)")
+  expect_equal(format(cs$r1$x), "r1\u208Ax(t)")
   expect_length(equations(cs), 1L)
 })
 
@@ -103,8 +103,8 @@ test_that("subsystem derivatives are namespaced", {
   sub <- System(list(D(x) ~ -k * x), t, name = "r")
   top <- System(list(), t, name = "top", systems = list(sub))
   eq <- equations(top)[[1]]
-  expect_equal(format(eq$lhs), "Derivative(r₊x(t), t)")
-  expect_equal(vapply(unknowns(top), format, ""), "r₊x(t)")
+  expect_equal(format(eq$lhs), "Derivative(r\u208Ax(t), t)")
+  expect_equal(vapply(unknowns(top), format, ""), "r\u208Ax(t)")
 })
 
 test_that("observed expressions use the problem parameter layout", {

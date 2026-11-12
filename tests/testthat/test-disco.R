@@ -15,7 +15,7 @@ disco_run <- function(f, alg, cb, dd) {
         discontinuity_detection = dd)
 }
 
-disco_check <- function(s, n, nf, nacc, nrej, u1, tol = 1e-12, label = "") {
+disco_check <- function(s, n, nf, nacc, nrej, u1, tol = ref_tol(1e-12), label = "") {
   expect_identical(length(s$t), as.integer(n), label = paste(label, "steps"))
   if (!is.na(nf)) expect_identical(s$stats$nf, as.integer(nf), label = paste(label, "nf"))
   expect_identical(s$stats$naccept, as.integer(nacc), label = paste(label, "naccept"))
@@ -32,7 +32,7 @@ test_that("discontinuity detection reproduces OrdinaryDiffEq", {
   disco_check(disco_run(disco_f1, Tsit5(), CallbackSet(disco_cbB, disco_cbA), TRUE), 25, 167, 22, 5,
               0.9037244348275211, label = "Tsit5 BA dd")
   disco_check(disco_run(disco_f2, Tsit5(), disco_vcb, TRUE), 35, 257, 32, 10, 2.2592317532612265,
-              tol = 1e-12, label = "Tsit5 vector dd")
+              tol = ref_tol(1e-12), label = "Tsit5 vector dd")
   # Julia does not count the lazy interpolation stages of Vern7 (see PORTING.md)
   disco_check(disco_run(disco_f1, Vern7(), disco_cbA, FALSE), 23, NA, 21, 37, 0.9037224631523434, label = "Vern7")
   # the root function interpolates in place, where LLVM contracts part of the

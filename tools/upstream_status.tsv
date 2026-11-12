@@ -1577,7 +1577,7 @@ OptimizationMetaheuristics	SPEA2	ported
 OptimizationMetaheuristics	VND	ported
 OptimizationMetaheuristics	VNS	ported
 OptimizationMetaheuristics	WOA	ported
-OptimizationMetaheuristics	εDE	missing
+OptimizationMetaheuristics	εDE	ported as epsilonDE
 OptimizationNLPModels	AbstractNLPModel	ported
 OptimizationNLPModels	AbstractNLSModel	ported
 OptimizationNLPModels	Counters	ported

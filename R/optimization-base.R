@@ -115,8 +115,6 @@ OptimizerMissingError <- function(msg = "no optimization algorithm was given")
   if (is.list(alg$traits)) return(utils::modifyList(t, alg$traits))
   switch(name,
     LBFGSB = , LBFGS = { t$grad <- TRUE; t$bounds <- TRUE },
-    BFGS = { t$grad <- TRUE },
-    NelderMead = NULL,
     Nlminb = { t$grad <- TRUE; t$bounds <- TRUE },
     AugLag = { t$grad <- TRUE; t$bounds <- TRUE; t$cons <- TRUE; t$consjac <- TRUE },
     BranchAndBound = { t$bounds <- TRUE; t$cons <- TRUE; t$rbounds <- TRUE },

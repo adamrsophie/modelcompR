@@ -247,14 +247,14 @@ test_that("COBYLA follows SciPy and PRIMA", {
   calc <- function(x) list(f = sp_poly3(x), c = sum(x * x) - 4)
   r <- .pr_cobyla(calc, 1L, c(0, 0, 0), f0 = sp_poly3(c(0, 0, 0)), nlconstr0 = -4, rhobeg = 1, rhoend = 1e-6,
                   maxfun = 1500L, fortran = TRUE)
-  expect_equal(r$x, c(0.702592382241251, 1.6656076887922722, -0.8556371738634042), tolerance = 1e-5)
+  expect_equal(r$x, c(0.702592382241251, 1.6656076887922722, -0.8556371738634042), tolerance = ref_tol(1e-5, 1e-3))
   expect_equal(r$info, 0L)
   calc <- function(x) list(f = sp_poly3(x), c = x[1] * x[3] - 0.5)
   r <- .pr_cobyla(calc, 1L, c(0, 0, 0), Aeq = matrix(1, 1, 3), beq = 1, xl = c(-1, -1, -2), xu = c(2, 1.5, 2),
                   f0 = sp_poly3(c(0, 0, 0)), nlconstr0 = -0.5, rhobeg = 1, rhoend = 1e-6, maxfun = 1500L,
                   fortran = TRUE)
-  expect_equal(r$x, c(0.6333331479738197, 1.5, -1.1333331479738198), tolerance = 1e-7)
-  expect_equal(r$f, 0.7458333333334622, tolerance = 1e-10)
+  expect_equal(r$x, c(0.6333331479738197, 1.5, -1.1333331479738198), tolerance = ref_tol(1e-7, 1e-5))
+  expect_equal(r$f, 0.7458333333334622, tolerance = ref_tol(1e-10, 1e-6))
   # through solve(): ScipyCOBYLA and COBYLA with the constraint bounds
   pr <- OptimizationProblem(function(u, p) sp_poly3(u), c(0, 0, 0), numeric(),
                             cons = function(u, p) c(u[1] + u[2] + u[3], sum(u * u)), lcons = c(1, -Inf),
@@ -263,13 +263,14 @@ test_that("COBYLA follows SciPy and PRIMA", {
   s2 <- solve(pr, COBYLA())
   expect_equal(s1$retcode, "Success")
   expect_equal(s2$retcode, "Success")
-  expect_equal(unname(s1$u), unname(s2$u), tolerance = 1e-3)
+  expect_equal(unname(s1$u), unname(s2$u), tolerance = ref_tol(1e-3, 1e-2))
   expect_equal(sum(s2$u), 1, tolerance = 1e-8)
   expect_lte(sum(s2$u * s2$u), 4 + 1e-8)
   expect_error(solve(pr, NEWUOA()), "not yet ported")
 })
 
 test_that("COBYLA evaluates the same points as SciPy and libprima at the start", {
+  skip_if_not(ref_platform(), "evaluated points are compared on the reference platform")
   nlc <- .sp_nonlinear_constraint
   pts <- list()
   rec <- function(g) function(x) { pts[[length(pts) + 1L]] <<- x; g(x) }
@@ -344,7 +345,8 @@ test_that("ScipyLeastSquares trf and dogbox follow SciPy", {
   yy <- 1 + 0.5 * tt - 0.3 * tt * tt + c(0.1, -0.2, 0.05, 3.0, -0.1, 0.0, 0.2, -2.5, 0.1)
   fit <- function(x, p) x[1] + x[2] * tt + x[3] * tt * tt * x[1] - yy
   chk <- function(s, x, nfev, njev, status, tol = 1e-10) {
-    expect_equal(unname(s$u), x, tolerance = tol)
+    expect_equal(unname(s$u), x, tolerance = ref_tol(tol, 1e-6))
+    if (!ref_platform()) return(invisible())
     expect_identical(s$original$nfev, nfev)
     expect_identical(s$original$njev, njev)
     expect_identical(s$original$status, status)

@@ -68,8 +68,8 @@ test_that("the RC circuit expands, compiles and matches the analytic response", 
   expect_length(eqs, 20L)
   expect_length(unknowns(ex), 20L)
   fmt <- vapply(eqs, format, "")
-  expect_true("0 ~ capacitor₊n₊i(t) + ground₊g₊i(t) + source₊n₊i(t)" %in% fmt)
-  expect_true("source₊p₊v(t) ~ resistor₊p₊v(t)" %in% fmt)
+  expect_true("0 ~ capacitor\u208An\u208Ai(t) + ground\u208Ag\u208Ai(t) + source\u208An\u208Ai(t)" %in% fmt)
+  expect_true("source\u208Ap\u208Av(t) ~ resistor\u208Ap\u208Av(t)" %in% fmt)
   expect_false(any(vapply(eqs, inherits, TRUE, "Connection")))
 
   cs <- mtkcompile(rc)
@@ -112,8 +112,8 @@ test_that("the RC circuit matches ModelingToolkit (tools/julia/reference.jl, sec
     b <- lf$lin_fun(u, st$p0, ti)
     c(b$x[[st$diff_idxs]], unname(ri(b$x, b$p, ti)))
   }, c(0, 0)))
-  expect_equal(vals[, 1], ref[["capacitor₊v(t)"]], tolerance = 1e-7)
-  expect_equal(vals[, 2], ref[["resistor₊i(t)"]], tolerance = 1e-7)
+  expect_equal(vals[, 1], ref[["capacitor\u208Av(t)"]], tolerance = 1e-7)
+  expect_equal(vals[, 2], ref[["resistor\u208Ai(t)"]], tolerance = 1e-7)
   fs <- test_path("fixtures", "julia", "rc_structure.csv")
   skip_if_not(file.exists(fs), "Julia RC structure fixture not generated")
   jl <- utils::read.csv(fs, encoding = "UTF-8")
@@ -171,7 +171,7 @@ test_that("causal variable connections root at the output", {
   k2 <- System(list(), t, list(u), list(), name = "k2")
   sys <- System(list(connect(src$y, k1$u, k2$u)), t, systems = list(src, k1, k2), name = "s")
   fmt <- vapply(equations(expand_connections(sys)), format, "")
-  expect_true(all(c("k1₊u(t) ~ src₊y(t)", "k2₊u(t) ~ src₊y(t)") %in% fmt))
+  expect_true(all(c("k1\u208Au(t) ~ src\u208Ay(t)", "k2\u208Au(t) ~ src\u208Ay(t)") %in% fmt))
   # top level variables are outside connectors: two outer inputs have no source
   u2 <- Variable("u2", t, input = TRUE)
   bad <- System(list(connect(y, u, u2)), t, name = "b")
@@ -191,10 +191,10 @@ test_that("outer connectors enter flow balances with a negative sign", {
   }
   sys <- System(list(), t, systems = list(TwoResistors("tr")), name = "top")
   fmt <- vapply(equations(expand_connections(sys)), format, "")
-  expect_true("0 ~ -tr₊p₊i(t) + tr₊r1₊p₊i(t)" %in% fmt)
+  expect_true("0 ~ -tr\u208Ap\u208Ai(t) + tr\u208Ar1\u208Ap\u208Ai(t)" %in% fmt)
   # the unconnected pins of the top level are inside connectors with zero flow
-  expect_true("0 ~ tr₊p₊i(t)" %in% fmt)
-  expect_true("0 ~ tr₊n₊i(t)" %in% fmt)
+  expect_true("0 ~ tr\u208Ap\u208Ai(t)" %in% fmt)
+  expect_true("0 ~ tr\u208An\u208Ai(t)" %in% fmt)
 })
 
 test_that("stream connections substitute instream", {
@@ -213,15 +213,15 @@ test_that("stream connections substitute instream", {
   a <- Src("a", 2); b <- Src("b", 3)
   sys <- System(list(connect(a$port, b$port)), t, systems = list(a, b), name = "s")
   fmt <- vapply(equations(expand_connections(sys)), format, "")
-  expect_true("a₊hin(t) ~ b₊port₊h(t)" %in% fmt)
-  expect_true("b₊hin(t) ~ a₊port₊h(t)" %in% fmt)
-  expect_true("a₊port₊P(t) ~ b₊port₊P(t)" %in% fmt)
-  expect_true("0 ~ a₊port₊m(t) + b₊port₊m(t)" %in% fmt)
+  expect_true("a\u208Ahin(t) ~ b\u208Aport\u208Ah(t)" %in% fmt)
+  expect_true("b\u208Ahin(t) ~ a\u208Aport\u208Ah(t)" %in% fmt)
+  expect_true("a\u208Aport\u208AP(t) ~ b\u208Aport\u208AP(t)" %in% fmt)
+  expect_true("0 ~ a\u208Aport\u208Am(t) + b\u208Aport\u208Am(t)" %in% fmt)
   # three inner ports: the mixing rule of the Modelica specification
   c <- Src("c", 4)
   sys3 <- System(list(connect(a$port, b$port, c$port)), t, systems = list(a, b, c), name = "s3")
   eqs <- equations(expand_connections(sys3))
-  rhs <- Filter(function(e) format(e$lhs) == "a₊hin(t)", eqs)[[1L]]$rhs
+  rhs <- Filter(function(e) format(e$lhs) == "a\u208Ahin(t)", eqs)[[1L]]$rhs
   n <- toggle_namespacing(sys3, FALSE)
   f <- build_function(rhs, list(n$b$port$m, n$c$port$m, n$b$port$h, n$c$port$h))
   expect_equal(f(c(-1, -3, 10, 20)), (1 * 10 + 3 * 20) / 4)
@@ -234,7 +234,7 @@ test_that("stream connections substitute instream", {
   }
   top <- System(list(), t, systems = list(J("j")), name = "top")
   eqs <- equations(expand_connections(top))
-  oe <- Filter(function(e) format(e$lhs) == "j₊o₊h(t)", eqs)[[1L]]
+  oe <- Filter(function(e) format(e$lhs) == "j\u208Ao\u208Ah(t)", eqs)[[1L]]
   n <- toggle_namespacing(top, FALSE)$j
   g <- build_function(oe$rhs, list(n$s1$port$m, n$s2$port$m, n$s1$port$h, n$s2$port$h))
   expect_equal(g(c(-1, -3, 2, 3)), 2.5, tolerance = 1e-6)
@@ -261,9 +261,9 @@ test_that("domain connections bind connector parameters to the domain source", {
   sys <- System(list(connect(fluid, tank$port)), t, systems = list(fluid, tank), name = "s")
   ex <- expand_connections(sys)
   b <- smap_get(bindings(ex), toggle_namespacing(sys, FALSE)$tank$port$rho)
-  expect_identical(format(b), "fluid₊rho")
+  expect_identical(format(b), "fluid\u208Arho")
   fmt <- vapply(equations(ex), format, "")
-  expect_true("0 ~ fluid₊dm(t) + tank₊port₊dm(t)" %in% fmt)
+  expect_true("0 ~ fluid\u208Adm(t) + tank\u208Aport\u208Adm(t)" %in% fmt)
   prob <- ODEProblem(mtkcompile(sys), list(), c(0, 1))
   expect_equal(prob$ps[toggle_namespacing(sys, FALSE)$tank$port$rho], 876)
   expect_equal(prob[toggle_namespacing(sys, FALSE)$fluid$dm], -0.876)
@@ -296,6 +296,6 @@ test_that("connections are namespaced with their system", {
   # inside inner, a and b are outside connectors; from outer they are
   # unconnected inside connectors, whose flows are zero
   fmt <- vapply(equations(expand_connections(outer)), format, "")
-  expect_setequal(fmt, c("inner₊a₊v(t) ~ inner₊b₊v(t)", "0 ~ -inner₊a₊i(t) - inner₊b₊i(t)",
-                         "0 ~ inner₊a₊i(t)", "0 ~ inner₊b₊i(t)"))
+  expect_setequal(fmt, c("inner\u208Aa\u208Av(t) ~ inner\u208Ab\u208Av(t)", "0 ~ -inner\u208Aa\u208Ai(t) - inner\u208Ab\u208Ai(t)",
+                         "0 ~ inner\u208Aa\u208Ai(t)", "0 ~ inner\u208Ab\u208Ai(t)"))
 })

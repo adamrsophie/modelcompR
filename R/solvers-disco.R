@@ -97,6 +97,7 @@ set_discontinuity <- function(integrator) {
 # the muladd calls and not others, so those keep the out of place form.
 .inplace_interp <- function(interp) {
   if (identical(interp, .hermite_interp)) return(.hermite_interp_fused)
+  if (identical(interp, .lsrk_interp)) return(.lsrk_interp_fused)
   interp
 }
 

@@ -4,8 +4,6 @@
 \alias{optimization_algorithms}
 \alias{LBFGSB}
 \alias{LBFGS}
-\alias{BFGS}
-\alias{NelderMead}
 \alias{Nlminb}
 \alias{AugLag}
 \title{Optimization algorithms}
@@ -13,10 +11,6 @@
 LBFGSB(m = 10L)
 
 LBFGS(m = 10L)
-
-BFGS()
-
-NelderMead()
 
 Nlminb()
 
@@ -54,8 +48,6 @@ Algorithms for \code{\link[=solve]{solve()}} on an \code{\link[=OptimizationProb
 \item \code{LBFGSB()} is the limited memory BFGS method with box constraints
 (\code{\link[stats:optim]{stats::optim()}} method \code{"L-BFGS-B"}); \code{LBFGS()} is another name for
 it. It is the default for problems without constraints.
-\item \code{BFGS()} and \code{NelderMead()} are the \code{stats::optim()} methods of those
-names; they do not support bounds.
 \item \code{Nlminb()} is the PORT quasi Newton method of \code{\link[stats:nlminb]{stats::nlminb()}}, with
 box constraints; it uses the symbolic Hessian when the problem has one.
 \item \code{AugLag()} is an augmented Lagrangian method for equality and
@@ -72,7 +64,5 @@ Solver options given to \code{solve()}: \code{maxiters}, \code{abstol}, \code{re
 rosenbrock <- function(u, p) (p[1] - u[1])^2 + p[2] * (u[2] - u[1]^2)^2
 prob <- OptimizationProblem(rosenbrock, c(-1, 2), c(1, 100))
 solve(prob, LBFGSB())$u
-solve(prob, BFGS())$u
-solve(prob, NelderMead())$u
 solve(prob, Nlminb())$u
 }

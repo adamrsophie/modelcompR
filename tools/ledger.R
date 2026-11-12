@@ -79,7 +79,8 @@ if (file.exists("tools/upstream_exports.tsv")) {
                   "change_t_via_interpolation!" = "change_t_via_interpolation",
                   "reeval_internals_due_to_modification!" = "reeval_internals_due_to_modification",
                   "addat!" = "addat", "deleteat!" = "deleteat", "resize_non_user_cache!" = "resize_non_user_cache",
-                  "addat_non_user_cache!" = "addat_non_user_cache", "deleteat_non_user_cache!" = "deleteat_non_user_cache")
+                  "addat_non_user_cache!" = "addat_non_user_cache", "deleteat_non_user_cache!" = "deleteat_non_user_cache",
+                  "\u03b5DE" = "epsilonDE")
   # constructors that exist but raise "not yet ported" count as missing
   ustub <- if (file.exists("tools/upstream_stubs.tsv"))
     utils::read.delim("tools/upstream_stubs.tsv", stringsAsFactors = FALSE) else data.frame(name = character())

@@ -241,7 +241,7 @@ test_that("bounded polyalgorithms, multistart and Jacobian reuse match Nonlinear
     sol <- suppressWarnings(solve(prob, .pa_alg(cs[[2]])))
     lab <- paste(cs[[1]], cs[[2]])
     expect_identical(sol$retcode, cs[[3]], label = lab)
-    expect_lte(max(abs(unname(sol$u) - cs[[4]])), 1e-12 * max(1, abs(cs[[4]])), label = lab)
+    expect_lte(max(abs(unname(sol$u) - cs[[4]])), ref_tol(1e-12) * max(1, abs(cs[[4]])), label = lab)
     st <- sol$stats
     expect_equal(c(st$nf, st$njacs, st$nfactors, st$nsolve, st$nsteps), cs[[5]], label = lab)
   }

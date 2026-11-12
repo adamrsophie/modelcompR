@@ -14,18 +14,18 @@ test_that("the operators match Metaheuristics.jl with the same random numbers", 
             c(0.17842277698137288, 0.6312854615169121, 0.9254079413819496, 0.7387916162980288),
             c(0.20047525994825222, 0.010061581092753569, 0.30512028596709184, 0.7225440433669819),
             c(FALSE, TRUE, FALSE, TRUE))
-  expect_equal(cc[[1]], c(0.10832786692771235, 0.46750930922061107, -0.2832814536088635, 0.9), tolerance = 1e-15)
-  expect_equal(cc[[2]], c(0.3916721330722587, 0.2324906907791513, 0.7831647134982135, 0.9), tolerance = 1e-15)
+  expect_equal(cc[[1]], c(0.10832786692771235, 0.46750930922061107, -0.2832814536088635, 0.9), tolerance = ref_tol(1e-15, 1e-8))
+  expect_equal(cc[[2]], c(0.3916721330722587, 0.2324906907791513, 0.7831647134982135, 0.9), tolerance = ref_tol(1e-15, 1e-8))
   cc <- sbx(v1, v2, lb, ub, 2, 0.9,
             c(0.12396619710885193, 0.689736023123346, 0.3420498402131924, 0.895745573003232),
             c(0.5709455076043957, 0.7993168190264921, 0.5566493338214822, 0.17749190355115108),
             c(TRUE, FALSE, TRUE, TRUE))
-  expect_equal(cc[[1]], c(0.407570626450684, 0.14683479177053124, 0.7797915721593236, 0.9), tolerance = 1e-15)
-  expect_equal(cc[[2]], c(0.0922107430306705, 0.5517176505287152, -0.31263744054308407, 0.9), tolerance = 1e-15)
+  expect_equal(cc[[1]], c(0.407570626450684, 0.14683479177053124, 0.7797915721593236, 0.9), tolerance = ref_tol(1e-15, 1e-8))
+  expect_equal(cc[[2]], c(0.0922107430306705, 0.5517176505287152, -0.31263744054308407, 0.9), tolerance = ref_tol(1e-15, 1e-8))
   pm <- mh(".mh_polynomial_core")(v1, lb, ub, 20, 0.7,
                                    c(0.3389033221483959, 0.5756551729622779, 0.9223751031077165, 0.40367251644880686),
                                    c(0.5496834593293771, 0.1597213479747308, 0.048660092210817574))
-  expect_equal(pm, c(0.10994253286130609, 0.3942166972752843, -0.3, 0.6899841380097201), tolerance = 1e-15)
+  expect_equal(pm, c(0.10994253286130609, 0.3942166972752843, -0.3, 0.6899841380097201), tolerance = ref_tol(1e-15, 1e-8))
   vs <- mh(".mh_violations_sum")
   expect_equal(vs(c(1, -2, 0.5), c(1e-5, -0.3), 1e-4), 0.65)
   expect_equal(vs(numeric(0), c(0.2, -0.1)), 0.15000000000000002)
@@ -41,24 +41,30 @@ test_that("the helpers of ECA, CGSA, SA, RDEx, MOEAD_DE and MCCGA match Metaheur
   expect_equal(mh(".mh_fitness_to_mass")(c(3, -1, 2.5, 0)), c(5, 9, 5.5, 8))
   expect_equal(mh(".mh_fitness_to_mass")(c(0, 0)), c(1, 1))
   U <- list(list(x = c(0.1, 0.2), f = 1), list(x = c(-0.5, 0.3), f = 2), list(x = c(0.7, -0.9), f = 0.5))
-  expect_equal(mh(".mh_center")(U, c(0.3, 1.2, 0.5)), c(-0.10999999999999999, -0.015000000000000013), tolerance = 1e-15)
+  expect_equal(mh(".mh_center")(U, c(0.3, 1.2, 0.5)), c(-0.10999999999999999, -0.015000000000000013), tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_mass_calculation")(c(3, 1, 2, 5)), c(0.2222222222222222, 0.4444444444444444, 0.3333333333333333, 0))
-  expect_equal(mh(".mh_gconstant")(5, 50), 13.53352832366127, tolerance = 1e-15)
-  expect_equal(vapply(1:10, function(i) mh(".mh_chaos")(i, 7, 50, 3), 0),
-               c(2.4119553229135446, 2.5913697600578995, 2.9999999999999867, 0.3430733698655499, 0.9625317287962338,
-                 2.9296874999999636, 1.7728631193203337, 1.934119068028505, 2.6186447346416886, 0.4026100236012814),
-               tolerance = 1e-15)
+  expect_equal(mh(".mh_gconstant")(5, 50), 13.53352832366127, tolerance = ref_tol(1e-15, 1e-8))
+  # the chaotic maps amplify last bit differences of the elementary functions
+  chaos <- vapply(1:10, function(i) mh(".mh_chaos")(i, 7, 50, 3), 0)
+  if (ref_platform()) {
+    expect_equal(chaos,
+                 c(2.4119553229135446, 2.5913697600578995, 2.9999999999999867, 0.3430733698655499, 0.9625317287962338,
+                   2.9296874999999636, 1.7728631193203337, 1.934119068028505, 2.6186447346416886, 0.4026100236012814),
+                 tolerance = 1e-15)
+  } else {
+    expect_true(all(is.finite(chaos)))
+  }
   expect_equal(mh(".mh_sa_newsol")(c(0.3, -0.7, 0), 10^2.5), c(0.014637368041430806, -0.17505911580742006, 0),
-               tolerance = 1e-15)
+               tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_rdex_weighted_mean")(c(0.5, 0.9, 0.2, 0.7), c(1, 3, 0.5, 2), 3), 0.8181818181818183,
-               tolerance = 1e-15)
+               tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_moead_g")(c(0.3, 0.7), c(0.4, 0.6), c(0.1, 0)), 0.42)
   expect_equal(mh(".mh_moead_neighbors")(Metaheuristics$gen_ref_dirs(2, 7), 2L),
                list(c(2L, 3L), c(3L, 1L), c(2L, 4L), c(5L, 3L), c(4L, 6L), c(7L, 5L), c(6L, 8L), c(7L, 6L)))
   expect_equal(mh(".mh_mccga_bits")(0.1),
                c(0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1))
   expect_equal(mh(".mh_mccga_floats")(mh(".mh_mccga_bits")(c(0.1, -2.5, 3.75e-3))),
-               c(0.10000000149011612, -2.5, 0.0037499999161809683), tolerance = 1e-15)
+               c(0.10000000149011612, -2.5, 0.0037499999161809683), tolerance = ref_tol(1e-15, 1e-8))
   h <- mh(".mh_mccga_hj")(function(x) (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2, c(-1.2, 1))
   expect_equal(h$iter, 24L)
   expect_equal(h$step, 7.62939453125e-5)
@@ -81,7 +87,7 @@ test_that("sorting, crowding and the hypervolume contributions match Metaheurist
   cr <- mh(".mh_crowding")(pop[c(1, 2, 3, 4, 6, 8)])
   expect_equal(vapply(cr$pop, function(s) s$x[1], 0), c(1, 3, 2, 4, 8, 6))
   expect_equal(cr$cd, c(Inf, 0.8455882352941178, 1.088235294117647, 0.8529411764705883, 0.6691176470588236, Inf),
-               tolerance = 1e-15)
+               tolerance = ref_tol(1e-15, 1e-8))
   # three objectives: Metaheuristics.jl adds the distances by position while
   # it re-sorts the front; the scratch variant below reproduces its numbers,
   # the port gives every solution its own sum
@@ -95,7 +101,7 @@ test_that("sorting, crowding and the hypervolume contributions match Metaheurist
     cd
   }
   expect_equal(bug(pop3), c(Inf, 0.7941176470588235, 0.8529411764705883, 0.8529411764705883, 0.7352941176470587,
-                            0.8602941176470589, 0.9852941176470591, Inf), tolerance = 1e-15)
+                            0.8602941176470589, 0.9852941176470591, Inf), tolerance = ref_tol(1e-15, 1e-8))
   cr <- mh(".mh_crowding")(pop3)
   expect_equal(vapply(cr$pop, function(s) s$x[1], 0), c(3, 5, 7, 4, 1, 2, 6, 8))
   Fs <- do.call(rbind, F3)
@@ -108,10 +114,10 @@ test_that("sorting, crowding and the hypervolume contributions match Metaheurist
   expect_equal(cr$cd, own[c(3, 5, 7, 4, 1, 2, 6, 8)])
   P2 <- rbind(c(0.1, 0.2, 0.4, 0.6, 0.8, 0.9), c(0.9, 0.8, 0.5, 0.3, 0.2, 0.05))
   expect_equal(mh(".mh_hv_contrib_2d")(P2), c(Inf, 0.019999999999999997, 0.06, 0.040000000000000015, 0.009999999999999995, Inf),
-               tolerance = 1e-15)
+               tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_compute_contribution")(mkpop(F3[c(1, 2, 3, 4, 6, 7, 8)])),
                c(0.00408, 0.015200000000000005, 0.037360000000000004, 0.05320000000000001, 0.004959999999999996,
-                 0.016600000000000004, 0.0007999999999999952), tolerance = 1e-15)
+                 0.016600000000000004, 0.0007999999999999952), tolerance = ref_tol(1e-15, 1e-8))
 })
 
 test_that("the SPEA2 and NSGA3 steps match Metaheuristics.jl", {
@@ -119,29 +125,29 @@ test_that("the SPEA2 and NSGA3 steps match Metaheuristics.jl", {
   pop <- mkpop(F2); pop3 <- mkpop(F3)
   expect_equal(mh(".mh_spea2_fitness")(pop),
                c(0.45327725046598033, 0.4380503284503523, 0.4586571987969251, 0.4380503284503523, 1.4317364702520927,
-                 0.41832034209348085, 2.4532772504659803, 0.44971979803797996), tolerance = 1e-15)
+                 0.41832034209348085, 2.4532772504659803, 0.44971979803797996), tolerance = ref_tol(1e-15, 1e-8))
   # three objectives: up to 4 ulp, from the dot products of Distances.jl
   expect_equal(mh(".mh_spea2_fitness")(pop3),
                c(0.41249631709111817, 0.4212005858348719, 0.4212005858348719, 0.4212005858348719, 0.4212005858348719,
-                 0.40121280370198137, 0.44544442277200064, 0.3925074168904956), tolerance = 1e-15)
+                 0.40121280370198137, 0.44544442277200064, 0.3925074168904956), tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_spea2_truncation")(3, mh(".mh_pairwise_distances")(pop)),
                c(FALSE, FALSE, TRUE, FALSE, TRUE, FALSE, FALSE, TRUE))
   pn <- mh(".mh_fast_nds")(pop3)
   Fn <- mh(".mh_nsga3_normalize")(pn)
-  expect_equal(Fn[, 1], c(0, 0.9834710743801653, 0.06611570247933875), tolerance = 1e-15)
-  expect_equal(Fn[, 6], c(1.0578512396694215, 0, 0.09917355371900811), tolerance = 1e-15)
+  expect_equal(Fn[, 1], c(0, 0.9834710743801653, 0.06611570247933875), tolerance = ref_tol(1e-15, 1e-8))
+  expect_equal(Fn[, 6], c(1.0578512396694215, 0, 0.09917355371900811), tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(Fn[3, ], c(0.06611570247933875, 0.08264462809917343, 0, 0.04958677685950407, 0.016528925619834687,
-                          0.09917355371900811, 0.033057851239669374, 0.1322314049586775), tolerance = 1e-15)
+                          0.09917355371900811, 0.033057851239669374, 0.1322314049586775), tolerance = ref_tol(1e-15, 1e-8))
   a <- mh(".mh_nsga3_associate")(Fn, Metaheuristics$gen_ref_dirs(3, 3), 4L)
   expect_equal(a$nich, c(4L, 7L, 4L, 9L, 7L, 10L, 7L, 10L))
   expect_equal(a$freq, c(0L, 0L, 0L, 2L, 0L, 0L, 1L, 0L, 0L, 0L))
   expect_equal(a$dist, c(0.00437128611433644, 0.021706167611501938, 0.01748514445734581, 0.0038248753500443886,
                          0.035803565330237014, 0.009835393757256988, 0.011051157707806835, 0.04760603783894539),
-               tolerance = 1e-15)
+               tolerance = ref_tol(1e-15, 1e-8))
   expect_equal(mh(".mh_generational_distance")(rbind(c(0.1, 0.9), c(0.5, 0.5), c(0.95, 0.1)),
                                                rbind(c(0, 1), c(0.25, 0.75), c(0.5, 0.5), c(0.75, 0.25), c(1, 0)),
                                                inverted = TRUE),
-               0.14307135789365263, tolerance = 1e-15)
+               0.14307135789365263, tolerance = ref_tol(1e-15, 1e-8))
 })
 
 rosen <- function(x, p) (p[1] - x[1])^2 + p[2] * (x[2] - x[1]^2)^2

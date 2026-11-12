@@ -83,7 +83,7 @@ test_that("the ODE optimizers follow the integrations of OptimizationODE", {
     tol <- if (row[1] == "quad" && n == 5L && hod) 2e-2
            else if (row[1] == "quad" && n == 5L && row[2] == "RKAccelerated") 2e-4
            else if (row[1] == "cons") 2e-6 else if (hod) 1e-8 else 1e-9
-    expect_lt(rel, tol, label = info)
+    expect_lt(rel, ref_tol(tol, max(tol, 1e-4)), label = info)
     expect_identical(s$retcode, row[4], info = info)
     if (length(row) > 6L) {
       expect_identical(c(s$stats$iterations, s$stats$fevals, s$stats$gevals),

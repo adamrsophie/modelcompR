@@ -846,9 +846,10 @@ has_alg_eqs <- function(sys) length(get_alg_eqs(sys)) > 0L
 #' `complete(sys)` marks a system as finished so its variables are accessed
 #' without the top level namespace and problems can be built from it.
 #'
-#' `flatten()` and `compose()` also accept non-system arguments and then
-#' behave as symcompR's functions of the same names, so attaching both
-#' packages is safe.
+#' `flatten()`, `compose()` and `extend()` also accept non-system arguments
+#' and then behave as symcompR's functions of the same names (`extend()` of a
+#' symcompR `DimensionSystem` or `UnitSystem`), so attaching both packages is
+#' safe.
 #'
 #' @param sys A `System`.
 #' @param ... Subsystems (for `compose`), or arguments passed on.
@@ -867,7 +868,14 @@ compose <- function(sys, ..., name = NULL) {
 
 #' @rdname compose
 #' @export
-extend <- function(sys, base, name = nameof(sys)) {
+extend <- function(sys, base, name = nameof(sys), ...) {
+  # symcompR's extend() generic (unit and dimension systems) gets the call as
+  # written
+  if (!inherits(sys, "System") && "extend" %in% getNamespaceExports("symcompR")) {
+    cl <- sys.call()
+    cl[[1L]] <- getExportedValue("symcompR", "extend")
+    return(eval(cl, parent.frame()))
+  }
   if (iscomplete(base) || iscomplete(sys)) stop("cannot extend a complete system", call. = FALSE)
   iv <- .f(base, "iv") %||% .f(sys, "iv")
   out <- System(

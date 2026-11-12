@@ -2203,13 +2203,14 @@ NULL
 #' The optimizers of Optim.jl, through OptimizationOptimJL: first order
 #' methods (`GradientDescent()`, `ConjugateGradient()`,
 #' `AcceleratedGradientDescent()`, `MomentumGradientDescent()`, `NGMRES()`,
-#' `OACCEL()`, and Optim's `BFGS` and `LBFGS` as `Optim$BFGS()` and
-#' `Optim$LBFGS()`), second order methods (`Newton()`,
+#' `OACCEL()`, `BFGS()`, and Optim's `LBFGS` as `Optim$LBFGS()`, since
+#' `LBFGS()` is the L-BFGS-B method of Optimization.jl), second order
+#' methods (`Newton()`,
 #' `NewtonTrustRegion()`), the box constrained `Fminbox()` (which wraps a
 #' first order method in a logarithmic barrier) and the interior point
 #' `IPNewton()` for bounds and nonlinear constraints, and the derivative free
-#' `ParticleSwarm()`, `SimulatedAnnealing()`, `SAMIN()` and Optim's Nelder
-#' Mead simplex `Optim$NelderMead()`. Optim's own `Optim$Adam()` and
+#' `ParticleSwarm()`, `SimulatedAnnealing()`, `SAMIN()` and the Nelder Mead
+#' simplex `NelderMead()`. Optim's own `Optim$Adam()` and
 #' `Optim$AdaMax()` (which OptimizationOptimJL does not export, `Adam` being
 #' the rule of Optimisers) and the Hessian vector product trust region
 #' `Optim$KrylovTrustRegion()` (it uses the `hv` of the function, `(x, v, p)`,
@@ -2279,19 +2280,20 @@ NULL
 #'   test, whether the parameter space counts as covered from the start and
 #'   the printing level (0 to 3).
 #' @param show_linesearch Print the line search of `IPNewton()`.
+#' @param initial_invH A function of `x` giving the initial inverse Hessian
+#'   of `BFGS()` (`NULL`: the identity, scaled by `initial_stepnorm`).
+#' @param initial_stepnorm The norm of the first step of `BFGS()`.
+#' @param parameters The simplex parameters of `NelderMead()`: a list with
+#'   `alpha`, `beta`, `gamma` and `delta` (`NULL` for the adaptive ones).
+#' @param initial_simplex The initial simplex of `NelderMead()` (`NULL` for
+#'   the affine simplex).
 #' @section The Optim module:
-#' Constructors reached through `Optim$` only (their names are taken by the
-#' `stats::optim` wrappers or by the rules of Optimisers):
+#' Constructors reached through `Optim$` only (their names are taken by
+#' Optimization.jl or by the rules of Optimisers); `Optim$BFGS` and
+#' `Optim$NelderMead` are `BFGS()` and `NelderMead()`:
 #' \describe{
-#'   \item{`Optim$BFGS(alphaguess, linesearch, initial_invH, initial_stepnorm, manifold)`}{
-#'     `initial_invH` is a function of `x` giving the initial inverse
-#'     Hessian and `initial_stepnorm` the norm of the first step.}
 #'   \item{`Optim$LBFGS(m = 10, alphaguess, linesearch, P, precondprep, manifold, scaleinvH0)`}{
 #'     `m` is the memory; `scaleinvH0` scales the initial inverse Hessian.}
-#'   \item{`Optim$NelderMead(parameters, initial_simplex)`}{`parameters` is a
-#'     list with `alpha`, `beta`, `gamma` and `delta` (`NULL` for the
-#'     adaptive ones) and `initial_simplex` the initial simplex (`NULL` for
-#'     the affine simplex).}
 #'   \item{`Optim$Adam(alpha = 1e-4, beta_mean = 0.9, beta_var = 0.999, epsilon = 1e-8, manifold)`,
 #'     `Optim$AdaMax(alpha = 0.002, beta_mean, beta_var, epsilon, manifold)`}{
 #'     `alpha` is the step or a function of the iteration giving it,
@@ -2356,8 +2358,10 @@ MomentumGradientDescent <- function(mu = 0.01, alphaguess = NULL, linesearch = N
            linesearch = linesearch %||% .ojl_HagerZhang(), manifold = .ojl_as_manifold(manifold))
 }
 
-.ojl_BFGS <- function(alphaguess = NULL, linesearch = NULL, initial_invH = NULL, initial_stepnorm = NULL,
-                      manifold = NULL) {
+#' @rdname optim_methods
+#' @export
+BFGS <- function(alphaguess = NULL, linesearch = NULL, initial_invH = NULL, initial_stepnorm = NULL,
+                 manifold = NULL) {
   .ojl_alg("BFGS", alphaguess = .ojl_alphaguess(alphaguess %||% .ojl_InitialStatic()),
            linesearch = linesearch %||% .ojl_HagerZhang(), initial_invH = initial_invH,
            initial_stepnorm = initial_stepnorm, manifold = .ojl_as_manifold(manifold))
@@ -2874,7 +2878,9 @@ ParticleSwarm <- function(lower = NULL, upper = NULL, n_particles = 0L) {
   cc * (1 / n)
 }
 
-.ojl_NelderMead <- function(parameters = NULL, initial_simplex = NULL) {
+#' @rdname optim_methods
+#' @export
+NelderMead <- function(parameters = NULL, initial_simplex = NULL) {
   a <- .ojl_alg("NelderMead", parameters = parameters, initial_simplex = initial_simplex, grad = FALSE)
   a$zeroth <- TRUE
   a$keep_x <- TRUE
@@ -3632,9 +3638,9 @@ IPNewton <- function(linesearch = NULL, mu0 = "auto", show_linesearch = FALSE) {
 Optim <- list(
   GradientDescent = GradientDescent, ConjugateGradient = ConjugateGradient,
   AcceleratedGradientDescent = AcceleratedGradientDescent, MomentumGradientDescent = MomentumGradientDescent,
-  BFGS = .ojl_BFGS, LBFGS = .ojl_LBFGS, NGMRES = NGMRES, OACCEL = OACCEL, Newton = Newton,
+  BFGS = BFGS, LBFGS = .ojl_LBFGS, NGMRES = NGMRES, OACCEL = OACCEL, Newton = Newton,
   NewtonTrustRegion = NewtonTrustRegion, IPNewton = IPNewton, Fminbox = Fminbox, ParticleSwarm = ParticleSwarm,
-  SimulatedAnnealing = SimulatedAnnealing, SAMIN = SAMIN, NelderMead = .ojl_NelderMead, Adam = .ojl_Adam,
+  SimulatedAnnealing = SimulatedAnnealing, SAMIN = SAMIN, NelderMead = NelderMead, Adam = .ojl_Adam,
   AdaMax = .ojl_AdaMax, KrylovTrustRegion = .ojl_KrylovTrustRegion, Flat = .ojl_Flat, Sphere = .ojl_Sphere,
   Stiefel = .ojl_Stiefel, PowerManifold = .ojl_PowerManifold, ProductManifold = .ojl_ProductManifold,
   LineSearches = list(HagerZhang = .ojl_HagerZhang, Static = .ojl_Static, BackTracking = .ojl_BackTracking,

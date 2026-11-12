@@ -449,8 +449,11 @@ solve.ODEProblem <- function(a, b, ...) {
   adaptive <- (opts$adaptive %||% TRUE) && all(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))
   saveat <- sort(unique(as.numeric(opts$saveat %||% numeric())), decreasing = tdir < 0)
   if (length(saveat) == 1L && !is.null(opts$saveat) && length(opts$saveat) == 1L) {
-    saveat <- seq(t0, tf, by = tdir * abs(saveat))
-    if (abs(saveat[length(saveat)] - tf) > 1e-12 * max(1, abs(tf))) saveat <- c(saveat, tf)
+    # initialize_saveat: the range (t0 + s):s:tf of Julia, with the start
+    # and the end saved as well
+    ds <- tdir * abs(saveat)
+    saveat <- c(t0, .jl_range(t0 + ds, ds, tf))
+    if (saveat[length(saveat)] != tf) saveat <- c(saveat, tf)
   }
   save_everystep <- opts$save_everystep %||% !length(saveat)
   save_start <- opts$save_start %||% (!length(saveat) || any(abs(saveat - t0) < 1e-14))
@@ -709,8 +712,12 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     hit_stop <- FALSE
     dt <- min(dt, dtmax)
     dtcur <- dt
-    if ((integ$t + tdir * dtcur - next_stop) * tdir >= -1e-12 * max(1, abs(next_stop))) {
-      dtcur <- abs(next_stop - integ$t)
+    # modify_dt_for_tstops!: a step that reaches the next stop to within 100
+    # eps ends exactly at the stop, with the shorter of its size and the
+    # distance to the stop
+    dist <- abs(next_stop - integ$t)
+    if (dtcur + 100 * .eps64(max(abs(integ$t), abs(next_stop))) >= dist) {
+      dtcur <- min(dtcur, dist)
       hit_stop <- TRUE
     }
     ctx$p <- integ$p
@@ -831,7 +838,9 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         stats$nf <- stats$nf + 1L
       }
     }
-    step <- list(t0 = integ$t, dt = tnew - integ$t, y0 = integ$u, y1 = res$u, k = res$k, interp = a$interp)
+    # the interpolants take the step size of the step (integrator.dt), also
+    # when the step ends at a stop
+    step <- list(t0 = integ$t, dt = tdir * dtcur, y0 = integ$u, y1 = res$u, k = res$k, interp = a$interp)
     integ$tprev <- integ$t; integ$uprev <- integ$u
     integ$t <- tnew
     integ$u <- res$u
@@ -850,8 +859,11 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         ts_ <- saveat[next_save]
         if (!(abs(ts_ - t0) < 1e-14 && save_start) &&
             (ts_ - step$t0) * tdir >= -1e-14) {
+          # savevalues!: a save time that is not the end of the step is
+          # interpolated
           theta <- if (step$dt == 0) 1 else (ts_ - step$t0) / step$dt
-          push_save(ts_, if (abs(theta - 1) < 1e-14) step$y1 else step$interp(theta, step$dt, step$y0, step$y1, step$k))
+          push_save(ts_, if (ts_ == tend_step || step$dt == 0) step$y1
+                         else step$interp(theta, step$dt, step$y0, step$y1, step$k))
         }
         next_save <- next_save + 1L
       }

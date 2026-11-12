@@ -78,37 +78,41 @@ test_that("the BBO genetic operators match BlackBoxOptim on its random numbers",
   d3 <- c(0.33973478919014277, 0.95923289796888112, 0.99997948900346512, 0.092114272085112137, 0.69842599816368145)
   n3 <- c(-0.66376355155512712, 1.3632084599735597, 0.71741058992417861)
   expect_equal(bbo_replay(c(2, d3[2:4]), bbo_fun(".bbo_de")(0.7, 0.6)(pop, c(2, 5, 3))[[1]]),
-               c(-0.3, 0.72, 0.8, -0.069999999999999951), tolerance = 1e-14)
+               c(-0.3, 0.72, 0.8, -0.069999999999999951), tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(c(0.073366354469292849, 0.34924148955718615, 0, 0.62826474034250168, 0.91492900366283136,
                             0.19280811624587546, 0.77018034788566636, 1),
                           unlist(bbo_fun(".bbo_sbx")(0.2, 3)(pop, c(4, 1)))),
                c(0.43498416743976287, 0.05, -0.1, 0.21246338519109928, 0.1150158325602372, 0.5, -0.6,
-                 0.63753661480890067), tolerance = 1e-14)
+                 0.63753661480890067), tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(c(d3, 1), unlist(bbo_fun(".bbo_sbx")(0.2, 3)(pop, c(4, 1)))),
-               c(0.45, 0.05, -0.1, 0.22642156897020563, 0.1, 0.5, -0.6, 0.62357843102979438), tolerance = 1e-14)
+               c(0.45, 0.05, -0.1, 0.22642156897020563, 0.1, 0.5, -0.6, 0.62357843102979438), tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(d3[1:2], bbo_fun(".bbo_spx")(3L, 1.1)(pop, c(6, 2, 4))[[1]]),
                c(0.20365227195462099, -0.036330445314106188, 0.13666780372072151, 0.78676607771679885),
-               tolerance = 1e-14)
+               tolerance = ref_tol(1e-14, 1e-8))
   # PCX with two parents is degenerate: the other parent lies on the line of the first
   expect_equal(bbo_replay(n3[1], bbo_fun(".bbo_pcx")(2L, 0.1, 0.5)(pop, c(3, 5))[[1]]),
                c(-0.10087093453346183, 0.43405911211121817, 0.72532660045004826, -0.60873251166116993),
-               tolerance = 1e-14)
+               tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(n3, bbo_fun(".bbo_pcx")(3L, 0.1, 0.5)(pop, c(1, 4, 6))[[1]]),
                c(0.18631343350166968, 0.5700114587948838, -0.7281702031576992, 0.17628381921797956),
-               tolerance = 1e-14)
-  expect_equal(bbo_replay(n3, bbo_fun(".bbo_undx")(3L, 0.5, 0.1)(pop, c(5, 3, 1))[[1]]),
-               c(0.50049482239139476, -0.10152369799888181, 0.24946146563453928, -0.17346921085021264),
-               tolerance = 1e-14)
+               tolerance = ref_tol(1e-14, 1e-8))
+  # UNDX draws along the singular vectors of LAPACK, whose signs may differ
+  # between LAPACK builds
+  if (ref_platform()) {
+    expect_equal(bbo_replay(n3, bbo_fun(".bbo_undx")(3L, 0.5, 0.1)(pop, c(5, 3, 1))[[1]]),
+                 c(0.50049482239139476, -0.10152369799888181, 0.24946146563453928, -0.17346921085021264),
+                 tolerance = 1e-14)
+  }
   clock <- function(pm) {
     mc <- bbo_fun(".bbo_clock")(lo, hi, pm, 1 / 4)
     c(mc$apply(mc$apply(pop[, 2])), mc$nextvar)
   }
   expect_equal(bbo_replay(d3, clock(TRUE)), c(0.7, -0.14244412411892898, 0.16085099985015747, 0.9, 1),
-               tolerance = 1e-14)
+               tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(d3, clock(FALSE)), c(0.7, 0.91846579593776223, -0.81577145582977573, 0.9, 1),
-               tolerance = 1e-14)
+               tolerance = ref_tol(1e-14, 1e-8))
   expect_equal(bbo_replay(d3[1:2], bbo_fun(".bbo_bound")(c(1.3, -0.2, -1.7, 0.95), pop[, 2], lo, hi)),
-               c(0.89807956324295712, -0.2, 0.15107947756265738, 0.95), tolerance = 1e-14)
+               c(0.89807956324295712, -0.2, 0.15107947756265738, 0.95), tolerance = ref_tol(1e-14, 1e-8))
 })
 
 test_that("solve with BBO_borg_moea follows the OptimizationBBO tests", {

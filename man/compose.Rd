@@ -11,7 +11,7 @@
 \usage{
 compose(sys, ..., name = NULL)
 
-extend(sys, base, name = nameof(sys))
+extend(sys, base, name = nameof(sys), ...)
 
 flatten(sys, ...)
 
@@ -45,7 +45,8 @@ collapses the hierarchy into one system whose variables are namespaced;
 without the top level namespace and problems can be built from it.
 }
 \details{
-\code{flatten()} and \code{compose()} also accept non-system arguments and then
-behave as symcompR's functions of the same names, so attaching both
-packages is safe.
+\code{flatten()}, \code{compose()} and \code{extend()} also accept non-system arguments
+and then behave as symcompR's functions of the same names (\code{extend()} of a
+symcompR \code{DimensionSystem} or \code{UnitSystem}), so attaching both packages is
+safe.
 }

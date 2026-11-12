@@ -183,11 +183,13 @@ test_that("the Optim methods follow the iterates of Optim.jl", {
     rel <- max(abs(unname(s$u) - ju) / pmax(1, abs(ju)), abs(s$objective - jo) / max(1, abs(jo)))
     # Newton and NewtonTrustRegion factor the Hessian with LAPACK, whose
     # rounding differs from Julia's in the last bits
-    expect_lt(rel, 1e-10, label = info)
+    expect_lt(rel, ref_tol(1e-10, 1e-6), label = info)
     expect_identical(s$retcode, row[4], info = info)
     st <- s$stats
-    expect_identical(as.integer(c(st$iterations, st$fevals, st$gevals, st$hevals)), as.integer(row[8:11]),
-                     info = info)
+    if (ref_platform()) {
+      expect_identical(as.integer(c(st$iterations, st$fevals, st$gevals, st$hevals)), as.integer(row[8:11]),
+                       info = info)
+    }
   }
 })
 

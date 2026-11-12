@@ -420,7 +420,9 @@ The explicit Runge-Kutta methods of the OrdinaryDiffEq sublibraries, for
 \code{\link[=solve]{solve()}} on ODE problems. All take \code{stage_limiter(u, integ, p, t)} and
 \code{step_limiter(u, integ, p, t)} (functions returning the limited state,
 applied to every stage and to every step, as the SSP methods use them)
-and \code{thread} (ignored; R evaluates the stages in turn).
+and \code{thread} (ignored; R evaluates the stages in turn). The low storage
+methods apply only the step limiter, as their out of place forms in
+OrdinaryDiffEq.
 }
 \details{
 \itemize{
