@@ -173,7 +173,7 @@ StochasticDiffEq	JCommute_iip	missing
 StochasticDiffEq	JCommute_oop	missing
 StochasticDiffEq	JDiagonal_iip	missing
 StochasticDiffEq	JDiagonal_oop	missing
-StochasticDiffEq	KomBurSROCK2	missing
+StochasticDiffEq	KomBurSROCK2	ported
 StochasticDiffEq	KomoriNON	ported
 StochasticDiffEq	KomoriNON2	ported
 StochasticDiffEq	LambaEM	ported
@@ -252,7 +252,7 @@ StochasticDiffEq	SDEOptions	missing
 StochasticDiffEq	SIEA	ported
 StochasticDiffEq	SIEB	ported
 StochasticDiffEq	SImplicitMidpoint	ported
-StochasticDiffEq	SKSROCK	missing
+StochasticDiffEq	SKSROCK	ported
 StochasticDiffEq	SKenCarp	ported
 StochasticDiffEq	SMEA	ported
 StochasticDiffEq	SMEB	ported
@@ -267,10 +267,10 @@ StochasticDiffEq	SRA3	ported
 StochasticDiffEq	SRI	ported
 StochasticDiffEq	SRIW1	ported
 StochasticDiffEq	SRIW2	ported
-StochasticDiffEq	SROCK1	missing
-StochasticDiffEq	SROCK2	missing
-StochasticDiffEq	SROCKC2	missing
-StochasticDiffEq	SROCKEM	missing
+StochasticDiffEq	SROCK1	ported
+StochasticDiffEq	SROCK2	ported
+StochasticDiffEq	SROCKC2	ported
+StochasticDiffEq	SROCKEM	ported
 StochasticDiffEq	STrapezoid	ported
 StochasticDiffEq	SampledIntegralProblem	ported
 StochasticDiffEq	ScalarOperator	ported
@@ -320,7 +320,7 @@ StochasticDiffEq	StochasticDiffEqRODEAdaptiveAlgorithm	not applicable
 StochasticDiffEq	StochasticDiffEqRODEAlgorithm	not applicable
 StochasticDiffEq	StochasticDiffEqRODECompositeAlgorithm	not applicable
 StochasticDiffEq	StochasticDiffEqWeak	not applicable
-StochasticDiffEq	TangXiaoSROCK2	missing
+StochasticDiffEq	TangXiaoSROCK2	ported
 StochasticDiffEq	TauLeaping	ported
 StochasticDiffEq	TauLeapingDrift	missing
 StochasticDiffEq	TensorProductOperator	ported

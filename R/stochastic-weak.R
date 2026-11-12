@@ -580,7 +580,7 @@ IRI1 <- function(autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve 
     cache$nl <- .new_nlsolver()
     cache
   }
-  alg$step <- function(ctx, g, u, t, dt, dW, type, delta, cache, dZ = NULL) {
+  alg$step <- function(ctx, g, u, t, dt, dW, type, delta, cache, dZ = NULL, ...) {
     p <- ctx$p
     n <- length(u)
     out <- list(nf = 0L, njacs = 0L, nsolve = 0L, nw = 0L, cache = cache, k = NULL)

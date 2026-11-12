@@ -811,7 +811,8 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   runner <- .new_alg(alg$name, alg$order, adaptive = adaptive,
     step = function(ctx, t, u, dt, cache) {
       inc <- .noise_take(ns, t, dt, u, ctx$p)
-      if (!is.null(alg$step)) return(alg$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ))
+      if (!is.null(alg$step))
+        return(alg$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ, tspan = prob$tspan))
       res <- alg$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
       list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf)
     },
