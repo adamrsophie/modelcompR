@@ -189,7 +189,7 @@ StochasticDiffEq	NLNewton	missing
 StochasticDiffEq	NLSOLVEJL_SETUP	not applicable
 StochasticDiffEq	NON	ported
 StochasticDiffEq	NON2	ported
-StochasticDiffEq	NoInit	missing
+StochasticDiffEq	NoInit	ported
 StochasticDiffEq	NoiseApproximation	ported
 StochasticDiffEq	NoiseFunction	ported
 StochasticDiffEq	NoiseGrid	ported
@@ -1479,7 +1479,7 @@ OrdinaryDiffEqSSPRK	SSPRKMSVS43	ported
 OrdinaryDiffEqSSPRK	pRRK22	ported
 OrdinaryDiffEqSSPRK	pRRK33	ported
 OrdinaryDiffEqSSPRK	pRRK54	ported
-OrdinaryDiffEqStabilizedIRK	IRKC	missing
+OrdinaryDiffEqStabilizedIRK	IRKC	ported
 OrdinaryDiffEqStabilizedRK	ESERK4	ported
 OrdinaryDiffEqStabilizedRK	ESERK5	ported
 OrdinaryDiffEqStabilizedRK	RKC	ported

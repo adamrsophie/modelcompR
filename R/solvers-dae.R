@@ -23,7 +23,8 @@
 #' derivatives of the differential variables). `ShampineCollocationInit()`
 #' takes a small implicit Euler step to find consistent values of all
 #' variables. `CheckInit()` only checks the residual and fails with retcode
-#' "InitialFailure" when it is not satisfied. The default is
+#' "InitialFailure" when it is not satisfied; `NoInit()` takes the initial
+#' values as they are, without evaluating the residual. The default is
 #' `BrownFullBasicInit()`.
 #'
 #' @param abstol Tolerance of the nonlinear solve; the integrator's `abstol`
@@ -51,11 +52,16 @@ ShampineCollocationInit <- function(initdt = NULL) structure(list(initdt = initd
 #' @export
 CheckInit <- function() structure(list(), class = c("CheckInit", "DAEInitializationAlgorithm"))
 
+#' @rdname dae_initialization
+#' @export
+NoInit <- function() structure(list(), class = c("NoInit", "DAEInitializationAlgorithm"))
+
 # Make (u, du) consistent at t. Returns list(ok, u, du, nf).
 .dae_initialize <- function(ctx, t, u, du, alg, dtmax) {
   alg <- alg %||% BrownFullBasicInit()
   abstol <- alg$abstol %||% ctx$abstol
   ok <- function(u, du, nf = 0L) list(ok = TRUE, u = u, du = du, nf = nf)
+  if (inherits(alg, "NoInit")) return(ok(u, du))
   fail <- list(ok = FALSE, u = u, du = du, nf = 0L)
   if (isTRUE(ctx$dae)) {
     resid <- function(du, u) ctx$f(du, u, ctx$p, t)
@@ -136,7 +142,9 @@ CheckInit <- function() structure(list(), class = c("CheckInit", "DAEInitializat
 #' @param du0,u0,p Initial derivatives, initial values and parameters of
 #'   raw problems.
 #' @param differential_vars Logical vector marking differential variables.
-#' @param jac Generate the symbolic Jacobian.
+#' @param jac Generate the symbolic Jacobian (for a system); for an R
+#'   residual function, the Jacobian `jac(du, u, p, gamma, t)` =
+#'   `dF/du + gamma * dF/d(du)` (also accepted as `jac_fn`).
 #' @param ... Solver options stored with the problem.
 #' @return A `DAEProblem` or `DAEFunction`.
 #' @examples
@@ -149,7 +157,8 @@ CheckInit <- function() structure(list(), class = c("CheckInit", "DAEInitializat
 #' @export
 DAEFunction <- function(sys, jac = FALSE, ...) {
   if (is.function(sys)) {
-    return(structure(list(f = sys, jac = list(...)$jac_fn, sys = NULL, observed = NULL),
+    J <- if (is.function(jac)) jac else list(...)$jac_fn
+    return(structure(list(f = sys, jac = J, sys = NULL, observed = NULL),
                      class = c("DAEFunction", "SciMLFunction")))
   }
   .need_complete(sys, "DAEFunction")
@@ -286,8 +295,7 @@ print.DAESolution <- function(x, ...) {
 }
 
 .dimplicit_euler_step <- function(ctx, t, u, dt, cache) {
-  # Jacobians at the last consistent derivative (tmp is zero here)
-  nl <- .nlsolve(cache$nl, ctx, t, dt, u * 0, u * 0, 1, 1, t + dt, u, u0 = u, du_J = ctx$du)
+  nl <- .nlsolve(cache$nl, ctx, t, dt, u * 0, u * 0, 1, 1, t + dt, u, u0 = u)
   out <- list(nf = nl$nf, njacs = nl$njacs, nsolve = nl$nsolve, nw = nl$nw, cache = cache)
   if (!nl$ok) return(c(out, list(fail = TRUE, u = u)))
   unew <- u + nl$z

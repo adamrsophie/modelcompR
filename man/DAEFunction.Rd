@@ -25,7 +25,9 @@ generate_dae_jacobian(sys, ...)
 \arguments{
 \item{sys}{A complete \code{System}, or an R function \code{f(du, u, p, t)}.}
 
-\item{jac}{Generate the symbolic Jacobian.}
+\item{jac}{Generate the symbolic Jacobian (for a system); for an R
+residual function, the Jacobian \code{jac(du, u, p, gamma, t)} =
+\code{dF/du + gamma * dF/d(du)} (also accepted as \code{jac_fn}).}
 
 \item{...}{Solver options stored with the problem.}
 

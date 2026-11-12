@@ -5,6 +5,7 @@
 \alias{BrownFullBasicInit}
 \alias{ShampineCollocationInit}
 \alias{CheckInit}
+\alias{NoInit}
 \title{DAE initialization algorithms}
 \usage{
 BrownFullBasicInit(abstol = NULL)
@@ -12,6 +13,8 @@ BrownFullBasicInit(abstol = NULL)
 ShampineCollocationInit(initdt = NULL)
 
 CheckInit()
+
+NoInit()
 }
 \arguments{
 \item{abstol}{Tolerance of the nonlinear solve; the integrator's \code{abstol}
@@ -31,7 +34,8 @@ algebraic variables (and, for fully implicit problems, for the
 derivatives of the differential variables). \code{ShampineCollocationInit()}
 takes a small implicit Euler step to find consistent values of all
 variables. \code{CheckInit()} only checks the residual and fails with retcode
-"InitialFailure" when it is not satisfied. The default is
+"InitialFailure" when it is not satisfied; \code{NoInit()} takes the initial
+values as they are, without evaluating the residual. The default is
 \code{BrownFullBasicInit()}.
 }
 \examples{

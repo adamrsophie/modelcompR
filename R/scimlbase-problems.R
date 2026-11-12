@@ -18,7 +18,9 @@
 #' Structured differential equation problems
 #'
 #' `SplitODEProblem(f1, f2, u0, tspan, p)` is `du/dt = f1(u, p, t) + f2(u,
-#' p, t)`, with `f1` the stiff (implicit) part for IMEX methods.
+#' p, t)`, with `f1` the stiff (implicit) part for IMEX methods; the
+#' Jacobian of `f1` may be given as `SplitFunction(f1, f2, jac = J1)` or as
+#' an [ODEFunction()] `f1` with `jac_fn`.
 #' `DynamicalODEProblem(f1, f2, v0, u0, tspan, p)` is `dv/dt = f1(v, u, p,
 #' t)`, `du/dt = f2(v, u, p, t)` on the state `c(v, u)` (velocities first),
 #' and `SecondOrderODEProblem(f, du0, u0, tspan, p)` the second order system
@@ -45,6 +47,7 @@
 #' place of the functions.
 #'
 #' @param f,f1,f2,g Right-hand sides and diffusion, see Details.
+#' @param jac For `SplitFunction()`, the Jacobian `jac(u, p, t)` of `f1`.
 #' @param bc Boundary conditions.
 #' @param u0,v0,du0 Initial states and velocities (or guesses for BVPs).
 #' @param h History function.
@@ -68,9 +71,16 @@ NULL
 
 #' @rdname structured_problems
 #' @export
-SplitFunction <- function(f1, f2, ...)
-  structure(list(f1 = f1, f2 = f2, f = function(u, p, t) f1(u, p, t) + f2(u, p, t), ...),
+SplitFunction <- function(f1, f2, jac = NULL, ...) {
+  # the Jacobian of a SplitFunction is that of f1 (SciMLBase)
+  if (inherits(f1, "ODEFunction")) {
+    jac <- jac %||% f1$jac
+    f1 <- f1$f
+  }
+  if (inherits(f2, "ODEFunction")) f2 <- f2$f
+  structure(list(f1 = f1, f2 = f2, f = function(u, p, t) f1(u, p, t) + f2(u, p, t), jac1 = jac, ...),
             class = c("SplitFunction", "ODEFunction", "SciMLFunction"))
+}
 
 #' @rdname structured_problems
 #' @export
@@ -81,7 +91,7 @@ SplitODEProblem <- function(f1, f2 = NULL, u0, tspan, p = numeric(), ...) {
     return(SplitODEProblem(f1, NULL, f2, u0, if (missing(tspan)) numeric() else tspan, ...))
   }
   prob <- ODEProblem(fn$f, u0, tspan, p, ...)
-  for (nm in c("f1", "f2")) prob$f[[nm]] <- fn[[nm]]
+  for (nm in c("f1", "f2", "jac1")) prob$f[[nm]] <- fn[[nm]]
   class(prob$f) <- unique(c("SplitFunction", class(prob$f)))
   .with_class(prob, "SplitODEProblem")
 }

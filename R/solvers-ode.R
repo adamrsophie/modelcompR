@@ -301,7 +301,9 @@ RK4 <- function() {
   }
   if (EEst == 0) return(list(q = 1 / qmax, cs = cs))
   if (co$type == "I") {
-    ord <- if (is.environment(cache) && !is.null(cache$order)) cache$order else alg$order
+    # get_current_adaptive_order: alg_adaptive_order (alg_order - 1 unless
+    # the method sets it), the current order of a variable order method
+    ord <- if (is.environment(cache) && !is.null(cache$order)) cache$order else co$adaptive_order
     q <- min(1 / co$qmin, max(1 / qmax, .fastpower(EEst, 1 / (ord + 1)) / co$gamma))
     cs$dtreject <- dt / q
     return(list(q = q, cs = cs))
@@ -458,7 +460,8 @@ solve.ODEProblem <- function(a, b, ...) {
   if (is_dae) integ$du <- as.numeric(prob$du0)
   M <- prob$f$mass_matrix
   mm <- !is_dae && !.is_identity_mass(M)
-  ctx <- list(f = prob$f$f, p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac,
+  ctx <- list(f = prob$f$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
+              p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac,
               tgrad = prob$f$tgrad, abstol = abstol, reltol = reltol, n = length(integ$u),
               adaptive = adaptive, composite = length(algs) > 1L, dae = is_dae,
               algebraic = if (mm) rowSums(abs(M)) == 0 else NULL,
@@ -469,9 +472,15 @@ solve.ODEProblem <- function(a, b, ...) {
   ctx$lazy_nf$n <- 0L
   if (any(!is.finite(integ$u))) stop("initial values are not finite: ",
                                      paste(names(integ$u)[!is.finite(integ$u)], collapse = ", "), call. = FALSE)
-  stats <- list(nf = 0L, njacs = 0L, nsolve = 0L, nw = 0L, naccept = 0L, nreject = 0L)
+  stats <- list(nf = 0L, nf2 = 0L, njacs = 0L, nsolve = 0L, nw = 0L, naccept = 0L, nreject = 0L)
   add_stats <- function(res) {
-    for (s in c("nf", "njacs", "nsolve", "nw")) stats[[s]] <<- stats[[s]] + as.integer(res[[s]] %||% 0L)
+    for (s in c("nf", "nf2", "njacs", "nsolve", "nw")) stats[[s]] <<- stats[[s]] + as.integer(res[[s]] %||% 0L)
+  }
+  # the evaluations of a fresh cache (nf2 counts the second part of a split
+  # function, as DEStats)
+  add_init <- function(cache) {
+    stats$nf <<- stats$nf + as.integer(cache$nf0 %||% 1L)
+    stats$nf2 <<- stats$nf2 + as.integer(cache$nf20 %||% 0L)
   }
   finish <- function(retcode, ts, us, steps, alg_choice = NULL) {
     # a state resized during the integration (addat, deleteat) leaves NA in
@@ -547,7 +556,7 @@ solve.ODEProblem <- function(a, b, ...) {
   cos <- lapply(algs, .ctrl_opts, opts = opts)
   css <- lapply(algs, function(a) .ctrl_state())
   caches[[cur]] <- algs[[cur]]$init(ctx, integ$t, integ$u)
-  stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+  add_init(caches[[cur]])
   start_dt <- function(a, cache) {
     if (is_dae) return(1e-6 * abs(tf - t0))
     if (mm) return(max(1e-6, dtmin_at(integ$t)))
@@ -594,8 +603,8 @@ solve.ODEProblem <- function(a, b, ...) {
 # of I, not globals.
 utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
                          "dense", "dtmax", "dtmin_at", "finish", "is_dae", "maxiters", "mm", "opts", "prob",
-                         "push_save", "reltol", "disc_next", "save_end", "save_everystep", "save_start", "saveat", "steps",
-                         "t0", "tdir", "tf", "ts", "us"))
+                         "push_save", "reltol", "disc_next", "add_init", "save_end", "save_everystep",
+                         "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us"))
 
 .integ_step <- function(I) {
   evalq(repeat {
@@ -610,7 +619,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       ctx$p <- integ$p
       ctx$du <- integ$du
       caches[[cur]] <- algs[[cur]]$init(ctx, integ$t, integ$u)
-      stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+      add_init(caches[[cur]])
       css[[cur]] <- .ctrl_state()
       success_iter <- 0L
       integ$u_modified <- FALSE
@@ -629,7 +638,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       if (ch$current != cur) {
         cur <- ch$current
         caches[[cur]] <- algs[[cur]]$init(ctx, integ$t, integ$u)
-        stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+        add_init(caches[[cur]])
       }
     }
     a <- algs[[cur]]; co <- cos[[cur]]
@@ -656,7 +665,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     ctx$p <- integ$p
     ctx$iter <- iter
     ctx$success_iter <- success_iter
-    ctx$accept_prev <- accept_prev
+    # integrator.accept_step: false until the first accepted step
+    ctx$accept_prev <- accept_prev && stats$naccept > 0L
     ctx$EEst_prev <- EEst_prev
     ctx$tprev <- integ$tprev
     ctx$uprev2 <- integ$uprev
@@ -677,6 +687,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       }
       stats$nreject <- stats$nreject + 1L
       accept_prev <- FALSE
+      # a method that finishes the failed step keeps its error estimate
+      if (!is.null(res$EEst)) EEst_prev <- res$EEst
       dt <- if (!is.null(a$newton_fail)) a$newton_fail(caches[[cur]], dtcur, co) else dtcur / co$failfactor
       if (dt <= dtmin_at(integ$t)) {
         retcode <- "DtLessThanMin"
@@ -819,10 +831,11 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         evr <- a$on_event(ctx, integ$t, integ$u, caches[[cur]])
         caches[[cur]] <- evr$cache
         stats$nf <- stats$nf + as.integer(evr$nf)
+        stats$nf2 <- stats$nf2 + as.integer(evr$nf2 %||% 0L)
         disc_next <- TRUE
       } else {
         caches[[cur]] <- a$init(ctx, integ$t, integ$u)
-        stats$nf <- stats$nf + as.integer(caches[[cur]]$nf0 %||% 1L)
+        add_init(caches[[cur]])
       }
       integ$u_modified <- FALSE
       # the step size carries over the event (as in OrdinaryDiffEq); the

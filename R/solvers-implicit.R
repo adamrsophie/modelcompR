@@ -119,8 +119,8 @@
   nl
 }
 
-# do_newJW (derivative_utils.jl) for a Newton solver of a single stage
-# method; returns c(new_jac, new_W).
+# do_newJW (derivative_utils.jl); returns c(new_jac, new_W). `gdt` is
+# nlsolver.gamma * dt, against which the step change is measured.
 .do_newJW <- function(nl, ctx, t, gdt, cj = NULL) {
   if (ctx$iter <= 1L || isTRUE(nl$firstcall)) return(c(TRUE, TRUE))
   if (!isTRUE(ctx$adaptive)) return(c(TRUE, TRUE))
@@ -141,9 +141,12 @@
 }
 
 # update_W!: Jacobian at (uprev, t) and W = J - M / gdt for ODEs; for DAEs
-# J_u and J_du at (du_pred, uprev) and W = J_u + cj * J_du.
-.update_W <- function(nl, ctx, t, uprev, gdt, dae = NULL) {
-  nj <- .do_newJW(nl, ctx, t, gdt, cj = dae$cj)
+# J_u and J_du (calc_J_dae: an analytic Jacobian at (duprev, uprev), finite
+# differences at (du_pred, uprev)) and W = J_u + cj * J_du. `gdt_test` is
+# the step factor do_newJW compares with (gamma * dt of the nonlinear
+# solver; IRKC's error estimate forms W with dt).
+.update_W <- function(nl, ctx, t, uprev, gdt, dae = NULL, gdt_test = gdt) {
+  nj <- .do_newJW(nl, ctx, t, gdt_test, cj = dae$cj)
   cnt <- list(nf = 0L, njacs = 0L, nw = 0L)
   # out of place, calc_W computes J afresh whenever it forms W
   if (nj[1L] || (nj[2L] && is.null(dae))) {
@@ -151,7 +154,7 @@
       jj <- .calc_J(ctx, uprev, t)
       nl$J <- jj$J
     } else {
-      jj <- .calc_J_dae(ctx, dae$du_pred, uprev, t)
+      jj <- .calc_J_dae(ctx, if (is.null(ctx$jac)) dae$du_pred else ctx$du, uprev, t)
       nl$J <- jj$J
       nl$Jdu <- jj$Jdu
     }
@@ -174,23 +177,27 @@
 
 # nlsolve! with compute_step! of the Newton method. Solves for z:
 #   ODE (COEFFICIENT_MULTISTEP): tmp + f(z, p, tstep) - (alpha / (gamma dt)) M z = 0
+#   ODE (DIRK): dt f(tmp + gamma z, p, tstep) - M z = 0
 #   DAE: F((tmp + alpha z) / (gamma dt), u0 + z, p, tstep) = 0
 # `z` is the initial guess, `uprev` the state at the start of the step (for
-# the error weights). DAE Jacobians are taken at (du_J, uprev), by default
-# du_J = tmp / (gamma dt) as update_W! does. Returns list(z, ok, nf, njacs,
-# nsolve, nw, eigen_est).
-.nlsolve <- function(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, u0 = NULL, du_J = NULL) {
+# the error weights). A retry with a fresh Jacobian
+# (TryAgain) continues from the last iterate. `firststage` is
+# markfirststage!: FALSE for the later stages of a multistage method, which
+# keep W after a rejected step. Returns list(z, ok, nf, njacs, nsolve, nw,
+# eigen_est).
+.nlsolve <- function(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, u0 = NULL,
+                     method = "multistep", firststage = TRUE) {
+  nl$isfs <- firststage
   dae <- !is.null(u0)
+  dirk <- identical(method, "dirk")
   cnt <- list(nf = 0L, njacs = 0L, nsolve = 0L, nw = 0L)
   add <- function(x) for (s in names(cnt)) cnt[[s]] <<- cnt[[s]] + as.integer(x[[s]] %||% 0L)
   invgdt <- 1 / (gamma * dt)
-  z0 <- z
   eig <- NULL
   repeat {
-    z <- z0
-    gdt <- gamma * dt / alpha
+    gdt <- if (dirk) gamma * dt else gamma * dt / alpha
     w <- .update_W(nl, ctx, t, uprev, gdt,
-                   dae = if (dae) list(cj = alpha * invgdt, du_pred = du_J %||% (tmp * invgdt)) else NULL)
+                   dae = if (dae) list(cj = alpha * invgdt, du_pred = tmp * invgdt) else NULL)
     add(w)
     if (!is.null(w$eigen_est)) eig <- w$eigen_est
     nl$status <- "Convergence"
@@ -202,6 +209,9 @@
       if (dae) {
         ustep <- u0 + z
         ztmp <- ctx$f((tmp + alpha * z) * invgdt, ustep, ctx$p, tstep)
+      } else if (dirk) {
+        ustep <- tmp + gamma * z
+        ztmp <- (dt * ctx$f(ustep, ctx$p, tstep) - .mass_mul(ctx$mass, z)) * invgdt
       } else {
         ustep <- z
         ztmp <- tmp + ctx$f(z, ctx$p, tstep) - (alpha * invgdt) * .mass_mul(ctx$mass, z)

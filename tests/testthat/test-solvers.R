@@ -256,7 +256,7 @@ test_that("retcodes and statistics follow SciMLBase", {
   expect_warning(sol <- solve(ODEProblem(function(u, p, t) NaN * u, 1, c(0, 1)), Euler(), dt = 0.1), "non finite")
   expect_equal(sol$retcode, "Unstable")
   sol <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 1)), Rodas5P())
-  expect_named(sol$stats, c("nf", "njacs", "nsolve", "nw", "naccept", "nreject"), ignore.order = TRUE)
+  expect_named(sol$stats, c("nf", "nf2", "njacs", "nsolve", "nw", "naccept", "nreject"), ignore.order = TRUE)
   expect_equal(sol$stats$naccept, length(sol$t) - 1L)
   cb <- DiscreteCallback(function(u, t, integ) t >= 0.5, function(integ) terminate(integ))
   sol <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 1)), FBDF(), callback = cb)

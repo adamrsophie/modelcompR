@@ -26,7 +26,7 @@
 \alias{TwoPointSecondOrderBVProblem}
 \title{Structured differential equation problems}
 \usage{
-SplitFunction(f1, f2, ...)
+SplitFunction(f1, f2, jac = NULL, ...)
 
 SplitODEProblem(f1, f2 = NULL, u0, tspan, p = numeric(), ...)
 
@@ -71,6 +71,8 @@ SecondOrderBVProblem(f, bc, u0, tspan, p = numeric(), ...)
 TwoPointSecondOrderBVProblem(f, bc, u0, tspan, p = numeric(), ...)
 }
 \arguments{
+\item{jac}{For \code{SplitFunction()}, the Jacobian \code{jac(u, p, t)} of \code{f1}.}
+
 \item{...}{Problem options.}
 
 \item{u0, v0, du0}{Initial states and velocities (or guesses for BVPs).}
@@ -89,7 +91,9 @@ TwoPointSecondOrderBVProblem(f, bc, u0, tspan, p = numeric(), ...)
 A problem or a function object.
 }
 \description{
-\code{SplitODEProblem(f1, f2, u0, tspan, p)} is \code{du/dt = f1(u, p, t) + f2(u, p, t)}, with \code{f1} the stiff (implicit) part for IMEX methods.
+\code{SplitODEProblem(f1, f2, u0, tspan, p)} is \code{du/dt = f1(u, p, t) + f2(u, p, t)}, with \code{f1} the stiff (implicit) part for IMEX methods; the
+Jacobian of \code{f1} may be given as \code{SplitFunction(f1, f2, jac = J1)} or as
+an \code{\link[=ODEFunction]{ODEFunction()}} \code{f1} with \code{jac_fn}.
 \code{DynamicalODEProblem(f1, f2, v0, u0, tspan, p)} is \code{dv/dt = f1(v, u, p, t)}, \code{du/dt = f2(v, u, p, t)} on the state \code{c(v, u)} (velocities first),
 and \code{SecondOrderODEProblem(f, du0, u0, tspan, p)} the second order system
 \code{d2u/dt2 = f(du, u, p, t)} as such a problem with \code{f2 = v}.
