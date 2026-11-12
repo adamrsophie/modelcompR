@@ -81,7 +81,7 @@ mark_jacobian_updated(L)
 
 mark_jacobian_current(L)
 
-update_coefficients(L, u = NULL, p = NULL, t = NULL)
+update_coefficients(L, u = NULL, p = NULL, t = NULL, ...)
 
 cache_operator(L, u = NULL)
 
@@ -114,7 +114,8 @@ has_concretization(L)
 
 \item{A, B, J}{Matrices or operators.}
 
-\item{update_func}{Coefficient update \code{f(A, u, p, t)}.}
+\item{update_func}{Coefficient update \code{f(A, u, p, t)}; it may take further
+named arguments (such as \code{gamma}) passed to \code{update_coefficients()}.}
 
 \item{d}{Diagonal entries.}
 
@@ -165,11 +166,13 @@ a factorized fixed \code{W}.
 Operators combine with \code{+}, \code{-}, \code{*} (composition and scaling) and apply
 with \code{L \%*\% v} (R 4.4 and later), \code{op_apply(L, v, u, p, t)}, or \code{L(v, u, p, t)} semantics through \code{op_apply}; \code{solve(L, b)} applies the inverse,
 \code{as.matrix(L)} or \code{concretize(L)} gives the matrix and \code{exp(L)} its
-exponential. \code{update_coefficients(L, u, p, t)} returns the operator at
-\verb{(u, p, t)}. The traits \code{islinear()}, \code{isconstant()}, \code{issquare()},
-\code{has_adjoint()}, \code{has_mul()}, \code{has_ldiv()}, \code{has_exp()}, \code{has_expmv()},
-\code{iscached()}, \code{isconvertible()} and \code{has_concretization()} answer
-questions about an operator; \code{cache_operator(L, u)} marks it cached.
+exponential. \code{update_coefficients(L, u, p, t, ...)} returns the operator
+at \verb{(u, p, t)}; named arguments in \code{...} (such as the \code{gamma} of the AMF
+operators, \code{\link[=AMFOperator]{AMFOperator()}}) reach the update functions that take them.
+The traits \code{islinear()}, \code{isconstant()}, \code{issquare()}, \code{has_adjoint()},
+\code{has_mul()}, \code{has_ldiv()}, \code{has_exp()}, \code{has_expmv()}, \code{iscached()},
+\code{isconvertible()} and \code{has_concretization()} answer questions about an
+operator; \code{cache_operator(L, u)} marks it cached.
 }
 \examples{
 L <- MatrixOperator(matrix(c(2, 0, 1, 3), 2))

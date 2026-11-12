@@ -613,7 +613,8 @@ IntervalNonlinearProblem <- function(sys, uspan, parammap = list(), ..., p = NUL
 #' solve(prob)$u
 #' @export
 LinearProblem <- function(sys, op = list(), ..., check_length = TRUE) {
-  if ((is.matrix(sys) && is.numeric(sys)) || inherits(sys, "LowRankUpdatedMatrix") || is.function(sys)) {
+  if ((is.matrix(sys) && is.numeric(sys)) || inherits(sys, c("LowRankUpdatedMatrix", "AbstractSciMLOperator")) ||
+      is.function(sys)) {
     prob <- .new_problem("LinearProblem", f = NULL, u0 = NULL, p = numeric(), sys = NULL, kwargs = list(...))
     prob$A <- sys
     prob$b <- as.numeric(unlist(op))

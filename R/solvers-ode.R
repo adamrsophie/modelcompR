@@ -17,12 +17,17 @@
 #   interp(theta, dt, y0, y1, k)  dense output inside a step
 #   init(ctx, t, u)  initial cache (for example the FSAL derivative)
 # Optional fields set the controller ("PI", "I" or "BDF" with the hooks
-# bdf_stepsize/bdf_accept/bdf_reject), its constants (beta1, beta2, qmin,
-# qmax, gamma, qsteady_min, qsteady_max, failfactor), newton_fail and
+# bdf_stepsize/bdf_accept/bdf_reject; "Extrapolation" with the hooks
+# extrap_stepsize/extrap_accept/extrap_reject of the same signatures, the
+# ExtrapolationController of R/solvers-extrapolation.R), its constants
+# (beta1, beta2, qmin, qmax, gamma, qsteady_min, qsteady_max, failfactor),
+# newton_fail and
 # on_reject hooks, mass_matrix (supports singular mass matrices) and dae
 # (solves DAEProblem). ctx carries f, p, mass, jac, tgrad, tolerances and
 # the integrator state the implicit methods need (iter, success_iter,
-# accept_prev, EEst_prev, tprev, uprev2, du).
+# accept_prev, EEst_prev, tprev, uprev2, du) and co, the controller options
+# of .ctrl_opts (the extrapolation methods control their order inside the
+# step).
 # The driver .integrate() handles step size control, saving, tstops and
 # callbacks, and returns an ODESolution.
 
@@ -226,8 +231,9 @@ RK4 <- function() {
 # Controller settings of an algorithm: the *_default functions of
 # OrdinaryDiffEqCore/src/alg_utils.jl with the per algorithm overrides the
 # constructors store in the algorithm object. `type` is "PI" (PIController),
-# "I" (IController), "Predictive" (PredictiveController) or "BDF"
-# (BDFController, OrdinaryDiffEqBDF/src/controllers.jl).
+# "I" (IController), "Predictive" (PredictiveController), "BDF"
+# (BDFController, OrdinaryDiffEqBDF/src/controllers.jl) or "Extrapolation"
+# (ExtrapolationController, R/solvers-extrapolation.R).
 .ctrl_opts <- function(alg, opts) {
   ord <- alg$order
   beta2 <- opts$beta2 %||% alg$beta2 %||% (2 / (5 * ord))
@@ -241,9 +247,10 @@ RK4 <- function() {
        qsteady_min = alg$qsteady_min %||% 1, qsteady_max = alg$qsteady_max %||% 1,
        failfactor = opts$failfactor %||% alg$failfactor %||% 2,
        # handle_disco_reject! / handle_disco_accept! (R/solvers-disco.R) of the
-       # I, PI, PID and predictive controllers
+       # I, PI, PID and predictive controllers (pi_controller: the PI
+       # controller run by the hooks of a method, AitkenNeville)
        discontinuity_detection = isTRUE(opts$discontinuity_detection) &&
-         (alg$controller %||% "PI") %in% c("I", "PI", "PID", "Predictive"))
+         ((alg$controller %||% "PI") %in% c("I", "PI", "PID", "Predictive") || isTRUE(alg$pi_controller)))
 }
 
 # FastPower.fastpower, which the I and PI controllers of OrdinaryDiffEqCore
@@ -314,6 +321,7 @@ RK4 <- function() {
 .ctrl_q <- function(co, cs, EEst, first, dt, alg, cache) {
   qmax <- if (first) co$qmax_first else co$qmax
   if (co$type == "BDF") return(list(q = alg$bdf_stepsize(cache, EEst, co, first), cs = cs))
+  if (co$type == "Extrapolation") return(list(q = alg$extrap_stepsize(cache, EEst, co, first), cs = cs))
   if (co$type == "PID") return(.ctrl_pid_q(co, cs, EEst))
   if (co$type == "Predictive") {
     # PredictiveController: the factor from the error of this step alone
@@ -349,6 +357,7 @@ RK4 <- function() {
 # step_accept_controller!: the next step size.
 .ctrl_accept <- function(co, cs, q, EEst, dt, alg, cache) {
   if (co$type == "BDF") return(list(dt = alg$bdf_accept(cache, q, dt, co), cs = cs))
+  if (co$type == "Extrapolation") return(list(dt = alg$extrap_accept(cache, q, dt, co), cs = cs))
   if (co$type == "PID") {
     fac <- cs$dt_factor
     if (1 / fac >= co$qsteady_min && 1 / fac <= co$qsteady_max) fac <- 1
@@ -376,6 +385,7 @@ RK4 <- function() {
 # step_reject_controller!: the step size to retry with.
 .ctrl_reject <- function(co, cs, dt, EEst, alg, cache) {
   if (co$type == "BDF") return(alg$bdf_reject(cache, EEst, dt, co))
+  if (co$type == "Extrapolation") return(alg$extrap_reject(cache, EEst, dt, co))
   if (co$type == "PID") return(dt * cs$dt_factor)
   if (co$type == "I") return(cs$dtreject)
   if (co$type == "Predictive") return(if (cs$first) 0.1 * dt else dt / cs$qold)
@@ -616,7 +626,9 @@ solve.ODEProblem <- function(a, b, ...) {
   add_init(caches[[cur]])
   start_dt <- function(a, cache) {
     if (is_dae) return(1e-6 * abs(tf - t0))
-    if (mm) return(max(1e-6, dtmin_at(integ$t)))
+    # isdae of OrdinaryDiffEqCore: only a singular mass matrix (a zero pivot of
+    # its LU factorization, ArrayInterface.issingular) takes the small step
+    if (mm && !is.finite(determinant(as.matrix(M))$modulus)) return(max(1e-6, dtmin_at(integ$t)))
     f0 <- cache$fsal %||% ctx$f(integ$u, ctx$p, integ$t)
     .initial_dt(ctx, integ$t, integ$u, f0, tdir, a$order, abstol, reltol, dtmax, dtmin_at(integ$t))
   }
@@ -738,6 +750,10 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     }
     ctx$p <- integ$p
     ctx$iter <- iter
+    ctx$co <- co
+    # a pending handle_disco_accept! for a method that calls its controller
+    # inside the step (AitkenNeville); res$disco_used reports it applied
+    ctx$disco_checkpoint <- if (co$discontinuity_detection && is_disco_step) disco_checkpoint
     ctx$success_iter <- success_iter
     # integrator.accept_step: false until the first accepted step
     ctx$accept_prev <- accept_prev && stats$naccept > 0L
@@ -749,6 +765,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     disc_next <- FALSE
     res <- a$step(ctx, integ$t, integ$u, tdir * dtcur, caches[[cur]])
     add_stats(res)
+    if (isTRUE(res$disco_used)) is_disco_step <- FALSE
     if (!is.null(res$eigen_est)) eigen_est <- res$eigen_est
     if (is.environment(res$cache)) caches[[cur]] <- res$cache
     if (isTRUE(res$fail)) {

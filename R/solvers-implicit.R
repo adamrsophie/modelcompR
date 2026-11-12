@@ -183,10 +183,12 @@
 # the error weights). A retry with a fresh Jacobian
 # (TryAgain) continues from the last iterate. `firststage` is
 # markfirststage!: FALSE for the later stages of a multistage method, which
-# keep W after a rejected step. Returns list(z, ok, nf, njacs, nsolve, nw,
+# keep W after a rejected step. `eta_first` is isadaptive(alg): FALSE skips
+# the rate test on the first iteration (check_eta_convergence of an algorithm
+# that is not adaptive, such as CNAB2 or a fixed step SDIRK method). Returns list(z, ok, nf, njacs, nsolve, nw,
 # eigen_est).
 .nlsolve <- function(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, u0 = NULL,
-                     method = "multistep", firststage = TRUE) {
+                     method = "multistep", firststage = TRUE, eta_first = TRUE) {
   nl$isfs <- firststage
   dae <- !is.null(u0)
   dirk <- identical(method, "dirk")
@@ -252,7 +254,7 @@
       }
       z <- z - dz
       eta <- theta / (1 - theta)
-      if ((it == 1L && ndz < 1e-5) || (eta >= 0 && eta * ndz < nl$kappa)) {
+      if ((it == 1L && ndz < 1e-5) || ((it > 1L || eta_first) && eta >= 0 && eta * ndz < nl$kappa)) {
         converged <- TRUE
         break
       }

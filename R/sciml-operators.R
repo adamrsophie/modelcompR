@@ -45,18 +45,21 @@ print.AbstractSciMLOperator <- function(x, ...) {
 #' with `L %*% v` (R 4.4 and later), `op_apply(L, v, u, p, t)`, or `L(v, u,
 #' p, t)` semantics through `op_apply`; `solve(L, b)` applies the inverse,
 #' `as.matrix(L)` or `concretize(L)` gives the matrix and `exp(L)` its
-#' exponential. `update_coefficients(L, u, p, t)` returns the operator at
-#' `(u, p, t)`. The traits `islinear()`, `isconstant()`, `issquare()`,
-#' `has_adjoint()`, `has_mul()`, `has_ldiv()`, `has_exp()`, `has_expmv()`,
-#' `iscached()`, `isconvertible()` and `has_concretization()` answer
-#' questions about an operator; `cache_operator(L, u)` marks it cached.
+#' exponential. `update_coefficients(L, u, p, t, ...)` returns the operator
+#' at `(u, p, t)`; named arguments in `...` (such as the `gamma` of the AMF
+#' operators, [AMFOperator()]) reach the update functions that take them.
+#' The traits `islinear()`, `isconstant()`, `issquare()`, `has_adjoint()`,
+#' `has_mul()`, `has_ldiv()`, `has_exp()`, `has_expmv()`, `iscached()`,
+#' `isconvertible()` and `has_concretization()` answer questions about an
+#' operator; `cache_operator(L, u)` marks it cached.
 #'
 #' @param A,B,J Matrices or operators.
 #' @param d Diagonal entries.
 #' @param alpha Scalar value.
 #' @param b Vector.
 #' @param n Size.
-#' @param update_func Coefficient update `f(A, u, p, t)`.
+#' @param update_func Coefficient update `f(A, u, p, t)`; it may take further
+#'   named arguments (such as `gamma`) passed to `update_coefficients()`.
 #' @param op,op_inverse,op_adjoint Actions `f(v, u, p, t)`.
 #' @param input,output Prototype input and output vectors.
 #' @param islinear Whether the function operator is linear.
@@ -100,7 +103,8 @@ MatrixOperator <- function(A, update_func = NULL) {
   A <- as.matrix(A)
   op <- .sop("MatrixOperator", dim(A), function(v) as.numeric(A %*% v), function() A,
              function(b) as.numeric(solve(A, b)),
-             update = if (!is.null(update_func)) function(u, p, t) MatrixOperator(update_func(A, u, p, t), update_func),
+             update = if (!is.null(update_func))
+               function(u, p, t, ...) MatrixOperator(.sop_update_call(update_func, A, u, p, t, ...), update_func),
              constant = is.null(update_func), adjoint = function() MatrixOperator(t(A)), A = A)
   op
 }
@@ -111,7 +115,8 @@ DiagonalOperator <- function(d, update_func = NULL) {
   d <- as.numeric(d)
   .sop("DiagonalOperator", c(length(d), length(d)), function(v) d * v, function() diag(d, length(d)),
        function(b) b / d,
-       update = if (!is.null(update_func)) function(u, p, t) DiagonalOperator(update_func(d, u, p, t), update_func),
+       update = if (!is.null(update_func))
+         function(u, p, t, ...) DiagonalOperator(.sop_update_call(update_func, d, u, p, t, ...), update_func),
        constant = is.null(update_func), adjoint = function() DiagonalOperator(d), diag = d)
 }
 
@@ -119,7 +124,8 @@ DiagonalOperator <- function(d, update_func = NULL) {
 #' @export
 ScalarOperator <- function(alpha, update_func = NULL) {
   .sop("ScalarOperator", c(NA, NA), function(v) alpha * v, function() alpha, function(b) b / alpha,
-       update = if (!is.null(update_func)) function(u, p, t) ScalarOperator(update_func(alpha, u, p, t), update_func),
+       update = if (!is.null(update_func))
+         function(u, p, t, ...) ScalarOperator(.sop_update_call(update_func, alpha, u, p, t, ...), update_func),
        constant = is.null(update_func), adjoint = function() ScalarOperator(alpha), value = alpha)
 }
 
@@ -306,8 +312,7 @@ mark_jacobian_current <- function(L) {
          if (length(a) == 1L || length(b) == 1L) a * b else a %*% b
        },
        if (!is.null(A$solve_fn) && !is.null(B$solve_fn)) function(y) B$solve_fn(A$solve_fn(y)),
-       update = function(u, p, t) .sop_compose(if (!is.null(A$update)) A$update(u, p, t) else A,
-                                               if (!is.null(B$update)) B$update(u, p, t) else B),
+       update = function(u, p, t, ...) .sop_compose(.sop_upd(A, u, p, t, ...), .sop_upd(B, u, p, t, ...)),
        linear = isTRUE(A$linear) && isTRUE(B$linear), constant = isTRUE(A$constant) && isTRUE(B$constant),
        ops = list(A, B))
 }
@@ -317,8 +322,7 @@ mark_jacobian_current <- function(L) {
   .sop("AddedOperator", sz, function(v) A$apply(v) + sgn * B$apply(v),
        if (!is.null(A$as_matrix) && !is.null(B$as_matrix)) function() .sop_matrix(A, sz[1L]) + sgn * .sop_matrix(B, sz[1L]),
        NULL,
-       update = function(u, p, t) .sop_add(if (!is.null(A$update)) A$update(u, p, t) else A,
-                                           if (!is.null(B$update)) B$update(u, p, t) else B, sgn),
+       update = function(u, p, t, ...) .sop_add(.sop_upd(A, u, p, t, ...), .sop_upd(B, u, p, t, ...), sgn),
        linear = isTRUE(A$linear) && isTRUE(B$linear), constant = isTRUE(A$constant) && isTRUE(B$constant),
        ops = list(A, B))
 }
@@ -388,9 +392,21 @@ NULL
 
 #' @rdname sciml_operators
 #' @export
-update_coefficients <- function(L, u = NULL, p = NULL, t = NULL) {
-  L <- .as_sop(L)
-  if (is.null(L$update)) L else L$update(u, p, t)
+update_coefficients <- function(L, u = NULL, p = NULL, t = NULL, ...) .sop_upd(.as_sop(L), u, p, t, ...)
+
+# Updates with keyword arguments (update_coefficients!(L, u, p, t; gamma)):
+# an update function receives those it names (or all, with ...), as the
+# accepted_kwargs of SciMLOperators; an operator passes them to its parts.
+.sop_update_call <- function(fn, x, u, p, t, ...) {
+  kw <- list(...)
+  fa <- names(formals(fn))
+  if (length(kw) && !"..." %in% fa) kw <- kw[names(kw) %in% fa]
+  do.call(fn, c(list(x, u, p, t), kw))
+}
+
+.sop_upd <- function(L, u, p, t, ...) {
+  if (is.null(L$update)) return(L)
+  if ("..." %in% names(formals(L$update))) L$update(u, p, t, ...) else L$update(u, p, t)
 }
 
 #' @rdname sciml_operators

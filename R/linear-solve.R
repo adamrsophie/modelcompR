@@ -598,6 +598,8 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     full <- A$A + A$U %*% A$C %*% t(A$V)
     return(list(u = u, resid = as.numeric(full %*% u - b), iters = 1L, alg = alg %||% LUFactorization()))
   }
+  # SciMLOpFactorization (R/solvers-amf.R) factorizes the operator part by part
+  if (identical(alg$method, "sciml_op")) return(.amf_lin_solve(A, b, alg, cache))
   A <- .lin_prepare_A(A, opts, cache)
   if (!is.matrix(A) && !is.function(A)) A <- matrix(A, nrow = length(b))
   alg <- alg %||% .lin_default(A, opts$assumptions %||% OperatorAssumptions())

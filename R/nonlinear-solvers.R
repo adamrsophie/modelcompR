@@ -866,6 +866,7 @@ solve.LinearProblem <- function(a, b, ...) {
   if (!missing(b) && !is.null(b) || !is.null(opts$assumptions))
     return(.lin_solution(a, .lin_solve(a, if (missing(b)) NULL else b, opts)))
   A <- a$A; rhs <- a$b
+  if (inherits(A, "AbstractSciMLOperator")) A <- concretize(A)
   if (!is.matrix(A)) A <- matrix(A, nrow = length(rhs))
   u <- .nl_lstsq(A, rhs)
   resid <- as.numeric(A %*% u - rhs)
