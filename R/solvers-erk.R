@@ -76,12 +76,13 @@ NULL
     nf <- if (is.null(cache$fsal)) 1L else 0L
     last <- if (fsal) s - 1L else s
     for (i in seq_len(last)[-1L]) {
-      ui <- u + dt * as.numeric(K[, seq_len(i - 1L), drop = FALSE] %*% A[i, seq_len(i - 1L)])
-      if (!is.null(stage_limiter)) ui <- stage_limiter(ui, NULL, p, t + cc[i] * dt)
-      K[, i] <- f(ui, p, t + cc[i] * dt)
+      ui <- u + dt * .lincomb(K, A[i, ], which(A[i, seq_len(i - 1L)] != 0))
+      ti <- .fma(cc[i], dt, t)
+      if (!is.null(stage_limiter)) ui <- stage_limiter(ui, NULL, p, ti)
+      K[, i] <- f(ui, p, ti)
       nf <- nf + 1L
     }
-    unew <- u + dt * as.numeric(K %*% b)
+    unew <- u + dt * .lincomb(K, b)
     if (!is.null(stage_limiter)) unew <- stage_limiter(unew, NULL, p, t + dt)
     if (fsal) {
       K[, s] <- f(unew, p, t + dt)
@@ -94,7 +95,7 @@ NULL
         res$EEst <- est(K, dt, u, unew, ctx, t)
         if (identical(name, "SSPRK932")) res$nf <- res$nf + 1L
       }
-      else res$err <- dt * as.numeric(K %*% bt)
+      else res$err <- dt * .lincomb(K, bt)
     }
     res
   }
@@ -121,24 +122,24 @@ NULL
   # the larger of the two embedded estimates
   BS5 = function(K, dt, u, unew, ctx, t) {
     bhat <- c(-0.00234375, 0, 0.0103760754048583, -0.016490384615384615, 0.018984375, -0.010526315789473684, 0, 0)
-    btil <- c(-0.0019478942125547064, 0, 0.009048699186152193, -0.015478743126634073, 0.021222718253968254,
+    btil <- c(-0.0019478942125547064, 0, 0x1.2881fd89b5f5dp-7, -0.015478743126634073, 0x1.5bb688355021dp-6,
               -0.013276905111429694, -0.005480370770138146, 0.005912495780636172)
-    max(.erk_nrm(dt * as.numeric(K %*% bhat), u, unew, ctx), .erk_nrm(dt * as.numeric(K %*% btil), u, unew, ctx))
+    max(.erk_nrm(dt * .lincomb(K, bhat), u, unew, ctx), .erk_nrm(dt * .lincomb(K, btil), u, unew, ctx))
   },
   # the order 5 and order 3 estimates combined as err5^2 / sqrt(err5^2 + 0.01 err3^2)
   DP8 = function(K, dt, u, unew, ctx, t) {
     z <- numeric(13)
     er <- z; er[c(1, 6:12)] <- c(0.01312004499419488, -1.2251564463762044, -0.4957589496572502, 1.6643771824549864,
-                                 -0.35032884874997366, 0.3341791187130175, 0.08192320648511571, -0.022355307863886294)
-    bt <- z; bt[c(1, 6:12)] <- c(-0.18980075407240762, 4.450312892752409, 1.8915178993145003, -5.801203960010585,
-                                 -0.42268232132379197, -0.1521609496625161, 0.20136540080403034, 0.022651792198360825)
-    e5 <- .erk_nrm(dt * as.numeric(K %*% er), u, unew, ctx)
-    e3 <- .erk_nrm(dt * as.numeric(K %*% bt), u, unew, ctx)
-    if (abs(e5) < 1e-300 && abs(e3) < 1e-300) 0 else e5^2 / sqrt(e5^2 + 0.01 * e3^2)
+                                 -0.35032884874997366, 0.3341791187130175, 0.08192320648511571, -0x1.6e44f50ab6bc2p-6)
+    bt <- z; bt[c(1, 6:12)] <- c(-0x1.84b641fbfa1f1p-3, 4.450312892752409, 1.8915178993145003, -5.801203960010585,
+                                 -0x1.b0d3a26abb717p-2, -0.1521609496625161, 0x1.9c657697fe72dp-3, 0.022651792198360825)
+    e5 <- .erk_nrm(dt * .lincomb(K, er), u, unew, ctx)
+    e3 <- .erk_nrm(dt * .lincomb(K, bt), u, unew, ctx)
+    if (abs(e5) < 0x1.56e1fc2f8f359p-997 && abs(e3) < 0x1.56e1fc2f8f359p-997) 0 else e5^2 / sqrt(e5^2 + 0.01 * e3^2)
   },
   # the extra stage at the end of the first sweep gives an embedded solution
   SSPRK932 = function(K, dt, u, unew, ctx, t) {
-    u6 <- u + dt / 6 * as.numeric(K[, 1:6, drop = FALSE] %*% rep(1, 6))
+    u6 <- u + dt / 6 * .lincomb(K, rep(1, 6))
     k7 <- ctx$f(u6, ctx$p, t + dt)
     ut <- (u + 6 * u6 + 6 * dt * k7) / 7
     attr(ut, "nf") <- 1L

@@ -28,24 +28,27 @@ for (ln in lines) {
   if (nm %in% c(hand, skip) || nm %in% setdiff(exported, character())) next
   kv <- strsplit(parts[-1L], "=", fixed = TRUE)
   fl <- stats::setNames(lapply(kv, `[`, 2L), vapply(kv, `[`, "", 1L))
-  num <- function(x) as.numeric(strsplit(x, ",", fixed = TRUE)[[1L]])
+  # the values stay the strings Julia printed (repr): parsing them in R and
+  # printing them again would keep R's parsing error (tools/exact_literals.py)
+  num <- function(x) if (!is.null(x)) structure(strsplit(x, ",", fixed = TRUE)[[1L]], class = "num")
   tabs[[nm]] <- list(
-    s = as.integer(fl$s), A = num(fl$A), b = num(fl$b), c = num(fl$c),
-    btilde = if (!is.null(fl$btilde)) num(fl$btilde),
-    order = as.numeric(fl$order), adaptive_order = if (!is.null(fl$adaptive_order)) as.numeric(fl$adaptive_order),
+    s = as.integer(fl$s), A = num(fl$A), b = num(fl$b), c = num(fl$c), btilde = num(fl$btilde),
+    order = num(fl$order), adaptive_order = num(fl$adaptive_order),
     adaptive = identical(fl$adaptive, "true"), nonlinear_est = identical(fl$nonlinear_est, "true"),
-    qmax = if (!is.null(fl$qmax)) as.numeric(fl$qmax), qmin = if (!is.null(fl$qmin)) as.numeric(fl$qmin),
-    gamma = if (!is.null(fl$gamma)) as.numeric(fl$gamma), beta1 = if (!is.null(fl$beta1)) as.numeric(fl$beta1),
-    beta2 = if (!is.null(fl$beta2)) as.numeric(fl$beta2), controller = fl$controller,
-    pid_beta = if (!is.null(fl$pid_beta)) num(fl$pid_beta),
-    pid_accept_safety = if (!is.null(fl$pid_accept_safety)) as.numeric(fl$pid_accept_safety),
-    ssp = if (!is.null(fl$ssp)) as.numeric(fl$ssp))
+    qmax = num(fl$qmax), qmin = num(fl$qmin), gamma = num(fl$gamma), beta1 = num(fl$beta1),
+    beta2 = num(fl$beta2), controller = fl$controller, pid_beta = num(fl$pid_beta),
+    pid_accept_safety = num(fl$pid_accept_safety), ssp = num(fl$ssp))
 }
 fmt <- function(x) {
   if (is.null(x)) return("NULL")
+  if (inherits(x, "num")) {
+    x <- unclass(x)
+    v <- ifelse(as.numeric(x) == 0, "0", x)
+    return(if (length(v) == 1L) v else paste0("c(", paste(v, collapse = ", "), ")"))
+  }
   if (is.character(x)) return(deparse(x))
   if (is.logical(x)) return(if (x) "TRUE" else "FALSE")
-  v <- vapply(x, function(y) if (y == 0) "0" else format(y, digits = 17), "")
+  v <- format(x)
   if (length(v) == 1L) v else paste0("c(", paste(v, collapse = ", "), ")")
 }
 out <- c(

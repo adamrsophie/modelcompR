@@ -112,6 +112,7 @@ OptimizerMissingError <- function(msg = "no optimization algorithm was given")
   name <- alg$name %||% class(alg)[1L]
   t <- list(grad = FALSE, hess = FALSE, consjac = FALSE, conshess = FALSE, rbounds = FALSE, rcons = FALSE,
             bounds = FALSE, cons = FALSE, callback = TRUE)
+  if (is.list(alg$traits)) return(utils::modifyList(t, alg$traits))
   switch(name,
     LBFGSB = , LBFGS = { t$grad <- TRUE; t$bounds <- TRUE },
     BFGS = { t$grad <- TRUE },

@@ -30,16 +30,24 @@
 #'   crossing, `"right"` just after it, and `"none"` (or `FALSE`) at the end
 #'   of the step.
 #' @param save_positions Save the state before and after the affect.
+#' @param dtrelax After a continuous event the next step starts from
+#'   `dtrelax` times the step that contained the event (DiffEqBase's
+#'   `apply_callback!`).
+#' @param maybe_discontinuity Whether the event may introduce a
+#'   discontinuity: only these callbacks take part in the discontinuity
+#'   detection of `solve(..., discontinuity_detection = TRUE)`.
 #' @param times Event times.
 #' @param dt Period.
 #' @param ... Callbacks.
 #' @return A callback object.
 #' @export
 ContinuousCallback <- function(condition, affect, affect_neg = affect, initialize = NULL,
-                               finalize = NULL, rootfind = "left", save_positions = c(TRUE, TRUE)) {
+                               finalize = NULL, rootfind = "left", save_positions = c(TRUE, TRUE),
+                               dtrelax = 1, maybe_discontinuity = TRUE) {
   structure(list(condition = condition, affect = affect, affect_neg = affect_neg,
                  initialize = initialize, finalize = finalize, rootfind = rootfind,
-                 save_positions = save_positions),
+                 save_positions = save_positions, dtrelax = dtrelax,
+                 maybe_discontinuity = maybe_discontinuity),
             class = c("ContinuousCallback", "DECallback"))
 }
 
@@ -208,6 +216,7 @@ u_modified <- function(integ, value = TRUE) {
 # step at the first event time. Returns list(modified, save).
 .apply_callbacks <- function(cbs, integ, step, ctx) {
   modified <- FALSE
+  best <- NULL
   left <- NULL
   fired <- list()
   if (length(cbs$continuous)) {
@@ -296,6 +305,9 @@ u_modified <- function(integ, value = TRUE) {
   # jump callbacks) save around the event also without save_everystep, as
   # DiffEqBase's apply_callback! does for every callback
   sp <- vapply(fired, function(cb) as.logical(cb$save_positions %||% c(TRUE, TRUE)), logical(2L))
+  # a continuous event sets the proposed step to dtrelax times the step
   list(modified = modified, left = left, save_pre = any(sp[1L, ]), save_post = !length(fired) || any(sp[2L, ]),
+       dtrelax = if (!is.null(best)) best$cb$dtrelax %||% 1,
+       maybe_disco = !is.null(best) && !isFALSE(best$cb$maybe_discontinuity),
        force = any(vapply(fired, function(cb) isTRUE(cb$force_save), TRUE)))
 }

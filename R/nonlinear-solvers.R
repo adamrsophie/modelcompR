@@ -766,7 +766,8 @@ solve.NonlinearProblem <- function(a, b, ...) {
   fns <- .nl_problem_fns(a)
   res <- .nl_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls = FALSE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
-                   stats = list(nsteps = res$iters, alg = res$alg %||% alg$name))
+                   stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
+                   extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))
 }
 
 #' @rdname solve_nonlinear
@@ -778,7 +779,8 @@ solve.NonlinearLeastSquaresProblem <- function(a, b, ...) {
   fns <- .nl_problem_fns(a)
   res <- .nl_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls = TRUE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
-                   stats = list(nsteps = res$iters, alg = res$alg %||% alg$name))
+                   stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
+                   extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))
 }
 
 #' @rdname solve_nonlinear

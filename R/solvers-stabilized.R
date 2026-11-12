@@ -375,7 +375,8 @@ ROCK4 <- function(min_stages = 0, max_stages = 152, eigen_est = NULL, eigen_est_
   w0sqm1 <- w0m1 * (w0m1 + 2)
   temp <- sqrt(w0sqm1)
   arg <- mdeg * log(w0 + temp)
-  w1 <- (sinh(arg) * w0sqm1) / (cosh(arg) * mdeg * temp - w0 * sinh(arg))
+  # the scalar sums are fused, as @muladd in perform_step! (RKCConstantCache)
+  w1 <- (sinh(arg) * w0sqm1) / .fma(-w0, sinh(arg), cosh(arg) * mdeg * temp)
   b1 <- 1 / ((2 * w0)^2)
   b2 <- b1
   gprev2 <- u
@@ -385,17 +386,17 @@ ROCK4 <- function(min_stages = 0, max_stages = 152, eigen_est = NULL, eigen_est_
   th2 <- 0; th1 <- mus
   z1 <- w0; z2 <- 1; dz1 <- 1; dz2 <- 0; d2z1 <- 0; d2z2 <- 0
   for (iter in seq_len(mdeg)[-1L]) {
-    z <- 2 * w0 * z1 - z2
-    dz <- 2 * w0 * dz1 - dz2 + 2 * z1
-    d2z <- 2 * w0 * d2z1 - d2z2 + 4 * dz1
+    z <- .fma(2 * w0, z1, -z2)
+    dz <- .fma(2, z1, .fma(2 * w0, dz1, -dz2))
+    d2z <- .fma(4, dz1, .fma(2 * w0, d2z1, -d2z2))
     b <- d2z / (dz^2)
-    nus <- 1 - z1 * b1
+    nus <- .fma(-z1, b1, 1)
     mu <- 2 * w0 * b / b1
     nu <- -b / b2
     mus <- mu * w1 / w0
-    unew <- f(gprev, p, t + dt * th1)
+    unew <- f(gprev, p, .fma(dt, th1, t))
     unew <- mu * gprev + nu * gprev2 + (1 - mu - nu) * u + dt * mus * (unew - nus * fsal)
-    th <- mu * th1 + nu * th2 + mus * (1 - nus)
+    th <- .fma(mus, 1 - nus, .fma(nu, th2, mu * th1))
     if (iter < mdeg) {
       gprev2 <- gprev; gprev <- unew
       th2 <- th1; th1 <- th
@@ -412,7 +413,7 @@ ROCK4 <- function(min_stages = 0, max_stages = 152, eigen_est = NULL, eigen_est_
   st <- cache$st; fsal <- cache$fsal
   f <- ctx$f; p <- ctx$p
   nf <- .stab_eig(ctx, st, t, u, fsal, a)
-  mdeg <- floor(sqrt(1.54 * abs(dt) * st$eig + 1)) + 1
+  mdeg <- floor(sqrt(.fma(1.54 * abs(dt), st$eig, 1))) + 1
   unew <- .rkc_core(f, p, t, u, dt, fsal, mdeg)
   fnew <- f(unew, p, t + dt)
   tmp <- (4 * (u - unew) + 2 * dt * (fsal + fnew)) / 5
@@ -496,7 +497,7 @@ RKC <- function(eigen_est = NULL, eigen_est_interval = 25) {
     b2 <- b1
   } else {
     mdeg <- floor(sqrt(4 + 1.267029788142009 * abs(dt) * st$eig *
-                         (onemq + sqrt(1 + q * (0.44256220745562963 + q))))) + 1
+                         (onemq + sqrt(1 + q * (0x1.c52f06fddeb77p-2 + q))))) + 1
     mdeg2 <- mdeg^2
     tsw0 <- 1.25
     acoshtsw0 <- acosh(tsw0)
@@ -574,7 +575,7 @@ TSRKC3 <- function(eigen_est = NULL) {
   st <- cache$st; fsal <- cache$fsal
   f <- ctx$f; p <- ctx$p
   nf <- .stab_eig(ctx, st, t, u, fsal, a)
-  mdeg <- max(3, ceiling(-0.8306782178712795 + 1.8547887825836553 * (abs(dt) * st$eig)^0.533871357807877))
+  mdeg <- max(3, ceiling(-0.8306782178712795 + 0x1.dad3700a2f386p+0 * (abs(dt) * st$eig)^0.533871357807877))
   mdeg <- min(max(mdeg, a$min_stages), a$max_stages)
   if (mdeg != st$mdeg) {
     # w0 = cosh(alpha) shifts the Chebyshev polynomial to be monotone: bisection on alpha

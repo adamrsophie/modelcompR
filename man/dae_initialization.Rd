@@ -6,6 +6,8 @@
 \alias{ShampineCollocationInit}
 \alias{CheckInit}
 \alias{NoInit}
+\alias{OverrideInit}
+\alias{DefaultInit}
 \title{DAE initialization algorithms}
 \usage{
 BrownFullBasicInit(abstol = NULL)
@@ -15,6 +17,10 @@ ShampineCollocationInit(initdt = NULL)
 CheckInit()
 
 NoInit()
+
+OverrideInit(abstol = NULL, reltol = NULL, nlsolve = NULL)
+
+DefaultInit()
 }
 \arguments{
 \item{abstol}{Tolerance of the nonlinear solve; the integrator's \code{abstol}
@@ -22,6 +28,10 @@ when \code{NULL}.}
 
 \item{initdt}{Step of \code{ShampineCollocationInit()}; by default
 \code{min(t0 / 1000, dtmax / 10)} (or \code{dtmax / 10} when \code{t0 = 0}).}
+
+\item{reltol, nlsolve}{Relative tolerance and nonlinear solver of the
+initialization solve of \code{OverrideInit()} (stored; the initialization
+problem is solved with its own algorithm).}
 }
 \value{
 An initialization algorithm object.
@@ -35,8 +45,14 @@ derivatives of the differential variables). \code{ShampineCollocationInit()}
 takes a small implicit Euler step to find consistent values of all
 variables. \code{CheckInit()} only checks the residual and fails with retcode
 "InitialFailure" when it is not satisfied; \code{NoInit()} takes the initial
-values as they are, without evaluating the residual. The default is
-\code{BrownFullBasicInit()}.
+values as they are, without evaluating the residual. \code{OverrideInit()}
+solves the problem's initialization problem (its \code{initialization_data},
+see \code{\link[=OverrideInitData]{OverrideInitData()}}) for the initial values and parameters, and
+\code{DefaultInit()} is OrdinaryDiffEq's default: \code{OverrideInit()} when the
+problem has an initialization problem, else \code{CheckInit()}. After an event
+that changes the state of a DAE, \code{OverrideInit()} and \code{DefaultInit()}
+make the algebraic values consistent as \code{BrownFullBasicInit()} does.
+Without \code{initializealg} the solvers use \code{BrownFullBasicInit()}.
 }
 \examples{
 f <- function(du, u, p, t) c(du[1] + u[1], u[2] - 2 * u[1])

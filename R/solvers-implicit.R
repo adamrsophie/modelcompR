@@ -507,7 +507,7 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
 # ratio rr (the characteristic root) exceeds rrcut, and the order is lowered.
 
 .stald_new <- function(enabled = TRUE, rrcut = 0.98, vrrtol = 1e-4, vrrt2 = 5e-4, sqtol = 1e-3,
-                       rrtol = 1e-2, tiny = 1e-90) {
+                       rrtol = 1e-2, tiny = 0x1.04bd984990e6fp-299) {
   st <- new.env(parent = emptyenv())
   st$enabled <- isTRUE(enabled)
   st$rrcut <- rrcut; st$vrrtol <- vrrtol; st$vrrt2 <- vrrt2; st$sqtol <- sqtol
@@ -1094,7 +1094,7 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
 #'   identity mass matrix.
 #' @export
 FBDF <- function(max_order = 5L, stald = TRUE, stald_rrcut = 0.98, stald_vrrtol = 1e-4,
-                 stald_vrrt2 = 5e-4, stald_sqtol = 1e-3, stald_rrtol = 1e-2, stald_tiny = 1e-90,
+                 stald_vrrt2 = 5e-4, stald_sqtol = 1e-3, stald_rrtol = 1e-2, stald_tiny = 0x1.04bd984990e6fp-299,
                  qmax = 10, qsteady_min = 9 / 10, qsteady_max = 2, step_limiter = NULL,
                  time_filter = FALSE, autodiff = NULL) .with_autodiff(autodiff, {
   if (!is.null(step_limiter) && !is.function(step_limiter))

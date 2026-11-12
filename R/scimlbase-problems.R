@@ -78,7 +78,10 @@ SplitFunction <- function(f1, f2, jac = NULL, ...) {
     f1 <- f1$f
   }
   if (inherits(f2, "ODEFunction")) f2 <- f2$f
-  structure(list(f1 = f1, f2 = f2, f = function(u, p, t) f1(u, p, t) + f2(u, p, t), jac1 = jac, ...),
+  # either part may be a SciML operator (the linear part of exponential methods)
+  g1 <- .as_rhs(f1)
+  g2 <- .as_rhs(f2)
+  structure(list(f1 = f1, f2 = f2, f = function(u, p, t) g1(u, p, t) + g2(u, p, t), jac1 = jac, ...),
             class = c("SplitFunction", "ODEFunction", "SciMLFunction"))
 }
 

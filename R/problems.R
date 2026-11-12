@@ -287,6 +287,8 @@ ODEFunction <- function(sys, jac = FALSE, tgrad = FALSE, ...) {
 ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad = FALSE,
                        u0 = NULL, p = NULL, mass_matrix = NULL, check_initialization = TRUE) {
   dots <- list(...)
+  # ODEProblem(L, u0, tspan) for a SciML operator L: u' = L(u, p, t) u
+  if (inherits(sys, "AbstractSciMLOperator")) sys <- .operator_odefunction(sys)
   if (is.function(sys) || inherits(sys, "ODEFunction")) {
     f <- if (inherits(sys, "ODEFunction")) sys else ODEFunction(sys, mass_matrix = mass_matrix)
     if (is.null(u0)) u0 <- op

@@ -64,7 +64,7 @@ CheckUnits <- 4L
     H = .unit(1, kg = 1, m = 2, s = -2, A = -2), L = .unit(1e-3, m = 3),
     min = .unit(60, s = 1), h = .unit(3600, s = 1), hr = .unit(3600, s = 1),
     d = .unit(86400, s = 1), bar = .unit(1e5, kg = 1, m = -1, s = -2),
-    rad = .unit(1), sr = .unit(1), eV = .unit(1.602176634e-19, kg = 1, m = 2, s = -2),
+    rad = .unit(1), sr = .unit(1), eV = .unit(0x1.7a4da290c1653p-63, kg = 1, m = 2, s = -2),
     M = .unit(1000, mol = 1, m = -3))
   u[["\u03A9"]] <- u$Ohm
   u
@@ -72,7 +72,7 @@ CheckUnits <- 4L
 
 .UNIT_PREFIX <- c(Y = 1e24, Z = 1e21, E = 1e18, P = 1e15, T = 1e12, G = 1e9, M = 1e6, k = 1e3,
                   h = 1e2, da = 1e1, d = 1e-1, c = 1e-2, m = 1e-3, u = 1e-6, "\u03BC" = 1e-6,
-                  "\u00B5" = 1e-6, n = 1e-9, p = 1e-12, f = 1e-15, a = 1e-18, z = 1e-21, y = 1e-24)
+                  "\u00B5" = 1e-6, n = 1e-9, p = 1e-12, f = 1e-15, a = 1e-18, z = 1e-21, y = 0x1.357c299a88ea7p-80)
 
 .unit_mul <- function(a, b) structure(list(scale = a$scale * b$scale, dims = a$dims + b$dims),
                                       class = "mtk_unit")

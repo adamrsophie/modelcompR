@@ -71,7 +71,7 @@ if (file.exists("tools/upstream_exports.tsv")) {
     utils::read.delim("tools/upstream_not_applicable.tsv", stringsAsFactors = FALSE) else
     data.frame(name = character(), reason = character())
   # Julia names that are R functions of other packages, or need a suffix
-  up_renames <- c("solve!" = "solve_integrator", "step!" = "step_integrator",
+  up_renames <- c("solve!" = "solve_integrator", "step!" = "step_integrator", "initialize!" = "initialize_callback",
                   "initialize_dae!" = "initialize_dae", "postamble!" = "postamble", "set_ut!" = "set_ut",
                   "save_discretes!" = "save_discretes", "save_discretes_if_enabled!" = "save_discretes_if_enabled",
                   "save_final_discretes!" = "save_final_discretes", "pop_tstop!" = "pop_tstop",
@@ -80,8 +80,12 @@ if (file.exists("tools/upstream_exports.tsv")) {
                   "reeval_internals_due_to_modification!" = "reeval_internals_due_to_modification",
                   "addat!" = "addat", "deleteat!" = "deleteat", "resize_non_user_cache!" = "resize_non_user_cache",
                   "addat_non_user_cache!" = "addat_non_user_cache", "deleteat_non_user_cache!" = "deleteat_non_user_cache")
+  # constructors that exist but raise "not yet ported" count as missing
+  ustub <- if (file.exists("tools/upstream_stubs.tsv"))
+    utils::read.delim("tools/upstream_stubs.tsv", stringsAsFactors = FALSE) else data.frame(name = character())
   ustatus <- vapply(up$name, function(n) {
     if (n %in% una$name) return("not applicable")
+    if (n %in% ustub$name) return("missing (constructor raises)")
     r <- if (!is.na(up_renames[n])) up_renames[[n]] else sub("!$", "", sub("^@", "", n))
     if (r %in% ex || r %in% s3) {
       if (n %in% ual$name) return("alias")
@@ -96,10 +100,10 @@ if (file.exists("tools/upstream_exports.tsv")) {
     st <- uout$status[uout$package == pk]
     cat(sprintf("%-36s %4d names: %4d ported, %3d aliases, %3d not applicable, %4d missing\n", pk, length(st),
                 sum(grepl("^ported|symcompR", st)), sum(st == "alias"), sum(st == "not applicable"),
-                sum(st == "missing")))
+                sum(startsWith(st, "missing"))))
   }
   st <- uout$status
   cat(sprintf("%-36s %4d names: %4d ported, %3d aliases, %3d not applicable, %4d missing\n", "Total", length(st),
               sum(grepl("^ported|symcompR", st)), sum(st == "alias"), sum(st == "not applicable"),
-              sum(st == "missing")))
+              sum(startsWith(st, "missing"))))
 }

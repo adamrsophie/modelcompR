@@ -16,7 +16,9 @@ ContinuousCallback(
   initialize = NULL,
   finalize = NULL,
   rootfind = "left",
-  save_positions = c(TRUE, TRUE)
+  save_positions = c(TRUE, TRUE),
+  dtrelax = 1,
+  maybe_discontinuity = TRUE
 )
 
 VectorContinuousCallback(condition, affect, affect_neg = affect, ...)
@@ -51,6 +53,14 @@ crossing, \code{"right"} just after it, and \code{"none"} (or \code{FALSE}) at t
 of the step.}
 
 \item{save_positions}{Save the state before and after the affect.}
+
+\item{dtrelax}{After a continuous event the next step starts from
+\code{dtrelax} times the step that contained the event (DiffEqBase's
+\verb{apply_callback!}).}
+
+\item{maybe_discontinuity}{Whether the event may introduce a
+discontinuity: only these callbacks take part in the discontinuity
+detection of \code{solve(..., discontinuity_detection = TRUE)}.}
 
 \item{...}{Callbacks.}
 

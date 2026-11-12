@@ -163,7 +163,8 @@ is_dde <- function(sys) isTRUE(.f(sys, "is_dde"))
 #' @export
 DDEFunction <- function(sys, ...) {
   if (is.function(sys))
-    return(structure(list(f = sys, mass_matrix = NULL, sys = NULL), class = c("DDEFunction", "SciMLFunction")))
+    return(structure(list(f = sys, mass_matrix = NULL, sys = NULL, analytic = list(...)$analytic),
+                     class = c("DDEFunction", "SciMLFunction")))
   .need_complete(sys, "DDEFunction")
   rhs <- .ode_rhs_exprs(sys, substitute_observed = FALSE)
   M <- calculate_massmatrix(sys)

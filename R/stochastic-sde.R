@@ -368,7 +368,7 @@ SDEFunction <- function(sys, ..., jac = FALSE, tgrad = FALSE) {
   if (is.function(sys)) {
     dots <- list(...)
     return(structure(list(f = sys, g = dots[[1L]], jac = NULL, tgrad = NULL, mass_matrix = dots$mass_matrix,
-                          sys = NULL, observed = NULL),
+                          sys = NULL, observed = NULL, analytic = dots$analytic),
                      class = c("SDEFunction", "SciMLFunction")))
   }
   .need_complete(sys, "SDEFunction")

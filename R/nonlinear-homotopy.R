@@ -222,6 +222,8 @@ solve.HomotopyProblem <- function(a, b, ...) {
 # solution to l1 with a secant predictor; a failed step halves the
 # increment. `at(lambda)` returns the residual F and Jacobian J there.
 .nl_sweep <- function(at, u0, alg, opts, l0, l1) {
+  # the continuation algorithms of nonlinear-homotopy-extras.R carry their own driver
+  if (is.function(alg$sweep)) return(alg$sweep(at, u0, opts, l0, l1))
   inner <- alg$inner %||% .nl_default_alg(u0, TRUE)
   width <- l1 - l0
   fn <- at(l0)

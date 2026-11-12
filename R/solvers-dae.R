@@ -24,13 +24,22 @@
 #' takes a small implicit Euler step to find consistent values of all
 #' variables. `CheckInit()` only checks the residual and fails with retcode
 #' "InitialFailure" when it is not satisfied; `NoInit()` takes the initial
-#' values as they are, without evaluating the residual. The default is
-#' `BrownFullBasicInit()`.
+#' values as they are, without evaluating the residual. `OverrideInit()`
+#' solves the problem's initialization problem (its `initialization_data`,
+#' see [OverrideInitData()]) for the initial values and parameters, and
+#' `DefaultInit()` is OrdinaryDiffEq's default: `OverrideInit()` when the
+#' problem has an initialization problem, else `CheckInit()`. After an event
+#' that changes the state of a DAE, `OverrideInit()` and `DefaultInit()`
+#' make the algebraic values consistent as `BrownFullBasicInit()` does.
+#' Without `initializealg` the solvers use `BrownFullBasicInit()`.
 #'
 #' @param abstol Tolerance of the nonlinear solve; the integrator's `abstol`
 #'   when `NULL`.
 #' @param initdt Step of `ShampineCollocationInit()`; by default
 #'   `min(t0 / 1000, dtmax / 10)` (or `dtmax / 10` when `t0 = 0`).
+#' @param reltol,nlsolve Relative tolerance and nonlinear solver of the
+#'   initialization solve of `OverrideInit()` (stored; the initialization
+#'   problem is solved with its own algorithm).
 #' @return An initialization algorithm object.
 #' @examples
 #' f <- function(du, u, p, t) c(du[1] + u[1], u[2] - 2 * u[1])
@@ -56,9 +65,28 @@ CheckInit <- function() structure(list(), class = c("CheckInit", "DAEInitializat
 #' @export
 NoInit <- function() structure(list(), class = c("NoInit", "DAEInitializationAlgorithm"))
 
+#' @rdname dae_initialization
+#' @export
+OverrideInit <- function(abstol = NULL, reltol = NULL, nlsolve = NULL)
+  structure(list(abstol = abstol, reltol = reltol, nlsolve = nlsolve),
+            class = c("OverrideInit", "DAEInitializationAlgorithm"))
+
+#' @rdname dae_initialization
+#' @export
+DefaultInit <- function() structure(list(), class = c("DefaultInit", "DAEInitializationAlgorithm"))
+
+# DefaultInit of OrdinaryDiffEqCore's _initialize_dae!
+.resolve_initializealg <- function(alg, prob) {
+  if (!inherits(alg, "DefaultInit")) return(alg)
+  if (has_initializeprob(prob) || has_initializeprob(prob$f)) OverrideInit() else CheckInit()
+}
+
 # Make (u, du) consistent at t. Returns list(ok, u, du, nf).
 .dae_initialize <- function(ctx, t, u, du, alg, dtmax) {
   alg <- alg %||% BrownFullBasicInit()
+  # the initialization problem is solved by the driver; reinitializing after
+  # an event keeps the differential values
+  if (inherits(alg, c("OverrideInit", "DefaultInit"))) alg <- BrownFullBasicInit()
   abstol <- alg$abstol %||% ctx$abstol
   ok <- function(u, du, nf = 0L) list(ok = TRUE, u = u, du = du, nf = nf)
   if (inherits(alg, "NoInit")) return(ok(u, du))
@@ -158,7 +186,7 @@ NoInit <- function() structure(list(), class = c("NoInit", "DAEInitializationAlg
 DAEFunction <- function(sys, jac = FALSE, ...) {
   if (is.function(sys)) {
     J <- if (is.function(jac)) jac else list(...)$jac_fn
-    return(structure(list(f = sys, jac = J, sys = NULL, observed = NULL),
+    return(structure(list(f = sys, jac = J, sys = NULL, observed = NULL, analytic = list(...)$analytic),
                      class = c("DAEFunction", "SciMLFunction")))
   }
   .need_complete(sys, "DAEFunction")

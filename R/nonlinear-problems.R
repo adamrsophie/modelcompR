@@ -842,7 +842,7 @@ print.NonlinearSolution <- function(x, ...) {
       "\n", sep = "")
   cat("u:\n")
   print(.nl_sol_u(x))
-  if (!is.null(env$objective)) cat("Objective: ", format(env$objective), "\n", sep = "")
+  if (!is.null(env$objective)) cat("Objective: ", paste(format(env$objective), collapse = " "), "\n", sep = "")
   else if (length(env$resid)) cat("Residual norm: ", format(sqrt(sum(env$resid^2))), "\n", sep = "")
   invisible(x)
 }

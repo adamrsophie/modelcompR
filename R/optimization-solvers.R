@@ -95,7 +95,7 @@ AugLag <- function(rho0 = 10, gamma = 10, tau = 0.25, ctol = 1e-8, max_outer = 5
   n <- length(x0)
   lo <- lb %||% rep(-Inf, n); hi <- ub %||% rep(Inf, n)
   x0 <- pmin(pmax(x0, lo), hi)
-  big <- 1e100
+  big <- 0x1.249ad2594c37dp+332
   safe <- function(x) {
     v <- f(x)
     if (is.finite(v)) v else big
@@ -241,8 +241,11 @@ solve.OptimizationProblem <- function(a, b, ...) {
   w$f$f <- function(x, p) {
     v <- sgn * as.numeric(fn$f(x, p))
     cnt$f <- cnt$f + 1L
-    if (is.null(cnt$best) || v < cnt$best$v) cnt$best <- list(x = x, v = v)
-    if (is.function(cb) && isTRUE(cb(list(u = x, objective = sgn * v, iter = cnt$f, p = p), sgn * v)))
+    # a vector objective (least squares residuals, root finding) is ranked by
+    # its sum of squares
+    vs <- if (length(v) == 1L) v else sum(v * v)
+    if (is.null(cnt$best) || isTRUE(vs < cnt$best$v)) cnt$best <- list(x = x, v = vs)
+    if (is.function(cb) && isTRUE(cb(list(u = x, objective = sgn * vs, iter = cnt$f, p = p), sgn * v)))
       stop(structure(class = c("opt_callback_stop", "condition"), list(message = "stopped", call = NULL)))
     v
   }
@@ -260,9 +263,14 @@ solve.OptimizationProblem <- function(a, b, ...) {
     alg <- b %||% (if (is.function(fn$cons)) AugLag() else LBFGSB())
     sol <- .opt_solution(w, alg, cnt$best$x, cnt$best$v, "Terminated", NULL)
   }
-  obj <- sgn * (sol$objective %||% 0)
-  stats <- OptimizationStats(iterations = cnt$f, time = proc.time()[["elapsed"]] - start, fevals = cnt$f,
-                             gevals = cnt$g, hevals = cnt$h)
+  # least squares and root finding report a cost that the sense does not flip
+  obj <- if (isTRUE(b$vector_objective)) sol$objective %||% 0 else sgn * (sol$objective %||% 0)
+  # the counts of the ported engines are theirs (Optim counts its cached
+  # evaluations); the others count the calls of the wrapped functions
+  es <- .sol_env(sol)$stats
+  stats <- OptimizationStats(iterations = es$iterations %||% .sol_env(sol)$original$nit %||% cnt$f,
+                             time = proc.time()[["elapsed"]] - start, fevals = es$fevals %||% cnt$f,
+                             gevals = es$gevals %||% cnt$g, hevals = es$hevals %||% cnt$h)
   .opt_set_fields(sol, objective = obj, stats = stats, prob = a)
 }
 
@@ -279,14 +287,33 @@ solve.OptimizationProblem <- function(a, b, ...) {
   cache$sol
 }
 
+# The solver of an algorithm family defined in another file: the hook
+# `.mtk$hooks$opt_solve_<class>(prob, alg, opts)` registered for one of the
+# classes of `alg`.
+.opt_family_hook <- function(alg) {
+  for (cl in class(alg)) {
+    h <- .mtk$hooks[[paste0("opt_solve_", cl)]]
+    if (is.function(h)) return(h)
+  }
+  NULL
+}
+
 .opt_solve_core <- function(a, b, opts) {
   if (inherits(a$f, "MultiObjectiveOptimizationFunction")) return(.opt_solve_multiobjective(a, b, opts))
+  hook <- if (is.null(b)) NULL else .opt_family_hook(b)
+  if (!is.null(hook)) return(hook(a, b, opts))
+  # algorithms of the wrapper packages (OptimizationSciPy, OptimizationPRIMA,
+  # ...) carry their own solve function
+  if (is.function(b$solve) && (isTRUE(b$integer) || !any(a$int %||% FALSE))) return(b$solve(a, b, opts))
   if (any(a$int %||% FALSE) || inherits(b, "BranchAndBound")) {
     if (!is.null(b) && !inherits(b, "BranchAndBound"))
       stop("the problem has integer or binary unknowns, which ", b$name, "() does not handle; use ",
            "BranchAndBound(relaxation = ", b$name, "())", call. = FALSE)
     return(.opt_branch_and_bound(a, b %||% BranchAndBound(), opts))
   }
+  # algorithms that carry their own solver (the Optimisers, Optim, Simple*,
+  # ODE and other ported families) apply their own rules
+  if (is.function(b$solver)) return(b$solver(a, b, opts))
   p <- a$p
   fn <- a$f
   f <- function(x) as.numeric(fn$f(x, p))
@@ -518,11 +545,15 @@ WeightedSumScan <- function(n = 21L, inner = NULL) .opt_alg("WeightedSumScan", p
 
 .opt_solve_multiobjective <- function(a, alg, opts) {
   alg <- alg %||% WeightedSumScan()
-  if (!inherits(alg, c("NSGA2", "WeightedSumScan")))
+  hook <- .opt_family_hook(alg)
+  if (is.null(hook) && !inherits(alg, c("NSGA2", "WeightedSumScan")))
     stop("this is a multiobjective problem: its objective is a vector. Use NSGA2() or WeightedSumScan(), or ",
          "build the problem with `weights` to minimize a weighted sum of the costs.", call. = FALSE)
   if (any(a$int %||% FALSE)) stop("integer unknowns are not supported in multiobjective problems", call. = FALSE)
-  res <- if (inherits(alg, "NSGA2")) .opt_nsga2(a, alg, opts) else .opt_weighted_scan(a, alg, opts)
+  res <- if (!is.null(hook)) hook(a, alg, opts) else if (inherits(alg, "NSGA2")) .opt_nsga2(a, alg, opts) else
+    .opt_weighted_scan(a, alg, opts)
+  # a family hook may return a single point solution (OptimizationBBO)
+  if (inherits(res, "OptimizationSolution")) return(res)
   X <- res$X
   colnames(X) <- names(a$u0)
   Fm <- res$F

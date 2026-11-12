@@ -26,8 +26,10 @@
 # The driver .integrate() handles step size control, saving, tstops and
 # callbacks, and returns an ODESolution.
 
+# mass_matrix follows ... so that an option such as the Krylov dimension m
+# of the exponential methods is not partially matched to it
 .new_alg <- function(name, order, adaptive = TRUE, step, interp = NULL, init = NULL,
-                     stiff = FALSE, mass_matrix = FALSE, ...) {
+                     stiff = FALSE, ..., mass_matrix = FALSE) {
   structure(list(name = name, order = order, adaptive = adaptive, step = step,
                  interp = interp %||% .hermite_interp, init = init %||% .fsal_init,
                  stiff = stiff, mass_matrix = mass_matrix, ...),
@@ -48,6 +50,16 @@ print.ODEAlgorithm <- function(x, ...) {
   f0 <- k[[1L]]; f1 <- k[[2L]]
   (1 - theta) * y0 + theta * y1 +
     theta * (theta - 1) * ((1 - 2 * theta) * (y1 - y0) + (theta - 1) * dt * f0 + theta * dt * f1)
+}
+
+# The in place form (hermite_interpolant!, a @.. broadcast under @muladd):
+# every multiply add is fused element by element. OrdinaryDiffEq evaluates
+# the root function of discontinuity detection in place.
+.hermite_interp_fused <- function(theta, dt, y0, y1, k) {
+  s <- (1 - 2 * theta) * (y1 - y0)
+  s <- .fma((theta - 1) * dt, k[[1L]], s)
+  s <- .fma(theta * dt, k[[2L]], s)
+  .fma(theta * (theta - 1), s, .fma(theta, y1, (1 - theta) * y0))
 }
 
 # ---------------------------------------------------------------------------
@@ -75,18 +87,18 @@ print.ODEAlgorithm <- function(x, ...) {
 NULL
 
 .TSIT5 <- list(
-  c = c(0.161, 0.327, 0.9, 0.9800255409045097, 1, 1),
+  c = c(0.161, 0.327, 0.9, 0x1.f5c5e85edbf1dp-1, 1, 1),
   a = list(c(0.161),
            c(-0.008480655492356989, 0.335480655492357),
            c(2.8971530571054935, -6.359448489975075, 4.3622954328695815),
-           c(5.325864828439257, -11.748883564062828, 7.4955393428898365, -0.09249506636175525),
+           c(5.325864828439257, -11.748883564062828, 7.4955393428898365, -0x1.7adc1b510a9a4p-4),
            c(5.86145544294642, -12.92096931784711, 8.159367898576159, -0.071584973281401, -0.028269050394068383),
-           c(0.09646076681806523, 0.01, 0.4798896504144996, 1.379008574103742, -3.290069515436081, 2.324710524099774)),
-  btilde = c(-0.00178001105222577714, -0.0008164344596567469, 0.007880878010261995,
+           c(0x1.8b1a71ed4a6eep-4, 0.01, 0.4798896504144996, 1.379008574103742, -3.290069515436081, 2.324710524099774)),
+  btilde = c(-0x1.d29e8505f7d7fp-10, -0.0008164344596567469, 0.007880878010261995,
              -0.1447110071732629, 0.5823571654525552, -0.45808210592918697, 0.015151515151515152),
   r = list(c(1.0, -2.763706197274826, 2.9132554618219126, -1.0530884977290216),
            c(0.13169999999999998, -0.2234, 0.1017),
-           c(3.9302962368947516, -5.941033872131505, 2.490627285651253),
+           c(0x1.f713f27487049p+1, -5.941033872131505, 2.490627285651253),
            c(-12.411077166933676, 30.33818863028232, -16.548102889244902),
            c(37.50931341651104, -88.1789048947664, 47.37952196281928),
            c(-27.896526289197286, 65.09189467479366, -34.87065786149661),
@@ -214,7 +226,11 @@ RK4 <- function() {
        qmin = opts$qmin %||% alg$qmin %||% (1 / 5), qmax = opts$qmax %||% alg$qmax %||% 10,
        qmax_first = 10000, gamma = opts$gamma %||% alg$gamma %||% 0.9,
        qsteady_min = alg$qsteady_min %||% 1, qsteady_max = alg$qsteady_max %||% 1,
-       failfactor = opts$failfactor %||% alg$failfactor %||% 2)
+       failfactor = opts$failfactor %||% alg$failfactor %||% 2,
+       # handle_disco_reject! / handle_disco_accept! (R/solvers-disco.R) of the
+       # I, PI, PID and predictive controllers
+       discontinuity_detection = isTRUE(opts$discontinuity_detection) &&
+         (alg$controller %||% "PI") %in% c("I", "PI", "PID", "Predictive"))
 }
 
 # FastPower.fastpower, which the I and PI controllers of OrdinaryDiffEqCore
@@ -439,7 +455,8 @@ solve.ODEProblem <- function(a, b, ...) {
   save_everystep <- opts$save_everystep %||% !length(saveat)
   save_start <- opts$save_start %||% (!length(saveat) || any(abs(saveat - t0) < 1e-14))
   save_end <- opts$save_end %||% (!length(saveat) || any(abs(saveat - tf) < 1e-14))
-  dense <- opts$dense %||% (!length(saveat) && save_everystep)
+  # default_linear_interpolation (VerletLeapfrog): no dense output by default
+  dense <- opts$dense %||% (!length(saveat) && save_everystep && !isTRUE(alg$linear_interpolation))
   tstops <- as.numeric(c(unlist(opts$tstops), unlist(opts$sys_tstops)))
   tstops <- tstops[(tstops - t0) * tdir > 0 & (tstops - tf) * tdir <= 0]
   tstops <- sort(unique(c(tstops, tf)), decreasing = tdir < 0)
@@ -460,7 +477,7 @@ solve.ODEProblem <- function(a, b, ...) {
   if (is_dae) integ$du <- as.numeric(prob$du0)
   M <- prob$f$mass_matrix
   mm <- !is_dae && !.is_identity_mass(M)
-  ctx <- list(f = prob$f$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
+  ctx <- list(f = prob$f$f, fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
               p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac,
               tgrad = prob$f$tgrad, abstol = abstol, reltol = reltol, n = length(integ$u),
               adaptive = adaptive, composite = length(algs) > 1L, dae = is_dae,
@@ -468,7 +485,11 @@ solve.ODEProblem <- function(a, b, ...) {
               differential_vars = if (is_dae) prob$differential_vars else
                 if (mm) colSums(abs(M)) != 0 else NULL,
               dtmin = dtmin, dtmax = dtmax, lazy_nf = new.env(parent = emptyenv()),
-              autodiff = Reduce(function(a, b) a %||% b, lapply(algs, `[[`, "autodiff"), NULL))
+              autodiff = Reduce(function(a, b) a %||% b, lapply(algs, `[[`, "autodiff"), NULL),
+              # the dimension of the position part of a DynamicalODEProblem and
+              # the count of f2 calls (nf2) of the partitioned methods
+              # (R/solvers-symplectic.R)
+              nv = prob$nv, counts = new.env(parent = emptyenv()))
   ctx$lazy_nf$n <- 0L
   if (any(!is.finite(integ$u))) stop("initial values are not finite: ",
                                      paste(names(integ$u)[!is.finite(integ$u)], collapse = ", "), call. = FALSE)
@@ -492,6 +513,7 @@ solve.ODEProblem <- function(a, b, ...) {
     if (ncol(U) == length(prob$u0)) colnames(U) <- names(prob$u0)
     # stages computed only for interpolation (Verner methods)
     stats$nf <- stats$nf + ctx$lazy_nf$n
+    if (!is.null(ctx$counts$nf2)) stats$nf2 <- stats$nf2 + ctx$counts$nf2
     sol <- .new_ode_solution(t = ts, u = U, prob = prob, alg = alg, retcode = retcode,
                              steps = if (dense) steps else NULL, stats = stats, p = integ$p,
                              events = integ$sol_events, dense = dense)
@@ -505,10 +527,26 @@ solve.ODEProblem <- function(a, b, ...) {
     sol
   }
 
+  # OverrideInit (and DefaultInit with an initialization problem): the
+  # initialization problem gives u0 and p
+  ialg <- .resolve_initializealg(opts$initializealg, prob)
+  if (inherits(ialg, "OverrideInit")) {
+    iv <- get_initial_values(prob)
+    if (!isTRUE(iv$success)) {
+      warning("the initialization problem was not solved", call. = FALSE)
+      early <- finish("InitialFailure", t0, list(integ$u), list())
+      done <- TRUE
+    } else {
+      integ$u[] <- as.numeric(iv$u0)
+      integ$p <- iv$p
+      ctx$p <- iv$p
+    }
+    ialg <- NoInit()
+  }
   # consistent algebraic values (BrownFullBasicInit) for mass matrix and
   # fully implicit DAEs, R/solvers-dae.R
-  if (mm || is_dae) {
-    ini <- .dae_initialize(ctx, t0, integ$u, integ$du, opts$initializealg, dtmax)
+  if (!done && (mm || is_dae)) {
+    ini <- .dae_initialize(ctx, t0, integ$u, integ$du, ialg, dtmax)
     add_stats(ini)
     if (!ini$ok) {
       warning("could not find consistent initial values for the algebraic variables", call. = FALSE)
@@ -565,10 +603,15 @@ solve.ODEProblem <- function(a, b, ...) {
   }
   dt <- opts$dt %||% NULL
   if (is.null(dt)) {
-    if (!adaptive) stop(algs[[cur]]$name, "() is a fixed step method; give dt", call. = FALSE)
-    dt <- start_dt(algs[[cur]], caches[[cur]])
-    # auto_dt_reset! counts the two evaluations of the initial step estimate
-    stats$nf <- stats$nf + 2L
+    if (!adaptive && isFALSE(algs[[cur]]$dt_required)) {
+      # dt_required(alg) = false: the step reaches the next tstop
+      dt <- abs(tf - t0)
+    } else {
+      if (!adaptive) stop(algs[[cur]]$name, "() is a fixed step method; give dt", call. = FALSE)
+      dt <- start_dt(algs[[cur]], caches[[cur]])
+      # auto_dt_reset! counts the two evaluations of the initial step estimate
+      stats$nf <- stats$nf + 2L
+    }
   }
   dt <- abs(dt)
   next_save <- 1L
@@ -577,6 +620,10 @@ solve.ODEProblem <- function(a, b, ...) {
   success_iter <- 0L
   accept_prev <- TRUE
   EEst_prev <- 1
+  # discontinuity detection: is_disco_step, disco_checkpoint
+  is_disco_step <- FALSE
+  disco_checkpoint <- 0
+  disco_attempt <- NULL
   eigen_est <- 1
   stop_idx <- 1L
   alg_choice <- if (is.null(AS)) NULL else integer()
@@ -602,7 +649,7 @@ solve.ODEProblem <- function(a, b, ...) {
 # state environment I (set up by .INTEG_INIT), so these names are bindings
 # of I, not globals.
 utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
-                         "dense", "dtmax", "dtmin_at", "finish", "is_dae", "maxiters", "mm", "opts", "prob",
+                         "dense", "dtmax", "dtmin", "dtmin_at", "finish", "is_dae", "maxiters", "mm", "opts", "prob",
                          "push_save", "reltol", "disc_next", "add_init", "save_end", "save_everystep",
                          "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us"))
 
@@ -655,6 +702,10 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     while (stop_idx <= length(tstops) && (tstops[stop_idx] - integ$t) * tdir <= 1e-14 * max(1, abs(integ$t)))
       stop_idx <- stop_idx + 1L
     next_stop <- tstops[min(stop_idx, length(tstops))]
+    # a method that chooses before each step (StochasticCompositeAlgorithm)
+    # sees the step size limited by dtmax and the next stop and may change it
+    if (!is.null(a$pre_step))
+      dt <- a$pre_step(caches[[cur]], iter, min(dt, dtmax, abs(next_stop - integ$t)), eigen_est, dt, integ)
     hit_stop <- FALSE
     dt <- min(dt, dtmax)
     dtcur <- dt
@@ -685,7 +736,9 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         done <- TRUE
         break
       }
-      stats$nreject <- stats$nreject + 1L
+      # res$nreject = 0L: not counted as a rejection (force_stepfail of the
+      # Nordsieck methods)
+      stats$nreject <- stats$nreject + (res$nreject %||% 1L)
       accept_prev <- FALSE
       # a method that finishes the failed step keeps its error estimate
       if (!is.null(res$EEst)) EEst_prev <- res$EEst
@@ -709,7 +762,18 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     if (adaptive && .ctrl_rejects(co, css[[cur]], EEst)) {
       stats$nreject <- stats$nreject + 1L
       accept_prev <- FALSE
-      dt <- .ctrl_reject(co, css[[cur]], dtcur, EEst, a, caches[[cur]])
+      ddt <- -1
+      if (co$discontinuity_detection) {
+        # handle_disco_reject!: retry just before the first callback root
+        disco_attempt <- list(t0 = integ$t, dt = tdir * dtcur, y0 = integ$u, y1 = res$u, k = res$k,
+                              interp = a$interp)
+        fd <- .find_discontinuity(cbs, integ, disco_attempt)
+        disco_attempt <- NULL
+        is_disco_step <- fd$found
+        if (fd$found) disco_checkpoint <- integ$t + tdir * dtcur
+        ddt <- .disco_dt(fd$theta, dtcur)
+      }
+      dt <- if (ddt > 0) ddt else .ctrl_reject(co, css[[cur]], dtcur, EEst, a, caches[[cur]])
       if (!is.null(a$on_reject)) a$on_reject(caches[[cur]])
       if (dt <= dtmin_at(integ$t)) {
         retcode <- "DtLessThanMin"
@@ -729,6 +793,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     stats$naccept <- stats$naccept + 1L
     success_iter <- success_iter + 1L
     after_reject <- !accept_prev
+    # integrator.dt after the accepted step
+    dt_int <- if (hit_stop && after_reject) max(dt, dtcur) else dtcur
     accept_prev <- TRUE
     if (!is.null(AS)) alg_choice <- c(alg_choice, cur)
     if (adaptive) {
@@ -736,10 +802,16 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       # only after a rejected step: after an accepted step OrdinaryDiffEq
       # shortens dt twice (apply_step! and loopheader!), so the dt it
       # restores is the shortened one
-      acc <- .ctrl_accept(co, css[[cur]], qq$q, EEst, if (hit_stop && after_reject) max(dt, dtcur) else dtcur,
+      acc <- .ctrl_accept(co, css[[cur]], qq$q, EEst, dt_int,
                           a, caches[[cur]])
       css[[cur]] <- acc$cs
       dtnew <- acc$dt
+      if (co$discontinuity_detection && is_disco_step) {
+        # handle_disco_accept!: at most a quarter of the way to the end of
+        # the rejected step
+        is_disco_step <- FALSE
+        dtnew <- min(tdir * (disco_checkpoint - (if (hit_stop) next_stop else integ$t + tdir * dtcur)) / 4, dtnew)
+      }
       # dtnew_modification: the largest stable step of stabilized methods
       if (!is.null(a$dtnew_mod)) dtnew <- a$dtnew_mod(dtnew, eigen_est)
     } else dtnew <- dt
@@ -840,7 +912,14 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       integ$u_modified <- FALSE
       # the step size carries over the event (as in OrdinaryDiffEq); the
       # caches, the controller history and multistep histories restart
-      if (adaptive) dt <- min(abs(dtnew), dtmax)
+      # a continuous event proposes dtrelax times the step (set_proposed_dt!
+      # in DiffEqBase's apply_callback!)
+      if (adaptive) dt <- if (!is.null(ev$dtrelax)) max(dtmin, ev$dtrelax * dt_int) else min(abs(dtnew), dtmax)
+      if (co$discontinuity_detection && isTRUE(ev$maybe_disco)) {
+        # reinit_controller! after an event that may be a discontinuity
+        css[[cur]] <- utils::modifyList(css[[cur]], list(q11 = 1, errold = 1e-4, err = c(1, 1, 1), dt_factor = 1,
+                                                         dtacc = 1, erracc = 1, qold = 1))
+      }
       break
     }
     dt <- min(abs(dtnew), dtmax)

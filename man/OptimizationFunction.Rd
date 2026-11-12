@@ -24,6 +24,7 @@ MultiObjectiveOptimizationFunction(
   cons_j = FALSE,
   cons_h = FALSE,
   weights = NULL,
+  cons = NULL,
   ...
 )
 

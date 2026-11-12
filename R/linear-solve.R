@@ -91,7 +91,8 @@ print.LinearAlgorithm <- function(x, ...) {
 #' verbosity settings.
 #'
 #' @param method,fact,f,P,A,U,C,V Arguments as described above.
-#' @param issquare,condition Operator assumptions.
+#' @param issquare,condition,nonstructural_zeros Operator assumptions
+#'   (`nonstructural_zeros` is a [NonstructuralZeros] value).
 #' @param level Verbosity level.
 #' @param u,dgdu A solution and the gradient of a loss with respect to it.
 #' @param ... Options.
@@ -403,8 +404,10 @@ OperatorCondition <- list(IllConditioned = "IllConditioned", VeryIllConditioned 
 
 #' @rdname linear_solvers
 #' @export
-OperatorAssumptions <- function(issquare = NULL, condition = OperatorCondition$IllConditioned)
-  structure(list(issquare = issquare, condition = condition), class = "OperatorAssumptions")
+OperatorAssumptions <- function(issquare = NULL, condition = OperatorCondition$IllConditioned,
+                                nonstructural_zeros = NonstructuralZeros$Auto)
+  structure(list(issquare = issquare, condition = condition, nonstructural_zeros = nonstructural_zeros),
+            class = "OperatorAssumptions")
 
 #' @rdname linear_solvers
 #' @export
@@ -595,6 +598,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     full <- A$A + A$U %*% A$C %*% t(A$V)
     return(list(u = u, resid = as.numeric(full %*% u - b), iters = 1L, alg = alg %||% LUFactorization()))
   }
+  A <- .lin_prepare_A(A, opts, cache)
   if (!is.matrix(A) && !is.function(A)) A <- matrix(A, nrow = length(b))
   alg <- alg %||% .lin_default(A, opts$assumptions %||% OperatorAssumptions())
   if (identical(alg$method, "function")) {
@@ -602,7 +606,9 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     return(list(u = u, resid = as.numeric(A %*% u - b), iters = 1L, alg = alg))
   }
   if (identical(alg$method, "krylov")) {
-    r <- .krylov(A, b, alg$krylov, utils::modifyList(alg[setdiff(names(alg), c("name", "method", "krylov"))], opts))
+    kopts <- utils::modifyList(alg[setdiff(names(alg), c("name", "method", "krylov"))], opts)
+    r <- .krylov(A, b, alg$krylov, .lin_warm_start(alg$warm_start, A, b, cache$u_prev, kopts))
+    cache$u_prev <- r$u
     return(c(r, list(alg = alg)))
   }
   u <- .lin_direct(A, b, alg, cache)

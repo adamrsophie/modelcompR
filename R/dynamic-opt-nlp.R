@@ -151,8 +151,8 @@
   }
   gmax <- max(abs(e1$gf), 0)
   sf <- if (gmax > 100) 100 / gmax else 1
-  sE <- pmin(1, 100 / pmax(rowmax(e1$JE, nE), 1e-300))
-  sI <- pmin(1, 100 / pmax(rowmax(e1$JI, nI), 1e-300))
+  sE <- pmin(1, 100 / pmax(rowmax(e1$JE, nE), 0x1.56e1fc2f8f359p-997))
+  sI <- pmin(1, 100 / pmax(rowmax(e1$JI, nI), 0x1.56e1fc2f8f359p-997))
   sev <- function(z, level, lamE = NULL, lamI = NULL) {
     e <- evalf(z, level, if (!is.null(lamE)) lamE * sE, if (!is.null(lamI)) lamI * sI, sf)
     e$f <- sf * e$f; e$cE <- sE * e$cE; e$cI <- sI * e$cI

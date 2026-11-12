@@ -22,19 +22,27 @@ extract <- function(file, fname) {
   body <- body[!grepl("^\\s*#", body)]
   m <- regmatches(body, regexec("^\\s*(\\w+)\\s*=\\s*convert\\((T|T2),\\s*(.+)\\)\\s*$", body))
   m <- m[lengths(m) > 0L]
-  vals <- vapply(m, function(x) {
-    # only numeric literals and arithmetic reach eval (checked by the regex)
-    v <- gsub("//", "/", x[4L], fixed = TRUE)
-    stopifnot(grepl("^[-+0-9.eE/ ()]+$", v))
-    eval(parse(text = v), baseenv())
-  }, 0)
-  names(vals) <- vapply(m, `[`, "", 2L)
-  stopifnot(!anyDuplicated(names(vals)))
-  vals
+  # the expressions (numeric literals and exact rationals a // b) are
+  # evaluated by Julia, which rounds them correctly; R's parser misrounds
+  # some 17 digit literals and has no exact rationals
+  exprs <- vapply(m, `[`, "", 4L)
+  stopifnot(all(grepl("^[-+0-9.eE/ ()]+$", exprs)))
+  names(exprs) <- vapply(m, `[`, "", 2L)
+  stopifnot(!anyDuplicated(names(exprs)))
+  exprs
+}
+
+# repr of convert(Float64, expr) for every expression, in one Julia run
+julia_values <- function(exprs) {
+  jl <- tempfile(fileext = ".jl")
+  writeLines(paste0("println(repr(convert(Float64, ", exprs, ")))"), jl)
+  out <- system2("julia", c("--startup-file=no", jl), stdout = TRUE)
+  stopifnot(length(out) == length(exprs))
+  stats::setNames(out, names(exprs))
 }
 
 fmt <- function(v, name) {
-  ent <- sprintf("  %s = %s", names(v), formatC(v, digits = 17, format = "g"))
+  ent <- sprintf("  %s = %s", names(v), ifelse(as.numeric(v) == 0, "0", v))
   paste0(name, " <- c(\n", paste(ent, collapse = ",\n"), "\n)\n")
 }
 
@@ -70,6 +78,6 @@ src <- c(
   "# from that commit, or update this line with the new one).",
   "# Names are the Julia field names. Do not edit by hand.",
   "")
-for (tb in tabs) src <- c(src, fmt(extract(tb[[2]], tb[[3]]), tb[[1]]))
+for (tb in tabs) src <- c(src, fmt(julia_values(extract(tb[[2]], tb[[3]])), tb[[1]]))
 writeLines(src, out_file)
-cat("wrote", out_file, "\n")
+cat("wrote", out_file, "; now run python3 tools/exact_literals.py\n")

@@ -451,6 +451,7 @@ reorder_dimension_by_tunables <- function(sys, arr, syms, dim = 1L) {
 #' @export
 OptimizationFunction <- function(sys, grad = FALSE, hess = FALSE, cons_j = FALSE, cons_h = FALSE,
                                  weights = NULL, cons = NULL, ...) {
+  if (inherits(sys, "AbstractNLPModel")) return(.nlp_optimization_function(sys, ...))
   if (is.function(sys)) {
     return(structure(list(f = sys, grad = if (is.function(grad)) grad, hess = if (is.function(hess)) hess,
                           cons = cons, cons_j = if (is.function(cons_j)) cons_j,
@@ -476,7 +477,13 @@ OptimizationFunction <- function(sys, grad = FALSE, hess = FALSE, cons_j = FALSE
 #' @rdname OptimizationFunction
 #' @export
 MultiObjectiveOptimizationFunction <- function(sys, jac = FALSE, hess = FALSE, cons_j = FALSE,
-                                               cons_h = FALSE, weights = NULL, ...) {
+                                               cons_h = FALSE, weights = NULL, cons = NULL, ...) {
+  if (is.function(sys)) {
+    return(structure(list(f = sys, jac = if (is.function(jac)) jac, hess = if (is.function(hess)) hess,
+                          cons = cons, cons_j = if (is.function(cons_j)) cons_j,
+                          cons_h = if (is.function(cons_h)) cons_h, sys = NULL),
+                     class = c("MultiObjectiveOptimizationFunction", "OptimizationFunction", "SciMLFunction")))
+  }
   sys <- .opt_system(sys)
   .opt_check_system(sys, "MultiObjectiveOptimizationFunction")
   if (!is.null(weights))
@@ -501,6 +508,7 @@ OptimizationProblem <- function(sys, op = list(), ..., lb = NULL, ub = NULL, mul
                                 grad = TRUE, hess = FALSE, cons_j = TRUE, cons_h = FALSE, weights = NULL,
                                 u0 = NULL, p = NULL, cons = NULL, lcons = NULL, ucons = NULL,
                                 guesses = list(), missing_guess_value = NULL, sense = MinSense) {
+  if (inherits(sys, "AbstractNLPModel")) return(.nlp_optimization_problem(sys, ...))
   dots <- list(...)
   if (!inherits(sense, "ObjSense")) stop("`sense` must be MinSense or MaxSense", call. = FALSE)
   if (inherits(sys, "OptimizationFunction") && !is.null(sys$sys)) {

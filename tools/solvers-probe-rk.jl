@@ -44,14 +44,22 @@ function probe(alg)
     linear_est = true
     if SciMLBase.isadaptive(alg)
         # EEst = internalnorm(atmp) with atmp = dt * sum(btilde_i k_i) when
-        # abstol = 1, reltol = 0; a shift keeps the norm positive
-        est(w) = begin
+        # abstol = 1, reltol = 0. The norm must be positive: one run reads
+        # the magnitude |sum(w u)| exactly, a second one its sign (EEst 1 or
+        # 2), so every btilde_i is exact
+        run(nrm) = begin
             empty!(pts); empty!(calls)
             ig = init(prob, alg; dt = 1.0, adaptive = true, abstol = 1.0, reltol = 0.0, dtmin = 1.0,
                       force_dtmin = true, dense = false, save_everystep = false,
-                      internalnorm = (u, t) -> u isa AbstractArray ? sum(w[1:length(u)] .* u) + 10.0 : abs(u))
+                      internalnorm = (u, t) -> u isa AbstractArray ? nrm(u) : abs(u))
             step!(ig)
-            OrdinaryDiffEqCore.get_EEst(ig) - 10.0
+            OrdinaryDiffEqCore.get_EEst(ig)
+        end
+        est(w) = begin
+            ws(u) = sum(w[1:length(u)] .* u)
+            m = run(u -> abs(ws(u)))
+            sg = run(u -> ws(u) < 0 ? 2.0 : 1.0)
+            sg == 2.0 ? -m : m
         end
         btilde = [est(Float64.(1:N .== k)) for k in 1:s]
         w = collect(range(0.3, 1.7; length = N))

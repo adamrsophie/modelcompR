@@ -610,7 +610,7 @@ SimpleHalley <- function(autodiff = NULL) {
     for (it in seq_len(maxiters)) {
       Jx <- .nl_jacobian(F, J, x, fx)
       aa <- .nl_lstsq(Jx, fx)
-      h <- .Machine$double.eps^(1 / 4) * max(1, sqrt(sum(x^2))) / max(sqrt(sum(aa^2)), 1e-300)
+      h <- .Machine$double.eps^(1 / 4) * max(1, sqrt(sum(x^2))) / max(sqrt(sum(aa^2)), 0x1.56e1fc2f8f359p-997)
       Haa <- (F(x + h * aa) - 2 * fx + F(x - h * aa)) / h^2
       bb <- .nl_lstsq(Jx, Haa)
       cc <- aa * aa / (aa - bb / 2)

@@ -124,40 +124,63 @@
   c(v, stats::setNames(w, sub("^a09", "b", names(w))))
 }
 
-# Stages from..to of an explicit tableau, given the earlier columns of K.
+# The sum of w[j] * K[, j] over the nonzero weights, term by term in stage
+# order. OrdinaryDiffEq writes these sums out (a1 * k1 + a3 * k3 + ...) and
+# its out of place muladd on vectors does not fuse, whereas R's BLAS (%*%)
+# fuses multiply and add; the plain sum gives Julia's bits.
+.lincomb <- function(K, w, idx = which(w != 0)) {
+  if (!length(idx)) return(numeric(nrow(K)))
+  acc <- K[, idx[1L]] * w[idx[1L]]
+  for (j in idx[-1L]) acc <- acc + K[, j] * w[j]
+  acc
+}
+
+# The input of stage i: uprev + (dt * a21) * k1 for the second stage, else
+# uprev + dt * (sum of a_ij k_j), as the Verner perform_step! methods.
+.rk_stage_input <- function(tab, K, i, u, dt) {
+  nz <- tab$rows[[i]]
+  if (i == 2L && identical(nz, 1L)) return(u + (dt * tab$A[2L, 1L]) * K[, 1L])
+  u + dt * .lincomb(K, tab$A[i, ], nz)
+}
+
+# Stages from..to of an explicit tableau, given the earlier columns of K;
+# the stage times t + c dt are muladd (fused) on scalars.
 .rk_stages <- function(tab, K, from, to, f, p, t, u, dt) {
-  for (i in from:to) {
-    nz <- which(tab$A[i, seq_len(i - 1L)] != 0)
-    g <- u + dt * as.numeric(K[, nz, drop = FALSE] %*% tab$A[i, nz])
-    K[, i] <- f(g, p, t + tab$c[i] * dt)
-  }
+  for (i in from:to) K[, i] <- f(.rk_stage_input(tab, K, i, u, dt), p, .fma(tab$c[i], dt, t))
   K
 }
 
-.verner_step <- function(tab) {
+.verner_step <- function(tab, fsal = FALSE) {
   force(tab)
+  tab$rows <- lapply(seq_len(tab$nstage), function(i) which(tab$A[i, seq_len(i - 1L)] != 0))
+  ib <- which(tab$b[seq_len(tab$nmain)] != 0)
+  ibt <- which(tab$btilde[seq_len(tab$nmain)] != 0)
   function(ctx, t, u, dt, cache) {
     f <- ctx$f; p <- ctx$p
     nm <- tab$nmain
     K <- matrix(0, length(u), tab$nstage)
-    K[, 1L] <- f(u, p, t)
+    # Vern6 is FSAL: its first stage is the last stage of the previous step
+    K[, 1L] <- if (fsal && !is.null(cache$fsal)) cache$fsal else f(u, p, t)
     K <- .rk_stages(tab, K, 2L, nm, f, p, t, u, dt)
-    unew <- u + dt * as.numeric(K[, 1:nm] %*% tab$b[1:nm])
-    err <- dt * as.numeric(K[, 1:nm] %*% tab$btilde[1:nm])
+    unew <- u + dt * .lincomb(K, tab$b, ib)
+    err <- dt * .lincomb(K, tab$btilde, ibt)
     eig <- NULL
-    if (isTRUE(ctx$composite)) {
-      gl <- function(i) u + dt * as.numeric(K[, seq_len(i - 1L)] %*% tab$A[i, seq_len(i - 1L)])
-      eig <- .eigen_est(K[, nm] - K[, nm - 1L], gl(nm) - gl(nm - 1L))
-    }
+    if (isTRUE(ctx$composite))
+      eig <- .eigen_est(K[, nm] - K[, nm - 1L], .rk_stage_input(tab, K, nm, u, dt) - .rk_stage_input(tab, K, nm - 1L, u, dt))
     # the extra interpolation stages are computed on first use (lazy = TRUE)
     lazy <- new.env(parent = emptyenv())
     lazy$K <- K
     lazy$done <- FALSE
     lazy$args <- list(f = f, p = p, t = t, u = u, dt = dt, counter = ctx$lazy_nf)
-    list(u = unew, err = err, k = list(tab = tab, lazy = lazy), cache = list(), nf = nm, eigen_est = eig)
+    list(u = unew, err = err, k = list(tab = tab, lazy = lazy),
+         cache = if (fsal) list(fsal = K[, nm]) else list(), nf = if (fsal) nm - 1L else nm, eigen_est = eig)
   }
 }
 
+# The dense output: the weight of stage 1 is theta times a polynomial with
+# the coefficients of the powers 1 to p, the others theta^2 times one from
+# power 2 (@evalpoly: Horner with fused muladd), then
+# y0 + dt * (sum of k_j b_j(theta)) term by term.
 .verner_interp <- function(theta, dt, y0, y1, k) {
   tab <- k$tab
   lz <- k$lazy
@@ -167,11 +190,21 @@
     lz$done <- TRUE
     .count_lazy_nf(a$counter, tab$nstage - tab$nmain)
   }
-  w <- as.numeric(tab$R %*% theta^(1:9))
-  y0 + dt * as.numeric(lz$K %*% w)
+  th2 <- theta * theta
+  acc <- NULL
+  for (j in which(rowSums(tab$R != 0) > 0)) {
+    m <- if (j == 1L) 1L else 2L
+    pmax <- max(which(tab$R[j, ] != 0))
+    h <- tab$R[j, pmax]
+    if (pmax > m) for (q in (pmax - 1L):m) h <- .fma(theta, h, tab$R[j, q])
+    term <- lz$K[, j] * ((if (m == 1L) theta else th2) * h)
+    acc <- if (is.null(acc)) term else acc + term
+  }
+  y0 + dt * acc
 }
 
-.verner_init <- function(ctx, t, u) list()
+# Vern7, Vern8 and Vern9 evaluate nothing in initialize! (no FSAL).
+.verner_init <- function(ctx, t, u) list(nf0 = 0L)
 
 # The extra stages count as function evaluations: during the solve they are
 # added to stats$nf when the solution is built, afterwards to the
@@ -208,8 +241,8 @@ Vern7 <- function() {
 #' @rdname ode_algorithms
 #' @export
 Vern6 <- function() {
-  .new_alg("Vern6", 6L, step = .verner_step(.verner_tab("Vern6")), interp = .verner_interp,
-           init = .verner_init, stability_size = 4.8553)
+  .new_alg("Vern6", 6L, step = .verner_step(.verner_tab("Vern6"), fsal = TRUE), interp = .verner_interp,
+           init = function(ctx, t, u) list(fsal = ctx$f(u, ctx$p, t)), stability_size = 4.8553)
 }
 
 #' @rdname ode_algorithms

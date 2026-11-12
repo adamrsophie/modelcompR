@@ -24,21 +24,21 @@
 # The noise of one solve: a Wiener process by default, or the process `proc`
 # (see noise_processes) with its increment distribution and bridge, or a
 # path noise (grid, function, wrapper, tree) whose increments are fixed.
-.noise_new <- function(t0, m, needs_dZ, proc = NULL) {
+.noise_new <- function(t0, m, needs_dZ, proc = NULL, mz = m) {
   ns <- new.env(parent = emptyenv())
   ns$m <- m
   ns$needs_dZ <- needs_dZ
   ns$stack <- list()
   ns$pending <- NULL
   ns$W <- numeric(m)
-  ns$Z <- if (needs_dZ) numeric(m)
+  ns$Z <- if (needs_dZ) numeric(mz)
   if (!is.null(proc)) {
     pe <- .np_env(proc)
     ns$proc <- proc
     ns$pe <- pe
     ns$kind <- pe$kind
     ns$W <- pe$curW
-    ns$Z <- if (needs_dZ) pe$curZ %||% numeric(length(pe$curW))
+    ns$Z <- if (needs_dZ) pe$curZ %||% numeric(if (mz == m) length(pe$curW) else mz)
     if (pe$kind == "process") {
       ns$stack <- pe$S1
       ns$rswm0 <- identical(pe$rswm$adaptivealg, "RSwM0")
@@ -69,7 +69,7 @@
 
 # A fresh increment over h from the value W (the distribution of the process).
 .noise_fresh <- function(ns, W, h, t) {
-  if (is.null(ns$pe)) return(stats::rnorm(ns$m, 0, sqrt(h)))
+  if (is.null(ns$pe)) return(stats::rnorm(length(W), 0, sqrt(h)))
   old <- ns$pe$curW
   ns$pe$curW <- W
   on.exit(ns$pe$curW <- old)
@@ -83,7 +83,7 @@
   if (is.null(ns$pe)) {
     sd <- sqrt(s * (e$h - s) / e$h)
     w1 <- stats::rnorm(ns$m, e$dW * frac, sd)
-    z1 <- if (ns$needs_dZ) stats::rnorm(ns$m, e$dZ * frac, sd) else NULL
+    z1 <- if (ns$needs_dZ) stats::rnorm(length(e$dZ), e$dZ * frac, sd) else NULL
   } else {
     if (is.null(ns$pe$bridge)) stop("this noise process has no bridge, so it cannot be split", call. = FALSE)
     w1 <- .np_call_bridge(ns$pe, e$dW, W0, e$dW, frac, e$h, ns$u, ns$p, t)
@@ -133,38 +133,47 @@
 }
 
 # Noise increments over [t, t + h], reusing stored future increments; W0 is
-# the value at t.
+# the value at t. The pieces the increments are made of (stored ones,
+# bridge splits and fresh draws, in time order) stay in ns$pieces.
 .noise_take <- function(ns, t, h, u = NULL, p = NULL) {
   ns$u <- u; ns$p <- p
   .noise_settle(ns, t)
+  ns$pieces <- list()
   if (identical(ns$kind, "path")) {
     inc <- .noise_path_inc(ns, t, h)
     ns$pending <- list(t = t, h = h, dW = inc$dW, dZ = inc$dZ)
     return(list(dW = inc$dW, dZ = inc$dZ, W0 = ns$W))
   }
   need <- h
+  mz <- length(ns$Z)
   dW <- numeric(ns$m)
-  dZ <- if (ns$needs_dZ) numeric(ns$m) else NULL
+  dZ <- if (ns$needs_dZ) numeric(mz) else NULL
   tol <- 1e-10 * abs(h)
   while (need > tol && length(ns$stack)) {
     e <- ns$stack[[1L]]
     if (e$h <= need + tol) {
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(e$h))
       dW <- dW + e$dW
-      if (ns$needs_dZ) dZ <- dZ + (e$dZ %||% stats::rnorm(ns$m, 0, sqrt(e$h)))
+      if (ns$needs_dZ) dZ <- dZ + e$dZ
       need <- need - e$h
       ns$stack <- ns$stack[-1L]
+      ns$pieces[[length(ns$pieces) + 1L]] <- e[c("h", "dW", "dZ")]
     } else {
-      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(ns$m, 0, sqrt(e$h))
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(e$h))
       sp <- .noise_split(ns, e, need, W0 = ns$W + dW, Z0 = if (ns$needs_dZ) ns$Z + dZ, t = t)
       dW <- dW + sp$first$dW
       if (ns$needs_dZ) dZ <- dZ + sp$first$dZ
       ns$stack[[1L]] <- sp$rest
+      ns$pieces[[length(ns$pieces) + 1L]] <- sp$first
       need <- 0
     }
   }
   if (need > tol) {
-    dW <- dW + .noise_fresh(ns, ns$W + dW, need, t)
-    if (ns$needs_dZ) dZ <- dZ + .noise_fresh(ns, ns$Z + dZ, need, t)
+    w1 <- .noise_fresh(ns, ns$W + dW, need, t)
+    z1 <- if (ns$needs_dZ) .noise_fresh(ns, ns$Z + dZ, need, t)
+    dW <- dW + w1
+    if (ns$needs_dZ) dZ <- dZ + z1
+    ns$pieces[[length(ns$pieces) + 1L]] <- list(h = need, dW = w1, dZ = z1)
   }
   ns$pending <- list(t = t, h = h, dW = dW, dZ = dZ)
   list(dW = dW, dZ = dZ, W0 = ns$W)
@@ -345,14 +354,14 @@ SRIW1 <- function() {
   a121 = 0.26204282091330466, a131 = 0.20903646383505375, a132 = -0.1502377115150361,
   a141 = 0.05836595312746999, a142 = 0.6149440396332373, a143 = 0.08535117634046772,
   b021 = -0.21641093549612528, b031 = 1.5336352863679572, b032 = 0.26066223492647056,
-  b041 = -1.0536037558179159, b042 = 1.7015284721089472, b043 = -0.20725685784180017,
+  b041 = -0x1.0db8f9ca2e439p+0, b042 = 1.7015284721089472, b043 = -0x1.a87648926b039p-3,
   b121 = -0.5119011827621657, b131 = 2.67767339866713, b132 = -4.9395031322250995,
   b141 = 0.15580956238299215, b142 = 3.2361551006624674, b143 = -1.4223118283355949,
   a1 = 1.140099274172029, a2 = -0.6401334255743456, a3 = 0.4736296532772559, a4 = 0.026404498125060714,
   c02 = -0.04199224421316468, c03 = 0.7898405466170333, c04 = 3.7504010171562823,
   c11 = 0.0, c12 = 0.26204282091330466, c13 = 0.05879875232001766, c14 = 0.758661169101175,
   beta11 = -1.8453464565104432, beta12 = 2.688764531100726, beta13 = -0.2523866501071323,
-  beta14 = 0.40896857551684956, beta21 = 0.4969658141589478, beta22 = -0.5771202869753592,
+  beta14 = 0x1.a2c8a883bf0d9p-2, beta21 = 0.4969658141589478, beta22 = -0.5771202869753592,
   beta23 = -0.12919702470322217, beta24 = 0.2093514975196336, beta31 = 2.8453464565104425,
   beta32 = -2.688764531100725, beta33 = 0.2523866501071322, beta34 = -0.40896857551684945,
   beta41 = 0.11522663875443433, beta42 = -0.57877086147738, beta43 = 0.2857851028163886,
@@ -392,7 +401,8 @@ SOSRI <- function()
     dW * (S$beta11 * g1 + S$beta12 * g2 + S$beta13 * g3 + S$beta14 * g4) +
     chi1 * (S$beta21 * g1 + S$beta22 * g2 + S$beta23 * g3 + S$beta24 * g4)
   E1 <- dt * (k1 + k2 + k3 + k4)
-  list(u = unew, err = delta * E1 + E2, nf = 4L)
+  # the stiffness estimate a composite led by SOSRI2 reads (eigen_est)
+  list(u = unew, err = delta * E1 + E2, nf = 4L, eigen_sri = .rms(k4 - k3) / .rms(H03 - H02))
 }
 
 #' @rdname sde_algorithms
@@ -428,7 +438,7 @@ LambaEulerHeun <- function() {
                beta21 = 0.4237535769069274, beta22 = 0.6010381474428539, beta23 = -1.0247917243497813,
                a21 = 0.6923962376159507, a31 = -3.1609142252828395, a32 = 4.1609142252828395,
                b21 = 1.3371632704399763, b31 = 1.442371048468624, b32 = 1.8632741501139225)
-.SOSRA2 <- list(a1 = 0.4999999999999998, a2 = -0.9683897375354181, a3 = 1.4683897375354185,
+.SOSRA2 <- list(a1 = 0.4999999999999998, a2 = -0x1.efd0c798fe483p-1, a3 = 1.4683897375354185,
                 c02 = 1, c03 = 1, c11 = 0, c12 = 1, c13 = 1,
                 beta11 = 0, beta12 = 0.92438032145683, beta13 = 0.07561967854316998,
                 beta21 = 1, beta22 = -0.8169981105823436, beta23 = -0.18300188941765633,
@@ -449,13 +459,14 @@ LambaEulerHeun <- function() {
   E2 <- .gdw(S$beta21 * g1 + S$beta22 * g2 + S$beta23 * g3, chi2, type)
   unew <- u + dt * (S$a1 * k1 + S$a2 * k2 + S$a3 * k3) + E2 +
     .gdw(S$beta11 * g1 + S$beta12 * g2 + S$beta13 * g3, dW, type)
-  list(u = unew, err = delta * dt * (k1 + k2 + k3) + E2, nf = 3L)
+  # the stiffness estimate a composite led by SOSRA2 reads (eigen_est)
+  list(u = unew, err = delta * dt * (k1 + k2 + k3) + E2, nf = 3L, eigen_sra = .rms(k3 - k2) / .rms(H02 - H01))
 }
 
 #' @rdname sde_algorithms
 #' @export
 SRA1 <- function() {
-  .new_sde_alg("SRA1", 1.5, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
+  .new_sde_alg("SRA1", 2, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
     gpdt <- g(u, p, t + dt)
     chi2 <- (dW + dZ / sqrt(3)) / 2
     k1 <- dt * f(u, p, t)
@@ -469,7 +480,7 @@ SRA1 <- function() {
 #' @rdname sde_algorithms
 #' @export
 SRA2 <- function() {
-  .new_sde_alg("SRA2", 1.5, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
+  .new_sde_alg("SRA2", 2, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
     chi2 <- (dW + dZ / sqrt(3)) / 2
     g1 <- g(u, p, t + dt / 3)
     k1 <- f(u, p, t)
@@ -484,15 +495,15 @@ SRA2 <- function() {
 
 #' @rdname sde_algorithms
 #' @export
-SRA3 <- function() .new_sde_alg("SRA3", 1.5, TRUE, .sra3_step(.SRA3), needs_dZ = TRUE)
+SRA3 <- function() .new_sde_alg("SRA3", 2, TRUE, .sra3_step(.SRA3), needs_dZ = TRUE)
 
 #' @rdname sde_algorithms
 #' @export
-SOSRA <- function() .new_sde_alg("SOSRA", 1.5, TRUE, .sra3_step(.SOSRA), needs_dZ = TRUE)
+SOSRA <- function() .new_sde_alg("SOSRA", 2, TRUE, .sra3_step(.SOSRA), needs_dZ = TRUE)
 
 #' @rdname sde_algorithms
 #' @export
-SOSRA2 <- function() .new_sde_alg("SOSRA2", 1.5, TRUE, .sra3_step(.SOSRA2), needs_dZ = TRUE)
+SOSRA2 <- function() .new_sde_alg("SOSRA2", 2, TRUE, .sra3_step(.SOSRA2), needs_dZ = TRUE, stability_size = 5.3)
 
 #' @rdname sde_algorithms
 #' @export
@@ -626,11 +637,11 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
        a41 = 1471266399579 / 7840856788654, a42 = -4482444167858 / 7529755066697,
        a43 = 11266239266428 / 11593286722821,
        btilde = c(681815649026867975666107 / 25159934323302256049469295,
-                  18411887981491912264464127 / 167175311446532472108584143,
-                  -12719313754959329011138489 / 123410692144842870217698057,
-                  -47289384293135913063989 / 1383962894467812063558225),
-       nb021 = -12.246764387585055918338744103409192607986567514699471403397969732723452087723101,
-       nb043 = -14.432096958608752822047165680776748797565142459789556194474191884258734697161106)
+                  0x1.e75bce518c719p+83 / 0x1.14917f95eba8ep+87,
+                  -0x1.50ad6c2b46614p+83 / 123410692144842870217698057,
+                  -47289384293135913063989 / 0x1.2510c76220cd2p+80),
+       nb021 = -0x1.87e57e6dcfd96p+3,
+       nb043 = -0x1.cdd3bd003d9f0p+3)
 })
 
 .skencarp_step <- function(alg, ctx, g, u, t, dt, dW, type, delta, cache, dZ) {
@@ -788,6 +799,9 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
                        type = prob$noise_type %||% prob$f$noise_type %||% "diagonal",
                        m = NULL) {
   if (!inherits(alg, "SDEAlgorithm")) stop("not an SDE algorithm: ", class(alg)[1L], call. = FALSE)
+  # methods that read the parts of a structured problem (BAOAB, the IIF
+  # methods) bind to it; noise_dim is the length of their Wiener process
+  if (is.function(alg$bind)) alg <- alg$bind(prob, opts)
   if (!(type %in% alg$noise))
     .stopf("%s() requires diagonal or scalar noise; use EM() or LambaEM() for general noise", alg$name)
   M <- prob$f$mass_matrix
@@ -798,26 +812,31 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
     if (!alg$mass_matrix_ok) stop("Algorithm must be set as symplectic or theta=1 for mass matrices", call. = FALSE)
   }
   if (prob$tspan[2L] <= prob$tspan[1L]) stop("SDE problems need tspan[2] > tspan[1]", call. = FALSE)
-  m <- m %||% switch(type, diagonal = length(u0), scalar = 1L,
+  m <- m %||% alg$noise_dim %||% switch(type, diagonal = length(u0), scalar = 1L,
                      general = prob$f$nbrownians %||% ncol(as.matrix(g(u0, prob$p, prob$tspan[1L]))))
   proc <- prob$noise_process
   if (!is.null(proc)) {
     proc <- .np_copy(proc)
     if (isTRUE(.np_env(proc)$reset)) .np_reinit(.np_env(proc), prob$tspan[1L])
   }
-  ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ, proc = proc)
+  # algorithms with a second process of another length (RKMilGeneral) give it
+  mz <- if (is.function(alg$z_length)) alg$z_length(m, opts$dt) else m
+  ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ, proc = proc, mz = mz)
   delta <- opts$delta %||% alg$delta
   adaptive <- alg$adaptive && (opts$adaptive %||% TRUE)
-  runner <- .new_alg(alg$name, alg$order, adaptive = adaptive,
-    step = function(ctx, t, u, dt, cache) {
-      inc <- .noise_take(ns, t, dt, u, ctx$p)
-      if (!is.null(alg$step))
-        return(alg$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ, tspan = prob$tspan))
-      res <- alg$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
-      list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf)
-    },
-    interp = .sde_linear_interp, init = alg$init %||% function(ctx, t, u) list(),
-    mass_matrix = mm, on_reject = if (!is.null(alg$step)) .nl_on_reject)
+  run_step <- function(a, ctx, t, u, dt, cache) {
+    inc <- .noise_take(ns, t, dt, u, ctx$p)
+    if (!is.null(a$step))
+      return(a$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ, tspan = prob$tspan, ns = ns))
+    res <- a$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
+    list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf,
+         eigen_sri = res$eigen_sri, eigen_sra = res$eigen_sra)
+  }
+  runner <- if (inherits(alg, "StochasticCompositeAlgorithm")) .sde_composite_runner(alg, adaptive, run_step, mm) else
+    .new_alg(alg$name, alg$order, adaptive = adaptive,
+      step = function(ctx, t, u, dt, cache) run_step(alg, ctx, t, u, dt, cache),
+      interp = .sde_linear_interp, init = alg$init %||% function(ctx, t, u) list(),
+      mass_matrix = mm, on_reject = if (!is.null(alg$step)) .nl_on_reject)
   opts$abstol <- opts$abstol %||% 1e-2
   opts$reltol <- opts$reltol %||% 1e-2
   if (adaptive) {
@@ -842,6 +861,7 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
     .noise_settle(ns, t_last$t)
     env$W <- list(t = ns$log_t, W = do.call(rbind, ns$log_W))
     if (!is.null(ns$proc)) env$noise <- ns$proc
+    if (is.function(runner$alg_choice)) env$alg_choice <- runner$alg_choice(env$t)
     env$alg <- alg
     env$prob <- prob
     sol

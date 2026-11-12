@@ -346,7 +346,7 @@ CompoundPoissonBridge <- function(rate, t0, tend, W0, Wend, rswm = RSWM(), ...) 
   need <- dt
   dW <- 0 * e$curW
   dZ <- if (!is.null(e$curZ)) 0 * e$curZ
-  tol <- 1e-12 * max(abs(dt), 1e-300)
+  tol <- 1e-12 * max(abs(dt), 0x1.56e1fc2f8f359p-997)
   while (abs(need) > tol && length(e$S1)) {
     s <- e$S1[[1L]]
     if (abs(s$h) <= abs(need) + tol) {

@@ -293,7 +293,8 @@ OperatorCondition
 
 OperatorAssumptions(
   issquare = NULL,
-  condition = OperatorCondition$IllConditioned
+  condition = OperatorCondition$IllConditioned,
+  nonstructural_zeros = NonstructuralZeros$Auto
 )
 
 LinearVerbosity(level = c("warn", "none", "info", "all"))
@@ -309,7 +310,8 @@ LowRankUpdatedMatrix(A, U, C, V)
 
 \item{method, fact, f, P, A, U, C, V}{Arguments as described above.}
 
-\item{issquare, condition}{Operator assumptions.}
+\item{issquare, condition, nonstructural_zeros}{Operator assumptions
+(\code{nonstructural_zeros} is a \link{NonstructuralZeros} value).}
 
 \item{level}{Verbosity level.}
 

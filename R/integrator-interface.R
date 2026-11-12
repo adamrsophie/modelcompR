@@ -97,7 +97,9 @@ init.SDEProblem <- function(prob, alg = NULL, ...) {
   setup <- .sde_setup(prob, alg, opts)
   I <- .integ_init(setup$prob, setup$alg, setup$opts)
   I$post <- function(sol) .as_rode_solution(setup$post(sol))
-  .integ_public(I)
+  integ <- .integ_public(I)
+  class(integ) <- c("SDEIntegrator", class(integ))
+  integ
 }
 
 .integ_public <- function(I) {

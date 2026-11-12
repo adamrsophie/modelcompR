@@ -5,7 +5,9 @@
 # must not mask any function of the packages R attaches by default; internal
 # names are reported too, since they shadow those functions inside the
 # package namespace. S3 methods (solve.ODEProblem, plot.SciMLSolution, ...)
-# are not masks and are skipped.
+# are not masks and are skipped. A name defined at top level in two files
+# (the later file in the collation order silently replaces the earlier one)
+# is an error as well.
 
 default_pkgs <- c("base", "stats", "utils", "graphics", "grDevices", "methods", "datasets")
 base_names <- unique(unlist(lapply(default_pkgs, getNamespaceExports)))
@@ -27,8 +29,11 @@ is_s3_method <- function(n) {
 }
 
 rows <- list()
+defs <- list()
 for (f in list.files("R", pattern = "[.]R$", full.names = TRUE)) {
   lines <- readLines(f, warn = FALSE)
+  top <- regmatches(lines, regexec("^`?([A-Za-z.][A-Za-z0-9._]*)`? <- ", lines))
+  for (n in unique(vapply(Filter(length, top), `[`, "", 2L))) defs[[n]] <- c(defs[[n]], f)
   for (i in seq_along(lines)) {
     m <- regmatches(lines[i], regexec("^`?([A-Za-z.][A-Za-z0-9._]*)`?\\s*(<-|=)\\s*function", lines[i]))[[1L]]
     if (!length(m)) next
@@ -46,10 +51,13 @@ for (f in list.files("R", pattern = "[.]R$", full.names = TRUE)) {
                                             exported = exported, file = paste0(f, ":", i))
   }
 }
+dup <- Filter(function(fs) length(fs) > 1L, defs)
+for (n in names(dup)) cat("Defined in several files:", n, paste(dup[[n]], collapse = " "), "\n")
 out <- if (length(rows)) do.call(rbind, rows) else data.frame()
 if (!nrow(out)) {
   cat("No function masks a base R function.\n")
+  if (length(dup)) quit(status = 1L)
 } else {
   print(out, row.names = FALSE)
-  if (any(out$exported)) quit(status = 1L)
+  if (any(out$exported) || length(dup)) quit(status = 1L)
 }

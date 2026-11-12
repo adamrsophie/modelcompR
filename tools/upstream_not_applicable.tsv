@@ -200,7 +200,6 @@ DiffEqNLSolveTag	ForwardDiff tag type of the nonlinear solver; R has no dual num
 DiffCache	PreallocationTools cache for dual numbers; R has no dual numbers.
 determine_chunksize	ForwardDiff chunk size; R has no dual numbers.
 get_chunksize	ForwardDiff chunk size; R has no dual numbers.
-NLSOLVEJL_SETUP	setup of the NLsolve.jl package for implicit stages; the R implicit methods use their own Newton iteration.
 _resolve_rng	internal helper resolving Julia random number generator arguments; R uses the global generator and seed.
 _sde_init	internal entry point of init() for SDE problems; R dispatches init() with S3 methods.
 _z_prototype	internal prototype array of the noise; R allocates noise vectors when needed.
@@ -214,3 +213,4 @@ NonlinearSolveQuasiNewton	Julia package module of quasi Newton NonlinearSolve al
 NonlinearSolveSpectralMethods	Julia package module of spectral NonlinearSolve algorithms; the algorithms are exported directly.
 SimpleNonlinearSolve	Julia package module of the simple NonlinearSolve algorithms; they are exported directly.
 BracketingNonlinearSolve	Julia package module of bracketing NonlinearSolve algorithms; they are exported directly.
+LineSearch	Julia package module reexported by NonlinearSolve; its line search algorithms are exported directly.

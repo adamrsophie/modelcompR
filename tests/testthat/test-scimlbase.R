@@ -50,6 +50,17 @@ test_that("solution builders, errors, initialization and saved values", {
   gv <- get_initial_values(pr)
   expect_true(gv$success)
   expect_equal(unname(gv$u0), 2, tolerance = 1e-8)
+  # OverrideInit and DefaultInit solve it at the start of solve()
+  so <- solve(pr, Tsit5(), initializealg = OverrideInit())
+  expect_equal(unname(so$u[[1]]), 2, tolerance = 1e-8)
+  sd <- solve(pr, Tsit5(), initializealg = DefaultInit())
+  expect_equal(unname(sd$u[[length(sd$u)]]), 2 * exp(-1), tolerance = 1e-5)
+  # without initialization data DefaultInit only checks a DAE
+  dprob <- DAEProblem(function(du, u, p, t) c(du[1] + u[1], u[2] - 2 * u[1]), c(-1, 0), c(1, 5), c(0, 1),
+                      differential_vars = c(TRUE, FALSE))
+  expect_warning(sb <- solve(dprob, DFBDF(), initializealg = DefaultInit()), "consistent")
+  expect_equal(sb$retcode, "InitialFailure")
+  expect_equal(solve(dprob, DFBDF(), initializealg = NoInit())$retcode, "Success")
   expect_equal(promote_tspan(3), c(0, 3))
   expect_true(detect_cycles(list(c("a", "b"), c("b", "a"))))
   expect_false(detect_cycles(list(c("a", "b"), c("b", "c"))))
