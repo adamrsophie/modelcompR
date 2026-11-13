@@ -1510,7 +1510,7 @@
         .hmip_root_pruned(self)
         return(status)
       }
-      if (status == "Optimal" && !length(.hmip_HighsLpRelaxation_getFractionalIntegers(lp)) &&
+      if (status == "Optimal" && !length(.hmip_HighsLpRelaxation_getFractionalIntegers(lp)$first) &&
           .hmip_HighsMipSolverData_addIncumbent(self, .hmip_Highs_getSolution(lps)$col_value,
                                                 .hmip_HighsLpRelaxation_getObjective(lp),
                                                 .hmip_src$EvaluateNode)) {
@@ -1615,7 +1615,7 @@
     stall <- 0L; smoothprogress <- 0; nseparounds <- 0L
     sepa <- .hmip_new_HighsSeparation(ms)
     .hmip_HighsSeparation_setLpRelaxation(sepa, lp)
-    nfrac <- function() length(.hmip_HighsLpRelaxation_getFractionalIntegers(lp))
+    nfrac <- function() length(.hmip_HighsLpRelaxation_getFractionalIntegers(lp)$first)
     while (.hmip_HighsLpRelaxation_scaledOptimal(status) && nfrac() > 0L && stall < 3L) {
       .hmip_HighsMipSolverData_printDisplayLine(self)
       if (.hmip_HighsMipSolverData_checkLimits(self)) return(invisible())
@@ -1656,9 +1656,10 @@
       } else {
         alpha <- 1 / 3
         nextprogress <- (1 - alpha) * smoothprogress + alpha * progress
-        if (nextprogress < smoothprogress * 1.01 &&
-            (.hmip_HighsLpRelaxation_getObjective(lp) - self$firstlpsolobj) <=
-            (self$rootlpsolobj - self$firstlpsolobj) * 1.001) stall <- stall + 1L
+        # a zero direction makes progress NaN; C++ compares NaN as false
+        if (isTRUE(nextprogress < smoothprogress * 1.01) &&
+            isTRUE((.hmip_HighsLpRelaxation_getObjective(lp) - self$firstlpsolobj) <=
+                   (self$rootlpsolobj - self$firstlpsolobj) * 1.001)) stall <- stall + 1L
         else stall <- 0L
         smoothprogress <- nextprogress
       }

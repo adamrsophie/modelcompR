@@ -972,7 +972,35 @@
 .hmip_Highs_getBasis <- function(h) h$basis
 .hmip_Highs_hasInvert <- function(h) !is.null(h$ek) && h$ek_valid
 
+# accommodateAlienBasis (lp_data/HighsSolution.cpp): factor the basic
+# columns of the scaled LP and keep at most num_row of them basic in their
+# order, completing the basis with the logicals of the rows without a pivot.
+# A singular basis that results is repaired at the next invert.
+.hmip_accommodate_alien_basis <- function(h, basis) {
+  lp <- h$lp; m <- lp$num_row_; n <- lp$num_col_
+  cs <- basis$col_status; rs <- basis$row_status
+  basic_index <- c(which(cs == "basic"), n + which(rs == "basic"))
+  if (!h$scale_tried) { h$scale <- .hs_scale(lp$A, lp$col_cost_); h$scale_tried <- TRUE }
+  A <- if (is.null(h$scale)) lp$A else lp$A * outer(h$scale$row, h$scale$col)
+  cols <- lapply(basic_index, function(v) {
+    if (v > n) return(list(index = v - n, value = 1, logical = TRUE))
+    nz <- which(A[, v] != 0)
+    list(index = nz, value = A[nz, v])
+  })
+  f <- .hs_factor_build(m, cols)
+  cs[cs == "basic"] <- "nonbasic"; rs[rs == "basic"] <- "nonbasic"
+  use <- basic_index[seq_len(min(m, length(basic_index)))]
+  cs[use[use <= n]] <- "basic"; rs[use[use > n] - n] <- "basic"
+  num_missing <- m - length(use)
+  rs[f$row_with_no_pivot[f$rank_deficiency + seq_len(num_missing)]] <- "basic"
+  list(col_status = cs, row_status = rs)
+}
+
 .hmip_Highs_setBasis <- function(h, basis, origin = "") {
+  if (isTRUE(basis$alien)) {
+    if (h$lp$num_row_ == 0L) basis$col_status[basis$col_status == "basic"] <- "nonbasic"
+    else basis <- .hmip_accommodate_alien_basis(h, basis)
+  }
   h$basis <- list(valid = TRUE, col_status = basis$col_status, row_status = basis$row_status)
   .hmip_b2_highs_clear_ekk(h)
   .hmip_b2_highs_invalidate(h)
@@ -2182,6 +2210,9 @@
   nd
 }
 .hmip_b2_top <- function(s) s$nodestack[[length(s$nodestack)]]
+# nodes are environments, so `.hmip_b2_top(s)$field <- v` writes into the
+# top node in place; the replacement function only hands the stack back
+`.hmip_b2_top<-` <- function(s, value) s
 .hmip_b2_push <- function(s, nd) s$nodestack[[length(s$nodestack) + 1L]] <- nd
 .hmip_b2_pop <- function(s) s$nodestack[[length(s$nodestack)]] <- NULL
 .hmip_b2_nchg <- function(dom) length(.hmip_HighsDomain_getChangedCols(dom))

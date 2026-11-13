@@ -143,16 +143,8 @@ test_that("liftingForProbing lifts the best clique and drops rows implied by bot
                 .hmip_HighsDomain_isFixed = function(domain, col) FALSE)
   ns <- asNamespace("modelcompR")
   tenv <- environment()
-  missing <- character()
-  for (nm in names(stubs)) {
-    if (exists(nm, envir = ns, inherits = FALSE)) {
-      do.call(local_mocked_bindings, c(stubs[nm], list(.package = "modelcompR", .env = tenv)))
-    } else {
-      assign(nm, stubs[[nm]], envir = globalenv())
-      missing <- c(missing, nm)
-    }
-  }
-  withr::defer(rm(list = missing, envir = globalenv()))
+  for (nm in names(stubs)) skip_if_not(exists(nm, envir = ns, inherits = FALSE), nm)
+  do.call(local_mocked_bindings, c(stubs, list(.package = "modelcompR", .env = tenv)))
   r <- .hs_mip_presolve(c(-2, -1, -3, -1), rbind(c(1, 1, 1, 1), c(2, 2, 1, 0), c(1, 1, 3, 2)), rep(-Inf, 3),
                         c(2.5, 3, 4), rep(0, 4), c(1, 1, 1, 4), c(1L, 1L, 1L, 0L))
   pr <- r$pr
