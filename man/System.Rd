@@ -38,7 +38,9 @@ System(
   irreducibles = NULL,
   is_discrete = FALSE,
   discover_from_metadata = TRUE,
-  checks = TRUE
+  checks = TRUE,
+  frame = NULL,
+  fixed_point = NULL
 )
 }
 \arguments{
@@ -97,6 +99,11 @@ combining costs, for optimization and optimal control.}
 \item{discover_from_metadata}{Collect defaults and guesses from metadata.}
 
 \item{checks}{Run consistency checks.}
+
+\item{frame, fixed_point}{For the multibody \code{System()} of symcompR (SymPy's
+physics.mechanics): a call with no arguments, with a reference frame as
+its first argument or with \code{frame} or \code{fixed_point} goes to
+\code{symcompR::System()}, so attaching both packages is safe.}
 }
 \value{
 A \code{System}.

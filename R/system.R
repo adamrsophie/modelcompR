@@ -79,6 +79,10 @@
 #' @param is_discrete Whether the system is a discrete time system.
 #' @param discover_from_metadata Collect defaults and guesses from metadata.
 #' @param checks Run consistency checks.
+#' @param frame,fixed_point For the multibody `System()` of symcompR (SymPy's
+#'   physics.mechanics): a call with no arguments, with a reference frame as
+#'   its first argument or with `frame` or `fixed_point` goes to
+#'   `symcompR::System()`, so attaching both packages is safe.
 #' @return A `System`.
 #' @examples
 #' t <- t_nounits; D <- D_nounits
@@ -97,7 +101,15 @@ System <- function(eqs = list(), iv = NULL, unknowns = NULL, ps = NULL, brownian
                    metadata = list(), description = "", tspan = NULL, tstops = list(),
                    inputs = list(), outputs = list(), state_priorities = NULL,
                    irreducibles = NULL, is_discrete = FALSE,
-                   discover_from_metadata = TRUE, checks = TRUE) {
+                   discover_from_metadata = TRUE, checks = TRUE, frame = NULL, fixed_point = NULL) {
+  if ((nargs() == 0L || !is.null(frame) || !is.null(fixed_point) || inherits(eqs, "physics_obj")) &&
+      "System" %in% getNamespaceExports("symcompR")) {
+    if (inherits(eqs, "physics_obj")) {
+      frame <- eqs
+      if (inherits(iv, "physics_obj")) fixed_point <- iv
+    }
+    return(getExportedValue("symcompR", "System")(frame = frame, fixed_point = fixed_point))
+  }
   if (is.null(name)) stop("a system needs a name: System(..., name = \"sys\")", call. = FALSE)
   name <- as.character(name)
   if (!is.null(iv) && !is_sym(iv)) {
@@ -476,17 +488,26 @@ nameof <- function(sys) .f(sys, "name")
 #' @export
 iscomplete <- function(sys) isTRUE(.f(sys, "complete"))
 
+# a ModelingToolkit system, not the multibody System of symcompR
+.is_mtk_system <- function(x) inherits(x, "System") && !inherits(x, "physics_obj")
+
 #' @export
-`$.System` <- function(x, name) .getproperty(x, name)
+`$.System` <- function(x, name) {
+  # the multibody System of symcompR shares the class name
+  if (inherits(x, "physics_obj")) return(NextMethod())
+  .getproperty(x, name)
+}
 
 #' @export
 `[[.System` <- function(x, i) {
+  if (inherits(x, "physics_obj")) return(NextMethod())
   if (is.character(i) && length(i) == 1L) return(.getproperty(x, i))
   stop("index a System by name", call. = FALSE)
 }
 
 #' @export
 names.System <- function(x) {
+  if (inherits(x, "physics_obj")) return(NextMethod())
   c(vapply(.f(x, "systems"), nameof, ""),
     vapply(c(.f(x, "unknowns"), .f(x, "ps"), lapply(.f(x, "observed"), `[[`, "lhs")),
            function(v) .name(v) %||% format(v), ""))
@@ -859,7 +880,7 @@ has_alg_eqs <- function(sys) length(get_alg_eqs(sys)) > 0L
 #' @return A `System`.
 #' @export
 compose <- function(sys, ..., name = NULL) {
-  if (!inherits(sys, "System")) return(symcompR::compose(sys, ...))
+  if (!.is_mtk_system(sys)) return(symcompR::compose(sys, ...))
   if (is.null(name)) name <- nameof(sys)
   subs <- list(...)
   if (length(subs) == 1L && is.list(subs[[1L]]) && !inherits(subs[[1L]], "System")) subs <- subs[[1L]]
@@ -871,7 +892,7 @@ compose <- function(sys, ..., name = NULL) {
 extend <- function(sys, base, name = nameof(sys), ...) {
   # symcompR's extend() generic (unit and dimension systems) gets the call as
   # written
-  if (!inherits(sys, "System") && "extend" %in% getNamespaceExports("symcompR")) {
+  if (!.is_mtk_system(sys) && "extend" %in% getNamespaceExports("symcompR")) {
     cl <- sys.call()
     cl[[1L]] <- getExportedValue("symcompR", "extend")
     return(eval(cl, parent.frame()))
@@ -909,7 +930,7 @@ extend <- function(sys, base, name = nameof(sys), ...) {
 #' @rdname compose
 #' @export
 flatten <- function(sys, ...) {
-  if (!inherits(sys, "System")) return(symcompR::flatten(sys, ...))
+  if (!.is_mtk_system(sys)) return(symcompR::flatten(sys, ...))
   if (!length(.f(sys, "systems"))) return(sys)
   .update_system(sys,
     eqs = equations(sys),
@@ -979,6 +1000,7 @@ rename_system <- function(sys, name) .rename_system(sys, as.character(name))
 
 #' @export
 print.System <- function(x, ...) {
+  if (inherits(x, "physics_obj")) return(NextMethod())
   iv <- .f(x, "iv")
   kind <- if (length(.f(x, "costs"))) "Optimization system"
           else if (is.null(iv)) "Nonlinear system"
