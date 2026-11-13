@@ -665,7 +665,8 @@ cvx_compare <- function(name, got, want) {
   # iterate whose affine step and Mehrotra shift are identical), so their
   # final iterates agree to 1e-4 and the iteration count may differ
   drift <- name %in% c("con_explog", "dualgeomean", "logdet", "logdet_con", "rootdet_sq_nocd")
-  tol <- if (drift) 1e-4 else 1e-7
+  # off the reference platform the BLAS rounds the solves differently
+  tol <- if (drift) 1e-4 else ref_tol(1e-7, 1e-5)
   expect_identical(got$retcode, want$retcode, label = paste(name, "retcode"))
   if (!drift) expect_identical(got$iters, want$iters, label = paste(name, "iterations"))
   expect_identical(got$cones, want$cones, label = paste(name, "cones"))
