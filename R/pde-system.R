@@ -8,7 +8,7 @@
 #' Pair variables with their domains
 #'
 #' `VarDomainPairing(t, Interval(0, 1))` states that `t` ranges over the
-#' interval, as `t ∈ Interval(0, 1)` in ModelingToolkit. A numeric vector
+#' interval, as \ifelse{latex}{\verb{t in Interval(0, 1)}}{\verb{t ∈ Interval(0, 1)}} in ModelingToolkit. A numeric vector
 #' `c(0, 1)` is converted to symcompR's [symcompR::Interval()].
 #'
 #' @param variables A variable or a list of variables.

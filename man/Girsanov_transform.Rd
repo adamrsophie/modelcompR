@@ -12,15 +12,15 @@ Girsanov_transform(sys, u, theta0 = 1)
 \item{u}{A scalar symbolic function of the unknowns defining the
 adjustable parameters of the transformation.}
 
-\item{theta0}{Initial value of \code{θ} (\code{θ0} in ModelingToolkit).}
+\item{theta0}{Initial value of \ifelse{latex}{\verb{theta}}{\verb{θ}} (\ifelse{latex}{\verb{theta0}}{\verb{θ0}} in ModelingToolkit).}
 }
 \value{
 The transformed \code{System}.
 }
 \description{
 Measure transformation that reduces the variance of Monte Carlo estimators
-of \code{E[g(X_t)]}: the returned system has an extra state \code{θ(t)} with
-initial value \code{θ0} and an observed \code{weight(t) ~ θ(t) / θ0}, so that
+of \code{E[g(X_t)]}: the returned system has an extra state \ifelse{latex}{\verb{theta(t)}}{\verb{θ(t)}} with
+initial value \ifelse{latex}{\verb{theta0}}{\verb{θ0}} and an observed \ifelse{latex}{\verb{weight(t) ~ theta(t) / theta0}}{\verb{weight(t) ~ θ(t) / θ0}}, so that
 \verb{E[g(X_t) weight_t]} estimates the same quantity with smaller variance for a
 good choice of \code{u}. Reference: Kloeden, Platen and Schurz (2012),
 Numerical solution of SDE through computer experiments.

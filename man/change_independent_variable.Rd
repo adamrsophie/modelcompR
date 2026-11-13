@@ -34,20 +34,20 @@ The transformed \code{System}.
 \code{change_independent_variable(sys, iv)} turns the dependent variable \code{iv}
 (for example \code{u(t)}) into the independent variable of \code{sys}. Every
 variable \code{f(t)} becomes \code{f(u)}, derivatives follow the chain rule
-\verb{d/dt = uˍt(u) d/du} with the new unknown \code{uˍt(u)} for \code{du/dt}, and the
+\ifelse{latex}{\verb{d/dt = u_t(u) d/du}}{\verb{d/dt = uˍt(u) d/du}} with the new unknown \ifelse{latex}{\verb{u_t(u)}}{\verb{uˍt(u)}} for \code{du/dt}, and the
 old independent variable becomes the unknown \code{t(u)}. The change is valid
 when \code{u} is strictly monotonic in \code{t}.
 }
 \details{
 Extra equations \code{eqs} relating the variables (such as \code{t ~ f(u)} for
 non-autonomous systems) are transformed too; \code{add_old_diff = TRUE} adds
-\code{D(t(u)) ~ 1 / uˍt(u)} by the inverse function rule. The change must be
+\ifelse{latex}{\verb{D(t(u)) ~ 1 / u_t(u)}}{\verb{D(t(u)) ~ 1 / uˍt(u)}} by the inverse function rule. The change must be
 made before \code{\link[=mtkcompile]{mtkcompile()}}. Subsystems are transformed recursively; the
 new variables are global, so \code{iv} should not be namespaced (use
 \code{\link[=GlobalScope]{GlobalScope()}} in subsystems).
 
 The transformed equations are implicit in the highest derivatives (for
-example \verb{uˍt^2 y'' + ...}), so compiling them needs the structural
+example \ifelse{latex}{\verb{u_t^2 y'' + ...}}{\verb{uˍt^2 y'' + ...}}), so compiling them needs the structural
 pipeline of \code{\link[=mtkcompile]{mtkcompile()}}.
 }
 \examples{

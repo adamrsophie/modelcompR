@@ -38,9 +38,9 @@ A \code{DiscreteProblem} or \code{DiscreteFunction}.
 }
 \description{
 \code{DiscreteProblem(sys, op, tspan)} builds the map \code{u[k+1] = f(u[k], p, t[k])} of a compiled discrete system, whose unknowns are the past values
-\verb{xₜ₋₁}, \verb{xₜ₋₂}, ... of its variables (see \code{\link[=shift2term]{shift2term()}}). Initial
+\ifelse{latex}{\verb{x_(t-1)}}{\verb{xₜ₋₁}}, \ifelse{latex}{\verb{x_(t-2)}}{\verb{xₜ₋₂}}, ... of its variables (see \code{\link[=shift2term]{shift2term()}}). Initial
 conditions give the past: \code{(k - 1)(x) ~ 1} (or \code{Shift(t, -1)(x) ~ 1})
-sets \verb{xₜ₋₁} at the initial time. A value (or default) for \code{x} itself is
+sets \ifelse{latex}{\verb{x_(t-1)}}{\verb{xₜ₋₁}} at the initial time. A value (or default) for \code{x} itself is
 its value at the initial time, and the past values not given are solved
 for to match it, from \code{guesses}, as ModelingToolkit's initialization
 does. \code{DiscreteFunction(sys)} builds \code{f}. Solve with \code{solve(prob, FunctionMap())}, which steps by \code{dt} (default 1) and saves every step.

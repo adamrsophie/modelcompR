@@ -4,7 +4,7 @@
 \alias{noise_to_brownians}
 \title{Convert noise equations to brownian variables}
 \usage{
-noise_to_brownians(sys, names = "α")
+noise_to_brownians(sys, names = "\\u03B1")
 }
 \arguments{
 \item{sys}{A flattened \code{System} with noise equations.}
@@ -19,7 +19,7 @@ A \code{System} with brownians and no noise equations.
 \code{noise_to_brownians(sys)} returns a system equivalent to \code{sys} whose noise,
 given as noise equations (\code{noise_eqs}), is written with brownian variables
 added to the equations instead: \code{D(x) ~ f} with noise \code{g} becomes
-\code{D(x) ~ f + g * α_1}.
+\ifelse{latex}{\verb{D(x) ~ f + g * alpha_1}}{\verb{D(x) ~ f + g * α_1}}.
 }
 \examples{
 t <- t_nounits; D <- D_nounits

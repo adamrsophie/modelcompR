@@ -2,6 +2,9 @@
 # (ConvexOptimization.jl 0.1.4, SymbolicAnalysis.jl 0.5.8, Clarabel.jl 0.11.1 and
 # MathOptInterface.jl 1.54.0); edit the generator, not this file.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 cvx_cons <- function() list(ConeConstraint(function(u, p) u[1] + u[2] - 1, MOI$Zeros(1)),
                             ConeConstraint(function(u, p) c(u[1], u[2]), MOI$Nonnegatives(2)))
 cvx_c1 <- function() list(ConeConstraint(function(u, p) u[1] + u[2] - 1, MOI$Zeros(1)))

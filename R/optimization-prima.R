@@ -52,7 +52,8 @@
 #' rosen <- function(u, p) (1 - u[1]) * (1 - u[1]) + 100 * (u[2] - u[1] * u[1]) * (u[2] - u[1] * u[1])
 #' solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), UOBYQA())$u
 #' solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), NEWUOA(), npt = 4)$u
-#' solve(OptimizationProblem(rosen, c(-0.5, 1.5), numeric(), lb = c(-2, -2), ub = c(0.8, 4)), BOBYQA())$u
+#' solve(OptimizationProblem(rosen, c(-0.5, 1.5), numeric(), lb = c(-2, -2), ub = c(0.8, 4)),
+#'   BOBYQA())$u
 #' solve(OptimizationProblem(rosen, c(0, 0), numeric(), cons = function(u, p) u[1] + u[2],
 #'                           lcons = -Inf, ucons = 1), LINCOA())$u
 #' @name prima_optimizers

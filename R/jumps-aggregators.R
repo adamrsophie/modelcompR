@@ -53,7 +53,8 @@
 #' default solver. `reset_aggregated_jumps(integ)` recomputes the rates and
 #' next jump times inside a callback that changed the state or parameters
 #' (affects of the system's own events call it). `add_tstop(integ, t)` adds
-#' a time the solver must stop at.
+#' a time the solver must stop at; a time behind the current time is an
+#' error, as in OrdinaryDiffEq.
 #'
 #' @param integ The integrator passed to a callback.
 #' @param t A time.
@@ -578,7 +579,13 @@ reset_aggregated_jumps <- function(integ) {
 #' @rdname jump_aggregators
 #' @export
 add_tstop <- function(integ, t) {
-  integ$tstops_added <- c(integ$tstops_added, as.numeric(t))
+  t <- as.numeric(t)
+  # add_tstop! of OrdinaryDiffEqCore refuses a stop behind the current time
+  tsp <- integ$prob$tspan
+  tdir <- if (length(tsp) == 2L && tsp[2L] < tsp[1L]) -1 else 1
+  if (length(integ$t) == 1L && any(tdir * (t - integ$t) < 0))
+    stop("Tried to add a tstop that is behind the current time. This is strictly forbidden", call. = FALSE)
+  integ$tstops_added <- c(integ$tstops_added, t)
   invisible(NULL)
 }
 

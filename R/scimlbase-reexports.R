@@ -39,7 +39,8 @@
 #' @return A solution object of the named class.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
-#' sol <- RODESolution(c(0, 0.5, 1), rbind(1, 0.6, 0.37), prob, W = list(t = c(0, 0.5, 1), W = rbind(0, 0.1, 0.3)))
+#' sol <- RODESolution(c(0, 0.5, 1), rbind(1, 0.6, 0.37), prob,
+#'   W = list(t = c(0, 0.5, 1), W = rbind(0, 0.1, 0.3)))
 #' sol(0.25)
 #' NonlinearSolution(NonlinearProblem(function(u, p) u^2 - 2, 1), list(name = "manual"), sqrt(2))$u
 #' @name scimlbase_solutions

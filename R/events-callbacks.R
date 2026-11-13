@@ -600,10 +600,12 @@ discrete_events_toplevel <- function(sys) {
     DiscreteCallback(function(u, t, integ) isTRUE(as.logical(cfn(u, integ$p, t))), aff)
   }
   if (!is.null(init)) {
+    # ModelingToolkit passes the event's initialize to PresetTimeCallback and
+    # PeriodicCallback, which call it before their own initial affect
     own <- out$initialize
     out$initialize <- if (is.null(own)) init else function(integ) {
-      own(integ)
       init(integ)
+      own(integ)
     }
   }
   out$finalize <- .compile_affect(cb$finalize, ctx)

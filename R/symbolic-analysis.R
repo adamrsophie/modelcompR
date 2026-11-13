@@ -174,7 +174,9 @@ t.mtk_symvec <- function(x) structure(list(v = .symvec_elems(x), mid = list()), 
   }
   if (!inherits(x, "mtk_symvec") && !is_sym(x)) return(base::norm(x, type, ...))
   order <- if (is.character(type)) {
-    switch(toupper(substr(type, 1L, 1L)), O = , "1" = as_sym(1), I = , M = Symbol(".norm_Inf"), F = , E = , "2" = as_sym(2),
+    # EXPR named, so the arm E is not a partial match of it (codetools)
+    switch(EXPR = toupper(substr(type, 1L, 1L)), O = , "1" = as_sym(1), I = , M = Symbol(".norm_Inf"), F = , E = ,
+           "2" = as_sym(2),
            stop("argument type[1]='", type, "' must be one of 'M','1','O','I','F' or 'E'", call. = FALSE))
   } else if (inherits(type, "mtk_symvec") || is_sym(type)) .symvec_elems(type)[[1L]]
   else if (is.numeric(type) && length(type) == 1L) {

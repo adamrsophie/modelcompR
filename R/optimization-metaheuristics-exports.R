@@ -265,7 +265,8 @@ MCCGA <- function(N = 100L, maxsamples = 10000L, mutation = 1 / N, use_local_sea
 #' @return An algorithm object for [solve()].
 #' @examples
 #' f <- function(x, p) c(sum(x^2), sum((x - 2)^2))
-#' prob <- OptimizationProblem(MultiObjectiveOptimizationFunction(f), c(0, 0), lb = c(0, 0), ub = c(2, 2))
+#' prob <- OptimizationProblem(MultiObjectiveOptimizationFunction(f), c(0, 0),
+#'   lb = c(0, 0), ub = c(2, 2))
 #' set.seed(1)
 #' sol <- solve(prob, SPEA2(N = 20), maxiters = 20)
 #' dim(sol$u)

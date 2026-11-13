@@ -32,12 +32,17 @@ rows <- list()
 defs <- list()
 for (f in list.files("R", pattern = "[.]R$", full.names = TRUE)) {
   lines <- readLines(f, warn = FALSE)
-  top <- regmatches(lines, regexec("^`?([A-Za-z.][A-Za-z0-9._]*)`? <- ", lines))
+  # names, and operators such as `%||%` (backquoted, any characters)
+  top <- regmatches(lines, regexec("^(?:`([^`]+)`|([A-Za-z.][A-Za-z0-9._]*)) <- ", lines, perl = TRUE))
+  top <- lapply(Filter(length, top), function(m) c("", if (nzchar(m[2L])) m[2L] else m[3L]))
   for (n in unique(vapply(Filter(length, top), `[`, "", 2L))) defs[[n]] <- c(defs[[n]], f)
   for (i in seq_along(lines)) {
-    m <- regmatches(lines[i], regexec("^`?([A-Za-z.][A-Za-z0-9._]*)`?\\s*(<-|=)\\s*function", lines[i]))[[1L]]
+    m <- regmatches(lines[i], regexec("^(?:`([^`]+)`|([A-Za-z.][A-Za-z0-9._]*))\\s*(<-|=)\\s*function", lines[i],
+                                      perl = TRUE))[[1L]]
+    # a definition guarded by `if (!exists(...))` does not start the line and only
+    # fills in a name that base R lacks, so it is not reported
     if (!length(m)) next
-    n <- m[2L]
+    n <- if (nzchar(m[2L])) m[2L] else m[3L]
     if (!(n %in% base_names) || is_s3_method(n)) next
     # roxygen block directly above
     j <- i - 1L

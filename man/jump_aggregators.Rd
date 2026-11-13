@@ -95,7 +95,8 @@ ModelingToolkit builds them (\code{\link[=asgraph]{asgraph()}}, \code{\link[=var
 default solver. \code{reset_aggregated_jumps(integ)} recomputes the rates and
 next jump times inside a callback that changed the state or parameters
 (affects of the system's own events call it). \code{add_tstop(integ, t)} adds
-a time the solver must stop at.
+a time the solver must stop at; a time behind the current time is an
+error, as in OrdinaryDiffEq.
 }
 \examples{
 t <- t_nounits

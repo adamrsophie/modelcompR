@@ -8,6 +8,9 @@
 # methods with rejected steps differ on purpose (see PORTING.md) and are
 # checked against a reference solution.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 lsrk_f <- function(u, p, t) c(u[2], -u[1] + 0.3 * (1 - t / 3) * u[1]^2)
 lsrk_g <- function(u, p, t) c(-20 * (u[1] - t * (2 - t)), 0.5 * u[1] * u[2])
 lsrk_P1 <- ODEProblem(lsrk_f, c(1, 0.5), c(0, 3))

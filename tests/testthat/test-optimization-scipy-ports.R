@@ -6,6 +6,9 @@
 # macOS) the points agree to rounding and the counts exactly; elsewhere the
 # last bits differ and only the converged results are checked.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 spp_fq <- function(x, p) c(x[1] + 0.1 * x[1] * x[1] * x[1] - 0.2 * x[2] - 1,
                            x[2] + 0.1 * x[2] * x[2] * x[2] + 0.2 * x[1] - 0.5, x[3] + 0.05 * x[1] * x[3] - 0.3)
 spp_res3 <- function(x, p) c(10 * (x[2] - x[1] * x[1]), 1 - x[1], 0.5 * (x[1] * x[2] - 1))

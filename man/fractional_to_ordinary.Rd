@@ -68,9 +68,9 @@ equations, with the exponential sum quadrature of the fractional kernel
 accurate to \code{epsilon} on \verb{[0, T]} (as ModelingToolkit). Orders above one
 use repeated integration. \code{linear_fractional_to_ordinary(degrees, coeffs, rhs, epsilon, T)} does the same for the linear equation
 \verb{sum(coeffs * D^degrees x) = rhs}. Both return a compiled system. The
-auxiliary unknowns are named \code{ʐ_i}; with \code{matrix = TRUE} each fractional
-term gets one array unknown \code{ʐ_i} (a vector, or for orders above one a
-matrix with one column per integration) whose elements \code{ʐ_i[j]} follow
+auxiliary unknowns are named \ifelse{latex}{\verb{z_i}}{\verb{ʐ_i}}; with \code{matrix = TRUE} each fractional
+term gets one array unknown \ifelse{latex}{\verb{z_i}}{\verb{ʐ_i}} (a vector, or for orders above one a
+matrix with one column per integration) whose elements \ifelse{latex}{\verb{z_i[j]}}{\verb{ʐ_i[j]}} follow
 the same equations, as the array form of ModelingToolkit.
 }
 \examples{

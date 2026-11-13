@@ -289,8 +289,15 @@ solve.OptimizationProblem <- function(a, b, ...) {
   NULL
 }
 
+# the algorithms that need a vector of objectives
+.opt_multiobjective_names <- c("NSGA2", "NSGA3", "SPEA2", "SMS_EMOA", "MOEAD_DE", "CCMO", "WeightedSumScan")
+
 .opt_solve_core <- function(a, b, opts) {
   if (inherits(a$f, "MultiObjectiveOptimizationFunction")) return(.opt_solve_multiobjective(a, b, opts))
+  if (!is.null(b) && inherits(b, .opt_multiobjective_names))
+    stop(IncompatibleOptimizerError(paste0("The algorithm ", class(b)[1L], " is a multiobjective optimizer and ",
+                                           "needs a problem built from a `MultiObjectiveOptimizationFunction`; use ",
+                                           "a single objective algorithm for this problem.")))
   hook <- if (is.null(b)) NULL else .opt_family_hook(b)
   if (!is.null(hook)) return(hook(a, b, opts))
   # algorithms of the wrapper packages (OptimizationSciPy, OptimizationPRIMA,

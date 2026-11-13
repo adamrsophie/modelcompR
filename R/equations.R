@@ -120,7 +120,7 @@ eq_rhs <- function(eq) as_equation(eq)$rhs
 #'
 #' `Inequality(lhs, rhs, "<=")` states `lhs <= rhs`, used as a constraint of an
 #' optimization or optimal control problem. `lhs %<~% rhs` and `lhs %>~% rhs`
-#' are shorthands for `<=` and `>=` (Julia's `≲` and `≳`).
+#' are shorthands for `<=` and `>=` (Julia's \ifelse{latex}{\verb{lesssim}}{\verb{≲}} and \ifelse{latex}{\verb{gtrsim}}{\verb{≳}}).
 #'
 #' @param lhs,rhs Expressions.
 #' @param relation `"<="` or `">="`.

@@ -108,7 +108,8 @@ time steps with fitted orders.
 \examples{
 fn <- ODEFunction(function(u, p, t) -u, analytic = function(u0, p, t) u0 * exp(-t))
 prob <- ODEProblem(fn, 1, c(0, 1))
-setups <- list(list(alg = Euler(), dts = c(1 / 8, 1 / 16)), list(alg = RK4(), dts = c(1 / 4, 1 / 8)))
+setups <- list(list(alg = Euler(), dts = c(1 / 8, 1 / 16)),
+  list(alg = RK4(), dts = c(1 / 4, 1 / 8)))
 set <- WorkPrecisionSet(prob, c(1e-3, 1e-4), c(1e-3, 1e-4), setups, numruns = 1,
   error_estimates = c("final", "l2"))
 available_errors(set)

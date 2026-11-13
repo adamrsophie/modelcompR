@@ -153,12 +153,13 @@
 #' `noise_to_brownians(sys)` returns a system equivalent to `sys` whose noise,
 #' given as noise equations (`noise_eqs`), is written with brownian variables
 #' added to the equations instead: `D(x) ~ f` with noise `g` becomes
-#' `D(x) ~ f + g * α_1`.
+#' \ifelse{latex}{\verb{D(x) ~ f + g * alpha_1}}{\verb{D(x) ~ f + g * α_1}}.
 #'
 #' @param sys A flattened `System` with noise equations.
 #' @param names A name prefix (brownians `<names>_1`, `<names>_2`, ...) or
 #'   one name per brownian.
 #' @return A `System` with brownians and no noise equations.
+#' @usage noise_to_brownians(sys, names = "\\u03B1")
 #' @examples
 #' t <- t_nounits; D <- D_nounits
 #' variables("x(t)"); parameters("a", "b")
@@ -241,8 +242,8 @@ stochastic_integral_transform <- function(sys, correction_factor) {
 #' Girsanov transformation of an SDE system
 #'
 #' Measure transformation that reduces the variance of Monte Carlo estimators
-#' of `E[g(X_t)]`: the returned system has an extra state `θ(t)` with
-#' initial value `θ0` and an observed `weight(t) ~ θ(t) / θ0`, so that
+#' of `E[g(X_t)]`: the returned system has an extra state \ifelse{latex}{\verb{theta(t)}}{\verb{θ(t)}} with
+#' initial value \ifelse{latex}{\verb{theta0}}{\verb{θ0}} and an observed \ifelse{latex}{\verb{weight(t) ~ theta(t) / theta0}}{\verb{weight(t) ~ θ(t) / θ0}}, so that
 #' `E[g(X_t) weight_t]` estimates the same quantity with smaller variance for a
 #' good choice of `u`. Reference: Kloeden, Platen and Schurz (2012),
 #' Numerical solution of SDE through computer experiments.
@@ -250,7 +251,7 @@ stochastic_integral_transform <- function(sys, correction_factor) {
 #' @param sys A `System` with noise equations.
 #' @param u A scalar symbolic function of the unknowns defining the
 #'   adjustable parameters of the transformation.
-#' @param theta0 Initial value of `θ` (`θ0` in ModelingToolkit).
+#' @param theta0 Initial value of \ifelse{latex}{\verb{theta}}{\verb{θ}} (\ifelse{latex}{\verb{theta0}}{\verb{θ0}} in ModelingToolkit).
 #' @return The transformed `System`.
 #' @examples
 #' t <- t_nounits; D <- D_nounits
@@ -442,7 +443,7 @@ SDEProblem <- function(sys, ..., noise_rate_prototype = NULL, noise = NULL) {
 #'
 #' `poissonians(dN = lambda)` declares a poissonian `dN`, the increment of a
 #' Poisson counting process with rate `lambda`, and assigns it in the calling
-#' environment, as `@poissonians dN(λ)`. Written linearly in differential
+#' environment, as \ifelse{latex}{\verb{@poissonians dN(lambda)}}{\verb{@poissonians dN(λ)}}. Written linearly in differential
 #' equations, `D(x) ~ f + h * dN`, it becomes a jump `x ~ Pre(x) + Pre(h)`
 #' at rate `lambda` during [mtkcompile()]: a constant rate jump when `lambda`
 #' depends only on parameters, a variable rate jump otherwise.

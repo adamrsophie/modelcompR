@@ -166,7 +166,8 @@ AdjointSensitivityIntegrand <- function(sol, adj_sol, sensealg = QuadratureAdjoi
 #'   correction.
 #' @return A function `(u, p, t)` of class `StochasticTransformedFunction`.
 #' @examples
-#' prob <- SDEProblem(function(u, p, t) p[1] * u, function(u, p, t) p[2] * u, 1, c(0, 1), c(1.01, 0.87))
+#' prob <- SDEProblem(function(u, p, t) p[1] * u, function(u, p, t) p[2] * u, 1, c(0, 1),
+#'   c(1.01, 0.87))
 #' sol <- solve(prob, EM(), dt = 0.1, seed = 1)
 #' tf <- StochasticTransformedFunction(sol)
 #' tf(2, c(1.01, 0.87), 0)   # 1.01 * 2 - 0.87^2 * 2

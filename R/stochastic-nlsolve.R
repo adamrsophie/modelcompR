@@ -20,7 +20,7 @@
 #' `kappa`, and fails after `max_iter` iterations; a rate `theta` below
 #' `fast_convergence_cutoff` counts as fast convergence.
 #'
-#' @param kappa The relative tolerance on the increment (`κ` upstream).
+#' @param kappa The relative tolerance on the increment (\ifelse{latex}{\verb{kappa}}{\verb{κ}} upstream).
 #' @param max_iter The largest number of iterations per solve.
 #' @param fast_convergence_cutoff The convergence rate threshold.
 #' @param new_W_dt_cutoff The relative change of `gamma dt` above which `W`

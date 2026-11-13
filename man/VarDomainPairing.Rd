@@ -16,7 +16,7 @@ An object of class \code{VarDomainPairing}.
 }
 \description{
 \code{VarDomainPairing(t, Interval(0, 1))} states that \code{t} ranges over the
-interval, as \verb{t ∈ Interval(0, 1)} in ModelingToolkit. A numeric vector
+interval, as \ifelse{latex}{\verb{t in Interval(0, 1)}}{\verb{t ∈ Interval(0, 1)}} in ModelingToolkit. A numeric vector
 \code{c(0, 1)} is converted to symcompR's \code{\link[symcompR:Interval]{symcompR::Interval()}}.
 }
 \examples{

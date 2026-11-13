@@ -19,11 +19,13 @@ jobs:
         config:
           - { os: macos-latest, r: release }
           - { os: windows-latest, r: release }
-          - { os: ubuntu-latest, r: release }
+          - { os: ubuntu-latest, r: release, manual: true }
           - { os: ubuntu-latest, r: devel, http-user-agent: release }
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
+      # CI is not CRAN: the long reference tests (skip_on_cran) run here
+      NOT_CRAN: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -40,7 +42,16 @@ jobs:
           extra-packages: any::rcmdcheck
           needs: check
 
+      # the PDF manual is built and checked on one job, as CRAN does
+      - name: Install LaTeX for the PDF manual
+        if: matrix.config.manual
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended texlive-fonts-extra
+
       - uses: r-lib/actions/check-r-package@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
         with:
           upload-snapshots: true
-          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+          args: ${{ matrix.config.manual && 'c("--as-cran")' || 'c("--no-manual", "--as-cran")' }}
+          build_args: ${{ matrix.config.manual && 'c("--compact-vignettes=gs+qpdf")' || 'c("--no-manual","--compact-vignettes=gs+qpdf")' }}

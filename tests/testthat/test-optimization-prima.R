@@ -5,6 +5,9 @@
 # Elsewhere the last bits may differ, so the exact checks are guarded and a
 # tolerance check of the solution runs everywhere.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 if (!exists("ref_platform")) {
   ref_platform <- function() identical(Sys.info()[["sysname"]], "Darwin") && R.version$arch %in% c("aarch64", "arm64")
 }

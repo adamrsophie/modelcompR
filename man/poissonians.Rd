@@ -19,7 +19,7 @@ Invisibly, a named list of the declared poissonians.
 \description{
 \code{poissonians(dN = lambda)} declares a poissonian \code{dN}, the increment of a
 Poisson counting process with rate \code{lambda}, and assigns it in the calling
-environment, as \verb{@poissonians dN(λ)}. Written linearly in differential
+environment, as \ifelse{latex}{\verb{@poissonians dN(lambda)}}{\verb{@poissonians dN(λ)}}. Written linearly in differential
 equations, \code{D(x) ~ f + h * dN}, it becomes a jump \code{x ~ Pre(x) + Pre(h)}
 at rate \code{lambda} during \code{\link[=mtkcompile]{mtkcompile()}}: a constant rate jump when \code{lambda}
 depends only on parameters, a variable rate jump otherwise.

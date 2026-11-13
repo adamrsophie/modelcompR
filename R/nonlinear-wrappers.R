@@ -885,7 +885,8 @@ NLsolveJL <- function(method = "trust_region", autodiff = NULL, linesearch = NUL
       fx <- df$value(x)
       r_pred <- as.numeric(Jc %*% p) + r
       rho <- (sum(r^2) - sum(fx^2)) / (sum(r^2) - sum(r_pred^2))
-      if (rho > 1e-4) {
+      # comparisons with a NaN ratio are false, as in Julia
+      if (isTRUE(rho > 1e-4)) {
         r <- fx
         Jn <- df$jacobian(x)
         if (a$autoscale) { d <- pmax(0.1 * d, sqrt(colSums(Jn^2))); d[d^2 == 0] <- 1 }
@@ -894,9 +895,9 @@ NLsolveJL <- function(method = "trust_region", autodiff = NULL, linesearch = NUL
         x <- x - p
         conv <- c(FALSE, FALSE)
       }
-      if (rho < 0.1) delta <- delta / 2
-      else if (rho >= 0.9) delta <- 2 * .wr_l2(d * p)
-      else if (rho >= 0.5) delta <- max(delta, 2 * .wr_l2(d * p))
+      if (isTRUE(rho < 0.1)) delta <- delta / 2
+      else if (isTRUE(rho >= 0.9)) delta <- 2 * .wr_l2(d * p)
+      else if (isTRUE(rho >= 0.5)) delta <- max(delta, 2 * .wr_l2(d * p))
       stopped <- any(is.nan(x)) || any(is.nan(df$F))
     }
     return(out(x, it, conv))

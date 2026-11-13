@@ -31,9 +31,23 @@ DiscreteCallback(
   save_positions = c(TRUE, TRUE)
 )
 
-PresetTimeCallback(times, affect, save_positions = c(TRUE, TRUE))
+PresetTimeCallback(
+  times,
+  affect,
+  initialize = NULL,
+  filter_tstops = TRUE,
+  save_positions = c(TRUE, TRUE)
+)
 
-PeriodicCallback(affect, dt, phase = 0, save_positions = c(TRUE, TRUE))
+PeriodicCallback(
+  affect,
+  dt,
+  phase = 0,
+  initial_affect = FALSE,
+  final_affect = FALSE,
+  initialize = NULL,
+  save_positions = c(TRUE, TRUE)
+)
 
 CallbackSet(...)
 }
@@ -66,9 +80,17 @@ detection of \code{solve(..., discontinuity_detection = TRUE)}.}
 
 \item{times}{Event times.}
 
+\item{filter_tstops}{\code{PresetTimeCallback()}: with \code{TRUE} only the times
+inside the time span become stops; with \code{FALSE} every time is added
+with \code{\link[=add_tstop]{add_tstop()}}, which is an error for a time before the start.}
+
 \item{dt}{Period.}
 
 \item{phase}{Time offset of the first event, \code{PeriodicCallback()}.}
+
+\item{initial_affect, final_affect}{\code{PeriodicCallback()}: also apply the
+affect at the initial time, or when the integration reaches the final
+time (which is never a periodic stop).}
 }
 \value{
 A callback object.

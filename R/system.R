@@ -604,7 +604,7 @@ names.System <- function(x) {
 #'
 #' `renamespace(sys, x)` prefixes the variables of `x` with the name of
 #' `sys`, as they appear when `sys` is a subsystem: `x(t)` in a subsystem
-#' named `r1` becomes `r1₊x(t)`. `sys` may also be a name.
+#' named `r1` becomes \ifelse{latex}{\verb{r1_+x(t)}}{\verb{r1₊x(t)}}. `sys` may also be a name.
 #'
 #' @param sys A `System` or a name.
 #' @param x A variable, expression, equation, or list of them.

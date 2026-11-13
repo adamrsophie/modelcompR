@@ -81,7 +81,8 @@ dependency maps passed to \code{JumpProblem(dependencies = )}.
 \examples{
 birth <- ConstantRateJump(function(u, p, t) 10, function(integ) integ$u[1] <- integ$u[1] + 1)
 death <- ConstantRateJump(function(u, p, t) u[1], function(integ) integ$u[1] <- integ$u[1] - 1)
-death2 <- ConstantRateJump(function(u, p, t) 1.1 * u[1], function(integ) integ$u[1] <- integ$u[1] - 1)
+death2 <- ConstantRateJump(function(u, p, t) 1.1 * u[1],
+  function(integ) integ$u[1] <- integ$u[1] - 1)
 j1 <- JumpProblem(DiscreteProblem(0, c(0, 5)), Direct(), birth, death)
 j2 <- JumpProblem(DiscreteProblem(0, c(0, 5)), Direct(), birth, death2)
 cp <- SplitCoupledJumpProblem(j1, j2, Direct(), list(c(1, 1), c(2, 2)))

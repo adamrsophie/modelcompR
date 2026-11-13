@@ -63,6 +63,7 @@ prob <- ConvexOptimizationProblem(function(u, p) u[1] + 2 * u[2], c(0.5, 0.5), c
 sol <- solve(prob, ConvexMOI())
 sol$u; sol$objective; sol$dual
 A <- matrix(c(1, 1), 2, 1)
-sol <- solve(ConvexOptimizationProblem(function(u, p) norm(A \%*\% u - c(0, 2), "2"), 0), ConvexMOI())
+sol <- solve(ConvexOptimizationProblem(function(u, p) norm(A \%*\% u - c(0, 2), "2"), 0),
+  ConvexMOI())
 sol$u
 }

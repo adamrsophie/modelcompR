@@ -9,8 +9,9 @@
 \arguments{
 \item{x}{A solution.}
 
-\item{idxs}{Variables or expressions to plot; a list of two plots one
-against the other.}
+\item{idxs}{Variables or expressions to plot against time (a vector of
+state indices plots each of them); a list of two plots the first against
+the second (a phase plot).}
 
 \item{n}{Number of interpolation points for dense solutions.}
 

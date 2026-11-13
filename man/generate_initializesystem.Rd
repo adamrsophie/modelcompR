@@ -43,12 +43,12 @@ A time independent \code{System} with \code{is_initializesystem} set.
 \code{generate_initializesystem(sys, op = ...)} returns the system of
 nonlinear equations that determines consistent initial values of a
 time dependent system. Its unknowns are the unknowns of \code{sys}, the
-derivatives of its differential variables (named \code{xˍt}) and its solvable
+derivatives of its differential variables (named \ifelse{latex}{\verb{x_t}}{\verb{xˍt}}) and its solvable
 parameters (those bound to \code{NA}). Its equations are
 }
 \details{
 \itemize{
-\item the algebraic equations of \code{sys}, and \code{xˍt ~ f} for each differential
+\item the algebraic equations of \code{sys}, and \ifelse{latex}{\verb{x_t ~ f}}{\verb{xˍt ~ f}} for each differential
 equation \code{D(x) ~ f}, with observed variables substituted;
 \item the bindings of variables;
 \item one equation per initial condition in \code{op} or in the system: a constant

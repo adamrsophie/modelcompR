@@ -17,5 +17,5 @@ The namespaced object.
 \description{
 \code{renamespace(sys, x)} prefixes the variables of \code{x} with the name of
 \code{sys}, as they appear when \code{sys} is a subsystem: \code{x(t)} in a subsystem
-named \code{r1} becomes \verb{r1₊x(t)}. \code{sys} may also be a name.
+named \code{r1} becomes \ifelse{latex}{\verb{r1_+x(t)}}{\verb{r1₊x(t)}}. \code{sys} may also be a name.
 }

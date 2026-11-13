@@ -25,5 +25,5 @@ An object of class \code{Inequality}.
 \description{
 \code{Inequality(lhs, rhs, "<=")} states \code{lhs <= rhs}, used as a constraint of an
 optimization or optimal control problem. \code{lhs \%<~\% rhs} and \code{lhs \%>~\% rhs}
-are shorthands for \code{<=} and \code{>=} (Julia's \verb{≲} and \verb{≳}).
+are shorthands for \code{<=} and \code{>=} (Julia's \ifelse{latex}{\verb{lesssim}}{\verb{≲}} and \ifelse{latex}{\verb{gtrsim}}{\verb{≳}}).
 }

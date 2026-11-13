@@ -5,6 +5,9 @@
 # saved points, nf, nf2, njacs, nw, nsolve, naccept and nreject, the final
 # state and the dense output at t = 0.123.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 sd_n <- 8
 sd_heat <- function(u, p, t) {
   l <- c(0, u[-sd_n]); r <- c(u[-1], 0)

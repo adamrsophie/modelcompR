@@ -1088,8 +1088,10 @@
     else if (state$nit >= maxiter) state$status <- 0L
     !is.null(state$status)
   }
+  # the two stop_criteria of scipy's minimize_trustregion_constr, with
+  # different arguments, under two names
   if (method == "equality_constrained_sqp") {
-    stop_criteria <- function(state, x, last_iteration_failed, optimality, constr_violation, tr_radius,
+    stop_criteria_sqp <- function(state, x, last_iteration_failed, optimality, constr_violation, tr_radius,
                               constr_penalty, cg_info) {
       update_state(state, x, last_iteration_failed, tr_radius, constr_penalty, cg_info)
       if (verbose == 2) .sptc_print_iteration("basic", state)
@@ -1097,7 +1099,7 @@
       finish_check(state, isTRUE(state$tr_radius < xtol))
     }
   } else {
-    stop_criteria <- function(state, x, last_iteration_failed, tr_radius, constr_penalty, cg_info,
+    stop_criteria_ip <- function(state, x, last_iteration_failed, tr_radius, constr_penalty, cg_info,
                               barrier_parameter, barrier_tolerance) {
       update_state(state, x, last_iteration_failed, tr_radius, constr_penalty, cg_info)
       state$barrier_parameter <- barrier_parameter
@@ -1112,12 +1114,12 @@
   if (method == "equality_constrained_sqp") {
     .sptc_eqsqp(function(x) list(f = objective$fun(x), b = canonical$fun(x)$eq, x = x),
                 function(x) list(g = objective$grad(x), J = canonical$jac(x)$eq),
-                function(x, v) lagrangian_hess(x, v), x0, objective$f, objective$g, ic$c_eq, ic$J_eq, stop_criteria,
+                function(x, v) lagrangian_hess(x, v), x0, objective$f, objective$g, ic$c_eq, ic$J_eq, stop_criteria_sqp,
                 state, initial_constr_penalty, initial_tr_radius, factorization_method, sparse)
   } else {
     .sptc_tr_interior_point(objective$fun, objective$grad, lagrangian_hess, n_vars, canonical$n_ineq, canonical$n_eq,
                             canonical$fun, canonical$jac, x0, objective$f, objective$g, ic$c_ineq, ic$J_ineq, ic$c_eq,
-                            ic$J_eq, stop_criteria, canonical$keep_feasible, xtol, state, initial_barrier_parameter,
+                            ic$J_eq, stop_criteria_ip, canonical$keep_feasible, xtol, state, initial_barrier_parameter,
                             initial_barrier_tolerance, initial_constr_penalty, initial_tr_radius,
                             factorization_method, fd_lb, fd_ub, sparse)
   }

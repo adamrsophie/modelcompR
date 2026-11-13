@@ -13,7 +13,7 @@ shift2term(var)
 A \code{sym} expression.
 }
 \description{
-\code{shift2term(Shift(t, -k)(x))} returns the variable \verb{xₜ₋ₖ(t)} that
+\code{shift2term(Shift(t, -k)(x))} returns the variable \ifelse{latex}{\verb{x_(t-k)(t)}}{\verb{xₜ₋ₖ(t)}} that
 \code{\link[=mtkcompile]{mtkcompile()}} uses for the value of \code{x} k ticks earlier; a shift of a
 lowered variable that cancels returns the original variable.
 }

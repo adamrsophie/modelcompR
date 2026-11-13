@@ -40,7 +40,8 @@
 #' @examples
 #' birth <- ConstantRateJump(function(u, p, t) 10, function(integ) integ$u[1] <- integ$u[1] + 1)
 #' death <- ConstantRateJump(function(u, p, t) u[1], function(integ) integ$u[1] <- integ$u[1] - 1)
-#' death2 <- ConstantRateJump(function(u, p, t) 1.1 * u[1], function(integ) integ$u[1] <- integ$u[1] - 1)
+#' death2 <- ConstantRateJump(function(u, p, t) 1.1 * u[1],
+#'   function(integ) integ$u[1] <- integ$u[1] - 1)
 #' j1 <- JumpProblem(DiscreteProblem(0, c(0, 5)), Direct(), birth, death)
 #' j2 <- JumpProblem(DiscreteProblem(0, c(0, 5)), Direct(), birth, death2)
 #' cp <- SplitCoupledJumpProblem(j1, j2, Direct(), list(c(1, 1), c(2, 2)))
@@ -117,7 +118,8 @@ JumpSet <- function(...) {
     else if (inherits(j, c("AbstractJump", "MassActionJumpSet"))) list(j)
     else as.list(j)
   }), recursive = FALSE)
-  structure(js, class = "JumpSet")
+  # JumpSet() and JumpSet(nothing) are the empty set upstream
+  structure(js %||% list(), class = "JumpSet")
 }
 
 #' @rdname jump_coupling

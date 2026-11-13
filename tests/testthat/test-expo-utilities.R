@@ -1,5 +1,8 @@
 # Reference values from tools/exponentialutilities-probe.jl (Julia,
 # ExponentialUtilities 1.37.1), entries in column major order.
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .EU_REF <- list(
   `gen_A3_1` = c(0.99501328675068601, 0.00099284076436199822, 0.00024993390630247136, 0.0014892922044747443,
     0.99005305834413959, 0.0019867374984034025, 0.00049974358087795357, 0.0024834374019701267,

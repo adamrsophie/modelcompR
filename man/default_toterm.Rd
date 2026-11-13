@@ -13,6 +13,6 @@ default_toterm(x)
 A \code{sym} expression.
 }
 \description{
-\code{default_toterm(D(x))} returns the variable \code{xˍt} that \code{mtkcompile()} uses
+\code{default_toterm(D(x))} returns the variable \ifelse{latex}{\verb{x_t}}{\verb{xˍt}} that \code{mtkcompile()} uses
 for a lowered derivative; other expressions are returned unchanged.
 }

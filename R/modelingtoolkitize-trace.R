@@ -260,8 +260,8 @@ print.mtk_symvec <- function(x, ...) {
 #' Branching on symbolic values cannot be traced.
 #'
 #' Unknowns are named from `u_names`, the system the problem was built from,
-#' the names of `u0`, or `x₁, x₂, ...`; parameters from `p_names`, the
-#' system, the names of `p`, or `α₁, α₂, ...` (`α` for a single number). The
+#' the names of `u0`, or \ifelse{latex}{\verb{x_1, x_2, ...}}{\verb{x₁, x₂, ...}}; parameters from `p_names`, the
+#' system, the names of `p`, or \ifelse{latex}{\verb{alpha_1, alpha_2, ...}}{\verb{α₁, α₂, ...}} (\ifelse{latex}{\verb{alpha}}{\verb{α}} for a single number). The
 #' values of `u0` and `p` become initial conditions of the system.
 #'
 #' @param prob A problem.

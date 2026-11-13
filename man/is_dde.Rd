@@ -14,7 +14,7 @@ A logical.
 }
 \description{
 \code{is_dde(sys)} tells whether the equations of a system contain delayed
-unknowns such as \code{EvalAt(t - tau)(x)}, written \code{x(t - τ)} in
+unknowns such as \code{EvalAt(t - tau)(x)}, written \ifelse{latex}{\verb{x(t - tau)}}{\verb{x(t - τ)}} in
 ModelingToolkit.
 }
 \examples{

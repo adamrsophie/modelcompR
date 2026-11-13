@@ -173,19 +173,19 @@ change_of_variables <- function(sys, iv, forward_subs, backward_subs, simplify =
 #' `change_independent_variable(sys, iv)` turns the dependent variable `iv`
 #' (for example `u(t)`) into the independent variable of `sys`. Every
 #' variable `f(t)` becomes `f(u)`, derivatives follow the chain rule
-#' `d/dt = uˍt(u) d/du` with the new unknown `uˍt(u)` for `du/dt`, and the
+#' \ifelse{latex}{\verb{d/dt = u_t(u) d/du}}{\verb{d/dt = uˍt(u) d/du}} with the new unknown \ifelse{latex}{\verb{u_t(u)}}{\verb{uˍt(u)}} for `du/dt`, and the
 #' old independent variable becomes the unknown `t(u)`. The change is valid
 #' when `u` is strictly monotonic in `t`.
 #'
 #' Extra equations `eqs` relating the variables (such as `t ~ f(u)` for
 #' non-autonomous systems) are transformed too; `add_old_diff = TRUE` adds
-#' `D(t(u)) ~ 1 / uˍt(u)` by the inverse function rule. The change must be
+#' \ifelse{latex}{\verb{D(t(u)) ~ 1 / u_t(u)}}{\verb{D(t(u)) ~ 1 / uˍt(u)}} by the inverse function rule. The change must be
 #' made before [mtkcompile()]. Subsystems are transformed recursively; the
 #' new variables are global, so `iv` should not be namespaced (use
 #' [GlobalScope()] in subsystems).
 #'
 #' The transformed equations are implicit in the highest derivatives (for
-#' example `uˍt^2 y'' + ...`), so compiling them needs the structural
+#' example \ifelse{latex}{\verb{u_t^2 y'' + ...}}{\verb{uˍt^2 y'' + ...}}), so compiling them needs the structural
 #' pipeline of [mtkcompile()].
 #'
 #' @param sys A `System` that is not compiled.
@@ -495,9 +495,9 @@ respecialize <- function(sys, mapping = list(), all = length(mapping) == 0L) {
 #' use repeated integration. `linear_fractional_to_ordinary(degrees, coeffs,
 #' rhs, epsilon, T)` does the same for the linear equation
 #' `sum(coeffs * D^degrees x) = rhs`. Both return a compiled system. The
-#' auxiliary unknowns are named `ʐ_i`; with `matrix = TRUE` each fractional
-#' term gets one array unknown `ʐ_i` (a vector, or for orders above one a
-#' matrix with one column per integration) whose elements `ʐ_i[j]` follow
+#' auxiliary unknowns are named \ifelse{latex}{\verb{z_i}}{\verb{ʐ_i}}; with `matrix = TRUE` each fractional
+#' term gets one array unknown \ifelse{latex}{\verb{z_i}}{\verb{ʐ_i}} (a vector, or for orders above one a
+#' matrix with one column per integration) whose elements \ifelse{latex}{\verb{z_i[j]}}{\verb{ʐ_i[j]}} follow
 #' the same equations, as the array form of ModelingToolkit.
 #'
 #' @param eqs Right-hand sides (one per variable).

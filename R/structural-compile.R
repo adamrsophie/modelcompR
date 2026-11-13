@@ -830,7 +830,7 @@ but_ordered_incidence <- function(ts, varmask = highest_order_variable_mask(ts))
 #'
 #' @param sys A system returned by `mtkcompile()`.
 #' @param rename_dummy_derivatives Name dummy derivative variables such as
-#'   `yˍt(t)` by their derivative form `Derivative(y(t), t)`.
+#'   \ifelse{latex}{\verb{y_t(t)}}{\verb{yˍt(t)}} by their derivative form `Derivative(y(t), t)`.
 #' @return A list of equations named by the printed form of the variables;
 #'   the attribute `"vars"` holds the variables.
 #' @examples

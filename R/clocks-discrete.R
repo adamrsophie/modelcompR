@@ -282,7 +282,7 @@ hashold <- function(e) .has_op(e, "Hold")
 
 #' Lowered names of shifted variables
 #'
-#' `shift2term(Shift(t, -k)(x))` returns the variable `xₜ₋ₖ(t)` that
+#' `shift2term(Shift(t, -k)(x))` returns the variable \ifelse{latex}{\verb{x_(t-k)(t)}}{\verb{xₜ₋ₖ(t)}} that
 #' [mtkcompile()] uses for the value of `x` k ticks earlier; a shift of a
 #' lowered variable that cancels returns the original variable.
 #'
@@ -426,9 +426,9 @@ shift2term <- function(var) {
 #'
 #' `DiscreteProblem(sys, op, tspan)` builds the map `u[k+1] = f(u[k], p,
 #' t[k])` of a compiled discrete system, whose unknowns are the past values
-#' `xₜ₋₁`, `xₜ₋₂`, ... of its variables (see [shift2term()]). Initial
+#' \ifelse{latex}{\verb{x_(t-1)}}{\verb{xₜ₋₁}}, \ifelse{latex}{\verb{x_(t-2)}}{\verb{xₜ₋₂}}, ... of its variables (see [shift2term()]). Initial
 #' conditions give the past: `(k - 1)(x) ~ 1` (or `Shift(t, -1)(x) ~ 1`)
-#' sets `xₜ₋₁` at the initial time. A value (or default) for `x` itself is
+#' sets \ifelse{latex}{\verb{x_(t-1)}}{\verb{xₜ₋₁}} at the initial time. A value (or default) for `x` itself is
 #' its value at the initial time, and the past values not given are solved
 #' for to match it, from `guesses`, as ModelingToolkit's initialization
 #' does. `DiscreteFunction(sys)` builds `f`. Solve with `solve(prob,

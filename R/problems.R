@@ -494,11 +494,15 @@ print.SciMLProblem <- function(x, ...) {
 #'
 #' `remake(prob, u0 = , p = , tspan = )` returns a copy of `prob` with new
 #' initial values, parameters or time span. `u0` and `p` may be variable
-#' maps (only the given entries change) or full numeric vectors.
+#' maps (only the given entries change) or full values, which replace the
+#' old ones (any length; lists are allowed for `p`).
 #'
 #' @param prob A problem.
 #' @param u0,p,tspan New values.
-#' @param ... Further fields to replace.
+#' @param ... Further fields to replace, such as `f` (a plain function is
+#'   wrapped with [ODEFunction()] for ODE problems). Names that are not fields
+#'   of the problem are merged into its solver keywords `prob$kwargs`;
+#'   `kwargs =` replaces those keywords.
 #' @param check_initialization Run the initialization of the new problem;
 #'   with `FALSE` the values are taken as given.
 #' @return The new problem.
@@ -534,9 +538,24 @@ remake <- function(prob, u0 = NULL, p = NULL, tspan = NULL, ..., check_initializ
     if (!is.null(p) && !is.numeric(p) || is.null(p)) prob$p <- vals$p
     prob$op <- op
   }
-  if (is.numeric(u0)) prob$u0[] <- u0
-  if (is.numeric(p)) prob$p[] <- p
-  for (n in names(list(...))) prob[[n]] <- list(...)[[n]]
+  # values that are not symbolic maps replace the old ones wholesale, as
+  # SciMLBase's remake; a vector of the old length keeps the names
+  if (!is.null(u0) && (is.null(sys) || is.numeric(u0))) prob$u0 <- .remake_value(prob$u0, u0)
+  if (!is.null(p) && (is.null(sys) || is.numeric(p))) prob$p <- .remake_value(prob$p, p)
+  dots <- list(...)
+  # a plain function f is wrapped as the problem's function type
+  # (ODEProblem{iip}(f, ...) builds an ODEFunction in SciMLBase)
+  if (is.function(dots$f) && inherits(prob, "ODEProblem")) dots$f <- ODEFunction(dots$f)
+  # kwargs = replaces the stored solver keywords; other names that are not
+  # problem fields are merged into them (prob.kwargs..., kwargs... upstream)
+  if ("kwargs" %in% names(dots)) {
+    prob$kwargs <- dots$kwargs
+    dots$kwargs <- NULL
+  }
+  for (n in names(dots)) {
+    if (n %in% names(prob)) prob[n] <- list(dots[[n]])
+    else prob$kwargs[n] <- list(dots[[n]])
+  }
   if (inherits(prob, "DAEProblem") && length(prob$du0) == length(prob$u0)) names(prob$du0) <- names(prob$u0)
   if (!is.null(sys)) {
     h <- .mtk$hooks$initialize_problem
@@ -544,6 +563,14 @@ remake <- function(prob, u0 = NULL, p = NULL, tspan = NULL, ..., check_initializ
     else if (check_initialization) prob <- .simple_initialize(prob)
   }
   prob
+}
+
+.remake_value <- function(old, new) {
+  if (is.atomic(old) && is.atomic(new) && length(old) && length(new) == length(old)) {
+    old[] <- new
+    return(old)
+  }
+  new
 }
 
 # ---------------------------------------------------------------------------

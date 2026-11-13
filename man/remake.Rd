@@ -18,7 +18,10 @@ remake(
 
 \item{u0, p, tspan}{New values.}
 
-\item{...}{Further fields to replace.}
+\item{...}{Further fields to replace, such as \code{f} (a plain function is
+wrapped with \code{\link[=ODEFunction]{ODEFunction()}} for ODE problems). Names that are not fields
+of the problem are merged into its solver keywords \code{prob$kwargs};
+\verb{kwargs =} replaces those keywords.}
 
 \item{check_initialization}{Run the initialization of the new problem;
 with \code{FALSE} the values are taken as given.}
@@ -29,5 +32,6 @@ The new problem.
 \description{
 \code{remake(prob, u0 = , p = , tspan = )} returns a copy of \code{prob} with new
 initial values, parameters or time span. \code{u0} and \code{p} may be variable
-maps (only the given entries change) or full numeric vectors.
+maps (only the given entries change) or full values, which replace the
+old ones (any length; lists are allowed for \code{p}).
 }

@@ -73,7 +73,8 @@ test_that("periodic callbacks fire at every period", {
   cb <- PeriodicCallback(function(integ) n <<- n + 1, 0.1)
   prob <- ODEProblem(function(u, p, t) 0, u0 = 0, tspan = c(0, 1))
   solve(prob, RK4(), dt = 0.3, callback = cb)
-  expect_equal(n, 10)
+  # 0.1, ..., 0.9: the final time is not a periodic stop (DiffEqCallbacks)
+  expect_equal(n, 9)
 })
 
 test_that("event root finding converges on steep conditions", {

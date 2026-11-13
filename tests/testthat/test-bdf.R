@@ -14,6 +14,9 @@
 # norm (Julia's own steps change when its first step moves by one ulp);
 # they run once .rms_norm gives Julia's bits (bdft_julia_norm).
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 bdft_N <- 8
 bdft_heat <- function(u, p, t) {
   l <- c(0, u[-bdft_N]); r <- c(u[-1], 0)

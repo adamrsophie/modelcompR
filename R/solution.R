@@ -85,7 +85,12 @@ as.matrix.SciMLSolution <- function(x, ...) {
 #' @export
 as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, ...) {
   env <- .sol_env(x)
-  df <- data.frame(t = env$t, env$U, check.names = FALSE)
+  # only the saved components (save_idxs), named by their state index when
+  # the states have no names
+  U <- env$U
+  if (is.null(colnames(U))) colnames(U) <- seq_len(ncol(U))
+  if (!is.null(env$save_idxs)) U <- U[, env$save_idxs, drop = FALSE]
+  df <- data.frame(t = env$t, U, check.names = FALSE)
   sys <- env$sys
   if (!is.null(sys) && length(observed(sys))) {
     for (o in observed(sys)) df[[format(o$lhs)]] <- .sol_series(env, o$lhs)
@@ -247,8 +252,9 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 #' graphics.
 #'
 #' @param x A solution.
-#' @param idxs Variables or expressions to plot; a list of two plots one
-#'   against the other.
+#' @param idxs Variables or expressions to plot against time (a vector of
+#'   state indices plots each of them); a list of two plots the first against
+#'   the second (a phase plot).
 #' @param n Number of interpolation points for dense solutions.
 #' @param ... Passed to [graphics::matplot()].
 #' @return Invisibly `x`.
@@ -262,10 +268,15 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
     if (!is.matrix(vals)) vals <- matrix(vals, ncol = ncol(env$U))
     labs <- colnames(env$U)
   } else {
-    idl <- if (is.list(idxs) && !is_sym(idxs)) idxs else list(idxs)
+    idl <- if (is.list(idxs) && !is_sym(idxs)) idxs else if (is.atomic(idxs)) as.list(idxs) else list(idxs)
     vals <- if (isTRUE(env$dense)) x(ts, idxs = idl) else x[idl]
     if (!is.matrix(vals)) vals <- matrix(vals, ncol = length(idl))
     labs <- vapply(idl, function(z) if (is_sym(z)) format(z) else as.character(z), "")
+    # idxs = (x, y) in Plots.jl: one variable against the other
+    if (is.list(idxs) && !is_sym(idxs) && length(idxs) == 2L) {
+      graphics::plot(vals[, 1L], vals[, 2L], type = "l", xlab = labs[1L], ylab = labs[2L], ...)
+      return(invisible(x))
+    }
   }
   graphics::matplot(ts, vals, type = "l", lty = 1, xlab = "t", ylab = "", ...)
   graphics::legend("topright", legend = labs, col = seq_along(labs), lty = 1, bty = "n")

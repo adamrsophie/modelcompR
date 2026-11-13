@@ -4,6 +4,9 @@
 # NonlinearSolveFirstOrder 2.10.0, Sobol 1.5.0, SparseConnectivityTracer
 # 1.2.4, SparseMatrixColorings 0.4.29).
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .pa_defs <- function() {
   e <- new.env()
   local({

@@ -48,7 +48,7 @@ NonlinearSolveAlg(
 )
 }
 \arguments{
-\item{kappa}{The relative tolerance on the increment (\code{κ} upstream).}
+\item{kappa}{The relative tolerance on the increment (\ifelse{latex}{\verb{kappa}}{\verb{κ}} upstream).}
 
 \item{max_iter}{The largest number of iterations per solve.}
 

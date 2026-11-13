@@ -4,6 +4,9 @@
 # points, nf, njacs, nw, nsolve, naccept and nreject must agree exactly, and
 # the final state and the dense output values to rounding.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 rbf_rober <- function(u, p, t) c(-p[1] * u[1] + p[2] * u[2] * u[3],
                                  p[1] * u[1] - p[2] * u[2] * u[3] - p[3] * u[2] * u[2], p[3] * u[2] * u[2])
 rbf_rjac <- function(u, p, t) matrix(c(-p[1], p[2] * u[3], p[2] * u[2],

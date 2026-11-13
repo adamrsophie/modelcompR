@@ -133,7 +133,7 @@ expand_connections <- function(sys, ...) {
 
 #' Lowered names of derivatives
 #'
-#' `default_toterm(D(x))` returns the variable `xˍt` that `mtkcompile()` uses
+#' `default_toterm(D(x))` returns the variable \ifelse{latex}{\verb{x_t}}{\verb{xˍt}} that `mtkcompile()` uses
 #' for a lowered derivative; other expressions are returned unchanged.
 #'
 #' @param x An expression.

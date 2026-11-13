@@ -3,6 +3,9 @@
 # naccept, nreject, the final state and the dense output at two times, then
 # the adjusted constructor orders and the error messages.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 xtp_lv <- function(u, p, t) c(1.5 * u[1] - u[1] * u[2], -3 * u[2] + u[1] * u[2])
 xtp_vdp <- function(u, p, t) c(u[2], p[1] * ((1 - u[1] * u[1]) * u[2] - u[1]))
 xtp_vdpj <- function(u, p, t) matrix(c(0, p[1] * (-2 * u[1] * u[2] - 1), 1, p[1] * (1 - u[1] * u[1])), 2, 2)

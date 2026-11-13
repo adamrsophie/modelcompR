@@ -54,8 +54,8 @@ must return its result (a vector built with \code{c()} or a list).
 Branching on symbolic values cannot be traced.
 
 Unknowns are named from \code{u_names}, the system the problem was built from,
-the names of \code{u0}, or \verb{x₁, x₂, ...}; parameters from \code{p_names}, the
-system, the names of \code{p}, or \verb{α₁, α₂, ...} (\code{α} for a single number). The
+the names of \code{u0}, or \ifelse{latex}{\verb{x_1, x_2, ...}}{\verb{x₁, x₂, ...}}; parameters from \code{p_names}, the
+system, the names of \code{p}, or \ifelse{latex}{\verb{alpha_1, alpha_2, ...}}{\verb{α₁, α₂, ...}} (\ifelse{latex}{\verb{alpha}}{\verb{α}} for a single number). The
 values of \code{u0} and \code{p} become initial conditions of the system.
 }
 \examples{

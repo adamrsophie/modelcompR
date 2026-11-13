@@ -69,27 +69,59 @@ DiscreteCallback <- function(condition, affect, initialize = NULL, finalize = NU
 }
 
 #' @rdname ContinuousCallback
+#' @param filter_tstops `PresetTimeCallback()`: with `TRUE` only the times
+#'   inside the time span become stops; with `FALSE` every time is added
+#'   with [add_tstop()], which is an error for a time before the start.
 #' @export
-PresetTimeCallback <- function(times, affect, save_positions = c(TRUE, TRUE)) {
+PresetTimeCallback <- function(times, affect, initialize = NULL, filter_tstops = TRUE,
+                               save_positions = c(TRUE, TRUE)) {
+  if (!is.numeric(times)) stop("tstops must either be a number or a Vector", call. = FALSE)
   times <- sort(as.numeric(times))
+  # PresetTimeFunction of DiffEqCallbacks: the initialization adds the stops
+  # and applies the affect when the initial time is one of the times
+  init <- function(integ) {
+    if (!is.null(initialize)) initialize(integ)
+    if (!filter_tstops) for (tt in times) add_tstop(integ, tt)
+    if (.near_any(times, integ$t)) affect(integ)
+  }
   cb <- DiscreteCallback(function(u, t, integ) .near_any(times, t),
-                         affect, save_positions = save_positions)
-  cb$tstops <- times
+                         affect, initialize = init, save_positions = save_positions)
+  cb$tstops <- if (filter_tstops) times else numeric()
   cb
 }
 
 #' @rdname ContinuousCallback
 #' @param phase Time offset of the first event, `PeriodicCallback()`.
+#' @param initial_affect,final_affect `PeriodicCallback()`: also apply the
+#'   affect at the initial time, or when the integration reaches the final
+#'   time (which is never a periodic stop).
 #' @export
-PeriodicCallback <- function(affect, dt, phase = 0, save_positions = c(TRUE, TRUE)) {
+PeriodicCallback <- function(affect, dt, phase = 0, initial_affect = FALSE, final_affect = FALSE,
+                             initialize = NULL, save_positions = c(TRUE, TRUE)) {
+  if (phase < 0) stop("phase offset must be non-negative", call. = FALSE)
+  # the stops t0 + phase + k dt strictly before the final time: the next stop
+  # is only added while it lies before tstops_max (add_next_tstop!)
   times_for <- function(tsp) {
-    tt <- seq(tsp[1L] + phase, tsp[2L], by = sign(tsp[2L] - tsp[1L]) * abs(dt))
-    tt[tt != tsp[1L]]
+    dir <- if (tsp[2L] < tsp[1L]) -1 else 1
+    first <- tsp[1L] + dir * phase
+    if ((tsp[2L] - first) * dir < 0) return(numeric())
+    tt <- seq(first, tsp[2L], by = dir * abs(dt))
+    tt[tt != tsp[1L] & !vapply(tt, .near_any, TRUE, times = tsp[2L])]
   }
   st <- new.env(parent = emptyenv())
-  cb <- DiscreteCallback(function(u, t, integ) .near_any(st$times, t),
-                         affect, save_positions = save_positions,
-                         initialize = function(integ) st$times <- sort(times_for(integ$prob$tspan)))
+  # the condition of DiffEqCallbacks: a periodic time before the end, or the
+  # end itself with final_affect
+  cond <- function(u, t, integ) {
+    fin <- .near_any(st$tf, t)
+    (!fin && .near_any(st$times, t)) || (final_affect && fin)
+  }
+  init <- function(integ) {
+    if (!is.null(initialize)) initialize(integ)
+    st$times <- sort(times_for(integ$prob$tspan))
+    st$tf <- integ$prob$tspan[2L]
+    if (initial_affect) affect(integ)
+  }
+  cb <- DiscreteCallback(cond, affect, save_positions = save_positions, initialize = init)
   cb$tstops_fn <- times_for
   cb$periodic <- list(dt = dt, phase = phase)
   cb

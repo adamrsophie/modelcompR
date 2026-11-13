@@ -10,7 +10,7 @@ map_variables_to_equations(sys, rename_dummy_derivatives = TRUE)
 \item{sys}{A system returned by \code{mtkcompile()}.}
 
 \item{rename_dummy_derivatives}{Name dummy derivative variables such as
-\code{yˍt(t)} by their derivative form \code{Derivative(y(t), t)}.}
+\ifelse{latex}{\verb{y_t(t)}}{\verb{yˍt(t)}} by their derivative form \code{Derivative(y(t), t)}.}
 }
 \value{
 A list of equations named by the printed form of the variables;

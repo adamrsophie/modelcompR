@@ -4,6 +4,9 @@
 # SROCK1 is compared with StochasticDiffEqROCK whose stage choice targets
 # 2 |dt| rho, the correction this port makes (see the method's code).
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 srock_setup <- function() {
   N <- 6
   f <- function(u, p, t) {

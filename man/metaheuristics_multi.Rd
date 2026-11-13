@@ -126,7 +126,8 @@ population and \code{objective} their costs; \code{original} is the final state.
 }
 \examples{
 f <- function(x, p) c(sum(x^2), sum((x - 2)^2))
-prob <- OptimizationProblem(MultiObjectiveOptimizationFunction(f), c(0, 0), lb = c(0, 0), ub = c(2, 2))
+prob <- OptimizationProblem(MultiObjectiveOptimizationFunction(f), c(0, 0),
+  lb = c(0, 0), ub = c(2, 2))
 set.seed(1)
 sol <- solve(prob, SPEA2(N = 20), maxiters = 20)
 dim(sol$u)

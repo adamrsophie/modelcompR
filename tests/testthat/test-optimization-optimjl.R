@@ -3,6 +3,9 @@
 # 0.4.23), with the analytic gradient and Hessian given to both sides:
 # problem, method, maxiters (0: the default), retcode, u, objective,
 # iterations, fevals, gevals and hevals.
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ojl_ref <- c(
   "quad\tGradientDescent\t3\tMaxIters\t0.569274095941856\t-0.7505857983942367\t-0.697660410927028\t3\t5\t5\t0",
   "quad\tGradientDescent\t0\tSuccess\t0.5999999964948312\t-0.7999999943285176\t-0.6999999999999998\t33\t35\t35\t0",

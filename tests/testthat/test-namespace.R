@@ -62,8 +62,7 @@ test_that("delegating functions keep symcompR behavior", {
 })
 
 test_that("internal definitions do not shadow base R functions", {
-  skip_if_not(file.exists(test_path("../../tools/check_masking.R")))
-  out <- system2(file.path(R.home("bin"), "Rscript"), test_path("../../tools/check_masking.R"),
-                 stdout = TRUE, stderr = TRUE, env = paste0("R_LIBS=", paste(.libPaths(), collapse = ":")))
-  expect_match(paste(out, collapse = "\n"), "No function masks a base R function")
+  # masking_report() (helper-masking.R) reads the namespace, so this also
+  # runs from the built package, where tools/ is left out
+  expect_identical(masking_report()$name, character())
 })

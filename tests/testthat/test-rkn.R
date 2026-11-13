@@ -2,6 +2,9 @@
 # 2.3.0: the reference values come from tools/rkn-probe.jl (out of place
 # functions, state c(v, u)).
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 rkn_test_probs <- list(
   P1 = function() DynamicalODEProblem(function(v, u, p, t) -u - u * u * u, function(v, u, p, t) v,
                                       c(0.5, -0.3), c(1, 0.2), c(0, 1)),

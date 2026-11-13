@@ -142,10 +142,10 @@ add_initialization_parameters <- function(sys, split = TRUE) {
 #' `generate_initializesystem(sys, op = ...)` returns the system of
 #' nonlinear equations that determines consistent initial values of a
 #' time dependent system. Its unknowns are the unknowns of `sys`, the
-#' derivatives of its differential variables (named `xˍt`) and its solvable
+#' derivatives of its differential variables (named \ifelse{latex}{\verb{x_t}}{\verb{xˍt}}) and its solvable
 #' parameters (those bound to `NA`). Its equations are
 #'
-#' * the algebraic equations of `sys`, and `xˍt ~ f` for each differential
+#' * the algebraic equations of `sys`, and \ifelse{latex}{\verb{x_t ~ f}}{\verb{xˍt ~ f}} for each differential
 #'   equation `D(x) ~ f`, with observed variables substituted;
 #' * the bindings of variables;
 #' * one equation per initial condition in `op` or in the system: a constant

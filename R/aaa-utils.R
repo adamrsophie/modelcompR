@@ -14,7 +14,9 @@
 # The namespace separator used by ModelingToolkit (U+208A, subscript plus).
 NAMESPACE_SEPARATOR <- "\u208A"
 
-`%||%` <- function(a, b) if (is.null(a)) b else a
+# base R has %||% from 4.4.0 on; defined only for older versions, so the
+# namespace does not shadow it
+if (!exists("%||%", envir = baseenv(), inherits = FALSE)) `%||%` <- function(a, b) if (is.null(a)) b else a
 
 .key <- function(e) .subset2(e, "key")
 .type <- function(e) .subset2(e, "type")

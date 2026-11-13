@@ -271,7 +271,9 @@ ScipyBrute <- function() .scipy_alg("ScipyBrute", traits = list(bounds = TRUE))
   n <- length(x0)
   lb <- a$lb; ub <- a$ub
   cls <- class(alg)[1L]
-  if (cls %in% c("ScipyDifferentialEvolution", "ScipyDirect", "ScipyDualAnnealing", "ScipyBrute") &&
+  # ScipyShgo too: upstream leaves its missing bounds to scipy.optimize.shgo,
+  # which raises its own error
+  if (cls %in% c("ScipyDifferentialEvolution", "ScipyDirect", "ScipyDualAnnealing", "ScipyBrute", "ScipyShgo") &&
       (is.null(lb) || is.null(ub)))
     stop(IncompatibleOptimizerError(paste0(cls, " requires bounds")))
   if (cls %in% c("ScipyMinimizeScalar", "ScipyRootScalar") && n != 1L)

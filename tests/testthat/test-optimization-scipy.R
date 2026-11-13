@@ -2,6 +2,9 @@
 # values come from SciPy 1.18.1 through tools/scipy-probe.py (section named
 # in each comment); the iteration and evaluation counts must agree exactly.
 
+# long reference comparisons: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 sp_rosen <- function(x) { a <- 1 - x[1]; b <- x[2] - x[1] * x[1]; a * a + 100 * b * b }
 sp_rosen_grad <- function(x) { b <- x[2] - x[1] * x[1]; c(-2 * (1 - x[1]) - 400 * x[1] * b, 200 * b) }
 sp_rosen_hess <- function(x) matrix(c(2 - 400 * x[2] + 1200 * x[1] * x[1], -400 * x[1], -400 * x[1], 200), 2, 2)

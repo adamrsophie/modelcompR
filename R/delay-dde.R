@@ -102,7 +102,7 @@
 #' Delay systems
 #'
 #' `is_dde(sys)` tells whether the equations of a system contain delayed
-#' unknowns such as `EvalAt(t - tau)(x)`, written `x(t - τ)` in
+#' unknowns such as `EvalAt(t - tau)(x)`, written \ifelse{latex}{\verb{x(t - tau)}}{\verb{x(t - τ)}} in
 #' ModelingToolkit.
 #'
 #' @param sys A `System`.
