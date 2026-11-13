@@ -155,8 +155,8 @@ symbolic_discretize.default <- function(sys, discretizer, ...)
 #' the experimental convex optimization problem of SciMLBase: an objective
 #' `f(u, p)` (or an [OptimizationFunction()]), a start, conic `constraints`,
 #' optional bounds (both or neither), a mask `int` of integer variables and
-#' the sense `"MinSense"` or `"MaxSense"`. As upstream, no solver takes it
-#' yet. `HomotopyNonlinearFunction(f, polynomialize, unpolynomialize,
+#' the sense `"MinSense"` or `"MaxSense"`. It is solved with
+#' [ConvexMOI()] and [ConeConstraint()] constraints. `HomotopyNonlinearFunction(f, polynomialize, unpolynomialize,
 #' denominator, polynomial_jac)` is the polynomial form of a nonlinear system
 #' for homotopy continuation, with the maps between the original and the
 #' polynomial variables. `ODEInputFunction(f, ...)` is the right hand side
@@ -170,7 +170,8 @@ symbolic_discretize.default <- function(sys, discretizer, ...)
 #' @param constraints Constraints, or `NULL`.
 #' @param lb,ub Bounds, or `NULL`.
 #' @param int A logical mask of integer variables, or `NULL`.
-#' @param sense `"MinSense"` or `"MaxSense"`.
+#' @param sense `"MinSense"` or `"MaxSense"`, or the objects [MinSense] and
+#'   [MaxSense].
 #' @param polynomialize,unpolynomialize Maps from the original variables to
 #'   the polynomial ones and back.
 #' @param denominator The denominators of the polynomial form.

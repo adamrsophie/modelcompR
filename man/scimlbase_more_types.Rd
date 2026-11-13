@@ -58,7 +58,8 @@ ODEInputFunction(
 
 \item{int}{A logical mask of integer variables, or \code{NULL}.}
 
-\item{sense}{\code{"MinSense"} or \code{"MaxSense"}.}
+\item{sense}{\code{"MinSense"} or \code{"MaxSense"}, or the objects \link{MinSense} and
+\link{MaxSense}.}
 
 \item{...}{Further fields.}
 
@@ -79,8 +80,8 @@ An object of the named class.
 the experimental convex optimization problem of SciMLBase: an objective
 \code{f(u, p)} (or an \code{\link[=OptimizationFunction]{OptimizationFunction()}}), a start, conic \code{constraints},
 optional bounds (both or neither), a mask \code{int} of integer variables and
-the sense \code{"MinSense"} or \code{"MaxSense"}. As upstream, no solver takes it
-yet. \code{HomotopyNonlinearFunction(f, polynomialize, unpolynomialize, denominator, polynomial_jac)} is the polynomial form of a nonlinear system
+the sense \code{"MinSense"} or \code{"MaxSense"}. It is solved with
+\code{\link[=ConvexMOI]{ConvexMOI()}} and \code{\link[=ConeConstraint]{ConeConstraint()}} constraints. \code{HomotopyNonlinearFunction(f, polynomialize, unpolynomialize, denominator, polynomial_jac)} is the polynomial form of a nonlinear system
 for homotopy continuation, with the maps between the original and the
 polynomial variables. \code{ODEInputFunction(f, ...)} is the right hand side
 \code{f(x, u, p, t)} of a system with states \code{x} and inputs \code{u}, with optional

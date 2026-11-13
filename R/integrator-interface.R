@@ -175,6 +175,7 @@ step_integrator <- function(integ, dt = NULL, stop_at_tdt = FALSE) {
 #' @rdname integrator_interface
 #' @export
 solve_integrator <- function(integ) {
+  if (inherits(integ, "ConvexOptimizationCache")) return(.cvx_solve(integ))
   if (inherits(integ, "OptimizationCache")) return(.opt_solve_cache(integ))
   if (inherits(integ, "LinearCache")) return(.lin_solve_cache(integ))
   I <- .integ_I(integ)
@@ -275,6 +276,8 @@ savevalues <- function(integ) {
 #' @rdname integrator_interface
 #' @export
 reinit <- function(integ, u0 = NULL, t0 = NULL, tf = NULL, erase_sol = TRUE, p = NULL) {
+  # the conic cache rebuilds its cone program at the new p (R/optimization-convex.R)
+  if (inherits(integ, "ConvexOptimizationCache")) return(.cvx_reinit(integ, u0 = u0, p = p))
   if (inherits(integ, "OptimizationCache")) {
     if (!is.null(u0)) integ$prob$u0[] <- as.numeric(u0)
     if (!is.null(p)) integ$prob$p[] <- as.numeric(p)

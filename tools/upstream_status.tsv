@@ -1550,8 +1550,8 @@ StochasticDiffEqLevyArea	levyarea	ported
 StochasticDiffEqLevyArea	optimal_algorithm	ported
 StochasticDiffEqLevyArea	reconstruct_path	ported
 StochasticDiffEqLevyArea	terms_needed	ported
-ConvexOptimization	ConeConstraint	missing
-ConvexOptimization	ConvexMOI	missing
+ConvexOptimization	ConeConstraint	ported
+ConvexOptimization	ConvexMOI	ported
 OptimizationAuglag	AugLag	ported
 OptimizationBBO	BBO_borg_moea	ported
 OptimizationCMAEvolutionStrategy	CMAEvolutionStrategyOpt	ported
