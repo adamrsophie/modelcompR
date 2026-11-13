@@ -123,6 +123,17 @@ function trace(name, prob, alg, iters)
                     hv([i.mu, i.sigma, i.step_length, i.cost_primal, i.cost_dual, i.res_primal, i.res_dual,
                         i.gap_abs, i.gap_rel, i.ktratio, i.res_primal_inf, i.res_dual_inf]),
                     hv(s.solution.x), hv(s.solution.z), hv(s.solution.s)], "\t"))
+                # the last scaling of the nonsymmetric cones and the last
+                # step direction, to find where the iterates first part
+                if 1 <= k <= 4
+                    st = s.step_lhs
+                    println(io, join([name, "STEP" * string(k), hv(st.x), hv(st.z), hv(st.s), hx(st.τ), hx(st.κ)], "\t"))
+                    for (j, K) in enumerate(s.cones)
+                        hasproperty(K, :H_dual) || continue
+                        println(io, join([name, "CONE" * string(k) * ":" * string(j), hv(K.H_dual), hv(K.Hs),
+                            hv(K.grad), hv(K.z)], "\t"))
+                    end
+                end
             catch e
                 e isa InterruptException && rethrow()
                 println(io, join([name, string(k), "ERROR", replace(sprint(showerror, e), "\n" => " ", "\t" => " ")], "\t"))
