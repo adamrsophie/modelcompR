@@ -1662,9 +1662,9 @@ OptimizationOptimisers	RMSProp	ported
 OptimizationOptimisers	Rprop	ported
 OptimizationOptimisers	SignDecay	ported
 OptimizationOptimisers	WeightDecay	ported
-OptimizationPRIMA	BOBYQA	missing (constructor raises)
+OptimizationPRIMA	BOBYQA	ported
 OptimizationPRIMA	COBYLA	ported
-OptimizationPRIMA	LINCOA	missing (constructor raises)
+OptimizationPRIMA	LINCOA	ported
 OptimizationPRIMA	NEWUOA	ported
 OptimizationPRIMA	UOBYQA	ported
 OptimizationPolyalgorithms	PolyOpt	ported

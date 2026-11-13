@@ -32,7 +32,21 @@ pp_chained <- function(x, p) {
 pp_one <- function(x, p) (x[1] - 2) * (x[1] - 2) + 0.1 * (x[1] * x[1] * x[1] * x[1])
 pp_nanrosen <- function(x, p) if (x[1] + x[2] > 1.5) NaN else pp_rosen(x, p)
 pp_infrosen <- function(x, p) if (x[1] > 0.9) Inf else pp_rosen(x, p)
-pp_status <- c("0" = "SMALL_TR_RADIUS", "1" = "FTARGET_ACHIEVED", "3" = "MAXFUN_REACHED", "20" = "MAXTR_REACHED")
+pp_status <- c("0" = "SMALL_TR_RADIUS", "1" = "FTARGET_ACHIEVED", "2" = "TRSUBP_FAILED", "3" = "MAXFUN_REACHED",
+               "20" = "MAXTR_REACHED", "-1" = "NAN_INF_X", "-2" = "NAN_INF_F", "-3" = "NAN_INF_MODEL",
+               "6" = "NO_SPACE_BETWEEN_BOUNDS", "7" = "DAMAGING_ROUNDING")
+pp_sweepf <- function(x, w, cc, q) {
+  s <- 0
+  for (i in seq_along(x)) {
+    t <- x[i] - cc[i]
+    s <- s + w[i] * (t * t)
+  }
+  for (i in seq_len(length(x) - 1L)) {
+    u <- x[i] * x[i + 1] - 0.5
+    s <- s + q[i] * (u * u)
+  }
+  s
+}
 
 # solves fun from x0 with alg and the solve() arguments in ..., and checks
 # the result against the reference ref of tools/prima-probe.jl
@@ -49,6 +63,22 @@ pp_check <- function(alg, ref, fun, x0, ..., lb = NULL, ub = NULL, cons = NULL, 
     expect_identical(s$original$status, pp_status[[as.character(ref$status)]])
   }
   invisible(s)
+}
+
+# runs the LINCOA port on fun from x0 with the constraints and options in
+# ... (the matrices of PRIMA.lincoa, so that no constraint is linearized
+# numerically) and checks the result against ref
+pp_check_lc <- function(ref, fun, x0, ..., xsol = NULL, tol = 1e-4) {
+  r <- .lc_lincoa(function(x) fun(x, NULL), x0, ...)
+  if (!is.null(xsol)) expect_equal(r$x, xsol, tolerance = tol)
+  if (ref_platform()) {
+    expect_identical(r$x, ref$x)
+    expect_identical(r$f, ref$fx)
+    expect_identical(r$nf, ref$nf)
+    expect_identical(r$info, ref$status)
+    expect_identical(r$cstrv, ref$cstrv)
+  }
+  invisible(r)
 }
 
 test_that("UOBYQA matches PRIMA.jl", {
@@ -193,4 +223,45 @@ test_that("UOBYQA and NEWUOA check their options and problems", {
   s <- solve(pr, UOBYQA(), callback = function(state, f) state$iter >= 10)
   expect_identical(s$retcode, "Terminated")
   expect_lte(s$objective, pp_rosen(c(-1.2, 1)))
+})
+
+test_that("BOBYQA and LINCOA check their options and problems", {
+  prc <- OptimizationProblem(pp_rosen, c(-1.2, 1), numeric(), cons = function(u, p) u[1] + u[2], lcons = -Inf,
+                             ucons = 1)
+  expect_error(solve(prc, BOBYQA()), "does not support constraints")
+  prn <- OptimizationProblem(pp_rosen, c(-1.2, 1), numeric(), cons = function(u, p) u[1] * u[1] + u[2],
+                             lcons = -Inf, ucons = 1)
+  expect_error(solve(prn, LINCOA()), "supports only linear constraints")
+  # no space between the bounds of a variable
+  pr0 <- OptimizationProblem(pp_rosen, c(-1.2, 1), numeric(), lb = c(-2, 1), ub = c(2, 1))
+  expect_warning(s <- solve(pr0, BOBYQA()), "no space between the lower and upper bounds of variable 2")
+  expect_identical(s$retcode, "InitialFailure")
+  # x0 is moved rhobeg away from the inactive bounds, and rhobeg is revised
+  prb <- OptimizationProblem(pp_rosen, c(-1.2, 1), numeric(), lb = c(-2, -2), ub = c(2, 2))
+  expect_warning(solve(prb, BOBYQA(), maxiters = 10), "X0 is revised")
+  expect_warning(expect_warning(solve(prb, BOBYQA(), maxiters = 10, rhobeg = 3), "Invalid RHOBEG; BOBYQA requires"),
+                 "X0 is revised")
+  # LINCOA relaxes the constraints that x0 violates and ignores zero rows
+  expect_warning(.lc_lincoa(function(x) pp_rosen(x, NULL), c(1, 1), Aineq = matrix(c(1, 1), 1), bineq = 1,
+                            maxfun = 6L), "The starting point is infeasible")
+  expect_warning(.lc_lincoa(function(x) pp_rosen(x, NULL), c(-1.2, 1), Aineq = rbind(c(0, 0), c(1, 1)),
+                            bineq = c(1, 1), maxfun = 6L), "zero gradients")
+  # the messages of LINCOA carry the constraint violation and values
+  out <- capture.output(r <- .lc_lincoa(function(x) pp_rosen(x, NULL), c(-1.2, 1), Aineq = matrix(c(1, 1), 1),
+                                        bineq = 1, ftarget = 100, iprint = 3L))
+  xl <- "The corresponding X is: -1.200000000000000E+000   1.000000000000000E+000"
+  cl <- "The constraint value is: -1.200000000000000E+000"
+  expect_identical(out, c("", "Initialization step with radius =  1.000000000000000E+000",
+                          paste0("Function number 1   F =  2.420000000000000E+001   Constraint violation = ",
+                                 " 0.000000000000000E+000"), xl, cl, "", "",
+                          "Return from LINCOA because the target function value is achieved.",
+                          paste0("Number of function values = 1   Least value of F =  2.420000000000000E+001   ",
+                                 "Constraint violation =  0.000000000000000E+000"), xl, cl))
+  # bounds and linear constraints through solve()
+  s <- solve(OptimizationProblem(pp_rosen, c(-1.2, 1), numeric(), lb = c(-2, -2), ub = c(0.5, 2)), LINCOA())
+  expect_equal(unname(s$u), c(0.5, 0.25), tolerance = 1e-4)
+  s <- solve(OptimizationProblem(pp_rosen, c(0, 0), numeric(), cons = function(u, p) c(u[1] - u[2], u[1] + u[2]),
+                                 lcons = c(0, -Inf), ucons = c(0, 1)), LINCOA())
+  expect_equal(s$u[1], s$u[2], tolerance = 1e-8)
+  expect_lte(s$original$cstrv, 1e-10)
 })

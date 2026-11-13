@@ -1,7 +1,7 @@
 # Reference values for the PRIMA ports (R/optimization-prima*.R): runs
 # PRIMA.jl (libprima) and prints R assignments with full precision. Usage:
 #   julia --project=<env with PRIMA> tools/prima-probe.jl > refs.R
-# The UOBYQA and NEWUOA values are printed as hexadecimal
+# The UOBYQA, NEWUOA, BOBYQA and LINCOA values are printed as hexadecimal
 # literals (exact in R) for tests/testthat/test-optimization-prima.R.
 using PRIMA, Printf
 
@@ -85,3 +85,114 @@ emith("uobyqa_rosen_rhoend1", PRIMA.uobyqa(rosen, [-1.2, 1.0]; rhoend = 1.0)...)
 emith("uobyqa_rosen_ftarget0", PRIMA.uobyqa(rosen, [-1.2, 1.0]; ftarget = 100.0)...)
 emith("uobyqa_nanrosen", PRIMA.uobyqa(nanrosen, [-1.2, 1.0])...)
 emith("uobyqa_infrosen", PRIMA.uobyqa(infrosen, [-1.2, 1.0])...)
+
+# BOBYQA and LINCOA (hexadecimal literals, with the constraint violation)
+function emithc(name, x, info)
+    println("ref\$$name <- list(x = $(hv(x)), fx = $(hx(info.fx)), nf = $(info.nf)L, status = $(Int(info.status))L, ",
+            "cstrv = $(hx(info.cstrv)))")
+end
+hm(A) = "matrix(" * hv(vec(Float64.(A))) * ", $(size(A, 1)), $(size(A, 2)))"
+
+# BOBYQA: x0 is revised to the bounds or rhobeg inside them (honour_x0 is
+# false since PRIMA.jl passes rhobeg), rhobeg above minimum(xu - xl)/2 is
+# revised to minimum(xu - xl)/4
+emithc("bobyqa_rosen", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0])...)
+emithc("bobyqa_rosen_active", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [0.5, 2.0])...)
+emithc("bobyqa_rosen_free", PRIMA.bobyqa(rosen, [-1.2, 1.0])...)
+emithc("bobyqa_rosen_inside", PRIMA.bobyqa(rosen, [-0.5, 1.5]; xl = [-2.0, -2.0], xu = [0.8, 4.0])...)
+emithc("bobyqa_rosen_outside", PRIMA.bobyqa(rosen, [5.0, -5.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0])...)
+emithc("bobyqa_poly3", PRIMA.bobyqa(poly3, [0.0, 0.0, 0.0]; xl = [-1.0, -1.0, -3.0], xu = [0.5, 3.0, 3.0])...)
+emithc("bobyqa_poly3_rho", PRIMA.bobyqa(poly3, [0.0, 0.0, 0.0]; xl = [-3.0, -3.0, -3.0], xu = [3.0, 3.0, 3.0],
+                                       rhobeg = 0.5, rhoend = 1e-8)...)
+emithc("bobyqa_rosen_bigrho", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0], rhobeg = 3.0)...)
+emithc("bobyqa_chained5", PRIMA.bobyqa(chained, fill(-1.0, 5); xl = fill(-2.0, 5), xu = fill(0.8, 5))...)
+emithc("bobyqa_chained5_npt7", PRIMA.bobyqa(chained, fill(-1.0, 5); xl = fill(-2.0, 5), xu = fill(2.0, 5), npt = 7)...)
+emithc("bobyqa_chained5_npt21", PRIMA.bobyqa(chained, fill(-1.0, 5); xl = fill(-2.0, 5), xu = fill(2.0, 5),
+                                            npt = 21)...)
+emithc("bobyqa_chained10_npt30", PRIMA.bobyqa(chained, fill(-1.0, 10); xl = fill(-3.0, 10), xu = fill(0.9, 10),
+                                             npt = 30)...)
+emithc("bobyqa_one", PRIMA.bobyqa(one, [0.0]; xl = [-5.0], xu = [5.0])...)
+emithc("bobyqa_one_far", PRIMA.bobyqa(one, [1000.0]; xl = [-2000.0], xu = [2000.0])...)
+emithc("bobyqa_rosen_maxfun", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0], maxfun = 30)...)
+emithc("bobyqa_rosen_ftarget", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0], ftarget = 1e-3)...)
+emithc("bobyqa_rosen_scale", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0],
+                                         scale = [2.0, 0.5])...)
+emithc("bobyqa_rosen_maxfun3", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0], maxfun = 3)...)
+emithc("bobyqa_rosen_rhoend0", PRIMA.bobyqa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0], rhoend = 0.0)...)
+emithc("bobyqa_nanrosen", PRIMA.bobyqa(nanrosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0])...)
+emithc("bobyqa_infrosen", PRIMA.bobyqa(infrosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [2.0, 2.0])...)
+
+# LINCOA: linear_ineq = (A, b) is A x <= b, linear_eq = (A, b) is A x = b
+emithc("lincoa_rosen", PRIMA.lincoa(rosen, [-1.2, 1.0])...)
+emithc("lincoa_rosen_ineq", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]))...)
+emithc("lincoa_rosen_eq_bounds", PRIMA.lincoa(rosen, [0.0, 0.0]; linear_eq = ([1.0 -1.0], [0.0]), xl = [-2.0, -2.0],
+                                             xu = [0.5, 2.0])...)
+emithc("lincoa_rosen_bounds", PRIMA.lincoa(rosen, [-1.2, 1.0]; xl = [-2.0, -2.0], xu = [0.5, 2.0])...)
+emithc("lincoa_poly3_ineq", PRIMA.lincoa(poly3, [0.0, 0.0, 0.0]; linear_ineq = ([1.0 1.0 1.0; -1.0 0.0 0.0], [1.5, 0.0]))...)
+# an infeasible x0 (the right hand sides are relaxed) and a zero row
+emithc("lincoa_poly3_infeasible", PRIMA.lincoa(poly3, [1.0, 1.0, 1.0]; linear_ineq = ([1.0 1.0 1.0], [1.5]))...)
+emithc("lincoa_rosen_zerorow", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([0.0 0.0; 1.0 1.0], [1.0, 1.0]))...)
+emithc("lincoa_chained5", PRIMA.lincoa(chained, fill(-1.0, 5); linear_ineq = (ones(1, 5), [3.0]))...)
+emithc("lincoa_chained5_npt7", PRIMA.lincoa(chained, fill(-1.0, 5); linear_ineq = (ones(1, 5), [3.0]), npt = 7)...)
+emithc("lincoa_chained5_npt21", PRIMA.lincoa(chained, fill(-1.0, 5); linear_ineq = (ones(1, 5), [3.0]), npt = 21)...)
+emithc("lincoa_chained10_npt30", PRIMA.lincoa(chained, fill(-1.0, 10);
+                                             linear_ineq = ([ones(1, 10); -ones(1, 5) zeros(1, 5)], [6.0, 0.0]),
+                                             npt = 30)...)
+emithc("lincoa_rosen_rho", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]), rhobeg = 0.5,
+                                       rhoend = 1e-8)...)
+emithc("lincoa_rosen_maxfun", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]), maxfun = 30)...)
+emithc("lincoa_rosen_ftarget", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]), ftarget = 0.2)...)
+emithc("lincoa_rosen_scale", PRIMA.lincoa(rosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]), scale = [2.0, 0.5])...)
+emithc("lincoa_nanrosen", PRIMA.lincoa(nanrosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]))...)
+emithc("lincoa_infrosen", PRIMA.lincoa(infrosen, [-1.2, 1.0]; linear_ineq = ([1.0 1.0], [1.0]))...)
+emithc("lincoa_one", PRIMA.lincoa(one, [0.0]; linear_ineq = ([1.0;;], [1.0]))...)
+
+# seeded sweeps of BOBYQA and LINCOA: the inputs are printed with the result,
+# so that the tests need no random number generator
+using Random
+function sweepf(x, w, c, q)
+    s = 0.0
+    for i in eachindex(x)
+        t = x[i] - c[i]
+        s = s + w[i] * (t * t)
+    end
+    for i in 1:length(x)-1
+        u = x[i] * x[i+1] - 0.5
+        s = s + q[i] * (u * u)
+    end
+    s
+end
+rng = MersenneTwister(20261112)
+for k in 1:24
+    n = rand(rng, 1:5)
+    c = randn(rng, n); w = 0.5 .+ 2 .* rand(rng, n); q = rand(rng, n - 1)
+    xl = randn(rng, n) .- 1.0; xu = xl .+ 0.3 .+ 3 .* rand(rng, n)
+    x0 = rand(rng) < 0.2 ? 3 .* randn(rng, n) : xl .+ (xu .- xl) .* rand(rng, n)
+    npt = rand(rng, unique([n + 2, 2 * n + 1, div((n + 1) * (n + 2), 2)]))
+    rhobeg = rand(rng) < 0.5 ? 1.0 : 0.2 * minimum(xu .- xl)
+    x, info = PRIMA.bobyqa(z -> sweepf(z, w, c, q), x0; xl, xu, npt, rhobeg)
+    println("ref\$sweepbq_$k <- list(w = $(hv(w)), c = $(hv(c)), q = $(hv(q)), x0 = $(hv(x0)), xl = $(hv(xl)), ",
+            "xu = $(hv(xu)), npt = $(npt)L, rhobeg = $(hx(rhobeg)), x = $(hv(x)), fx = $(hx(info.fx)), ",
+            "nf = $(info.nf)L, status = $(Int(info.status))L)")
+end
+for k in 1:24
+    n = rand(rng, 2:5)
+    c = randn(rng, n); w = 0.5 .+ 2 .* rand(rng, n); q = rand(rng, n - 1)
+    x0 = randn(rng, n)
+    mi = rand(rng, 0:3); me = rand(rng) < 0.3 ? 1 : 0
+    Ai = randn(rng, mi, n); bi = Ai * x0 .+ (rand(rng, mi) .- 0.2)
+    Ae = randn(rng, me, n); be = Ae * x0 .+ 0.1 .* randn(rng, me)
+    bnd = rand(rng) < 0.5
+    xl = bnd ? x0 .- 0.5 .- rand(rng, n) : fill(-Inf, n)
+    xu = bnd ? x0 .+ 0.5 .+ rand(rng, n) : fill(Inf, n)
+    npt = rand(rng, unique([n + 2, 2 * n + 1, div((n + 1) * (n + 2), 2)]))
+    kw = (; npt, xl, xu)
+    mi > 0 && (kw = (; kw..., linear_ineq = (Ai, bi)))
+    me > 0 && (kw = (; kw..., linear_eq = (Ae, be)))
+    x, info = PRIMA.lincoa(z -> sweepf(z, w, c, q), x0; kw...)
+    println("ref\$sweeplc_$k <- list(w = $(hv(w)), c = $(hv(c)), q = $(hv(q)), x0 = $(hv(x0)), ",
+            "Aineq = $(mi > 0 ? hm(Ai) : "NULL"), bineq = $(mi > 0 ? hv(bi) : "NULL"), ",
+            "Aeq = $(me > 0 ? hm(Ae) : "NULL"), beq = $(me > 0 ? hv(be) : "NULL"), ",
+            "xl = $(bnd ? hv(xl) : "NULL"), xu = $(bnd ? hv(xu) : "NULL"), npt = $(npt)L, x = $(hv(x)), ",
+            "fx = $(hx(info.fx)), nf = $(info.nf)L, status = $(Int(info.status))L, cstrv = $(hx(info.cstrv)))")
+end

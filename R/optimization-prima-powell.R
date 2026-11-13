@@ -286,6 +286,7 @@
 # Q(xopt + d) - Q(xopt) of the quadratic model [gq, pq, hq] (quadinc)
 .pw_quadinc <- function(d, xpt, gq, pq, hq) {
   w <- .pw_matprod12(d, xpt)
+  if (is.null(hq)) return(.pw_fma(0.5, .pw_inprod(w, pq * w), .pw_inprod(d, gq)))
   .pw_fma(0.5, .pw_inprod(w, pq * w), .pw_inprod(d, .pw_fma(0.5, .pw_matprod21(hq, d), gq)))
 }
 .pw_wcheck <- function(kref, d, xpt) {
@@ -324,8 +325,9 @@
 }
 
 # update of [BMAT, ZMAT, IDZ] when XPT(:, knew) moves to XPT(:, kref) + d
-# (updateh of powalg); returns list(idz, bmat, zmat, info)
-.pw_updateh <- function(knew, kref, d, xpt, idz, bmat, zmat) {
+# (updateh of powalg; posdef = TRUE is the updateh of BOBYQA, which updates
+# only when denom > 0); returns list(idz, bmat, zmat, info)
+.pw_updateh <- function(knew, kref, d, xpt, idz, bmat, zmat, posdef = FALSE) {
   n <- nrow(xpt)
   npt <- ncol(xpt)
   hcol <- .pw_omega_col(idz, zmat, knew)
@@ -335,7 +337,7 @@
   tau <- vlag[knew]
   vlag[knew] <- tau - 1
   denom <- .pw_fma(alpha, beta, tau * tau)
-  if (!(is.finite(sum(abs(hcol)) + sum(abs(vlag)) + abs(beta)) && isTRUE(abs(denom) > 0)))
+  if (!(is.finite(sum(abs(hcol)) + sum(abs(vlag)) + abs(beta)) && isTRUE(if (posdef) denom > 0 else abs(denom) > 0)))
     return(list(idz = idz, bmat = bmat, zmat = zmat, info = 7L))
   w <- c(hcol, bmat[, knew])
   jj <- seq_len(n)
@@ -476,25 +478,33 @@
               ifelse(is.nan(v), "NaN", ifelse(v > 0, "Infinity", "-Infinity")))
   sprintf("%23s", s)
 }
-.pw_xlines <- function(x) {
+.pw_xlines <- function(x, label = "The corresponding X is") {
   f <- .pw_ffmt(x)
-  if (length(f) <= 2L) return(paste0("The corresponding X is: ", paste(f, collapse = "  ")))
-  c("The corresponding X is:", vapply(split(f, (seq_along(f) - 1L) %/% 4L), paste, "", collapse = "  "))
+  if (length(f) <= 2L) return(paste0(label, ": ", paste(f, collapse = "  ")))
+  c(paste0(label, ":"), vapply(split(f, (seq_along(f) - 1L) %/% 4L), paste, "", collapse = "  "))
 }
+# the constraint violation and constraint lines of the messages of LINCOA
+# (constr holds the constraint values, empty for an unconstrained problem)
+.pw_cvtext <- function(cstrv, constr) {
+  if (length(constr)) paste0("   Constraint violation = ", .pw_ffmt(cstrv)) else ""
+}
+.pw_conlines <- function(constr) if (length(constr)) .pw_xlines(constr, "The constraint value is")
 .pw_say <- function(lines) cat(paste0(lines, "\n"), sep = "")
-.pw_fmsg <- function(iprint, state, nf, delta, f, x) {
+.pw_fmsg <- function(iprint, state, nf, delta, f, x, cstrv = 0, constr = NULL) {
   if (iprint >= 3L) {
     .pw_say(c("", paste0(state, " step with radius = ", .pw_ffmt(delta)),
-              paste0("Function number ", nf, "   F = ", .pw_ffmt(f)), .pw_xlines(x)))
+              paste0("Function number ", nf, "   F = ", .pw_ffmt(f), .pw_cvtext(cstrv, constr)), .pw_xlines(x),
+              .pw_conlines(constr)))
   }
 }
-.pw_rhomsg <- function(iprint, nf, delta, f, rho, x) {
+.pw_rhomsg <- function(iprint, nf, delta, f, rho, x, cstrv = 0, constr = NULL) {
   if (iprint >= 2L) {
     .pw_say(c(if (iprint >= 3L) "", "", paste0("New RHO = ", .pw_ffmt(rho), "   Delta = ", .pw_ffmt(delta)),
-              paste0("Number of function values = ", nf, "   Least value of F = ", .pw_ffmt(f)), .pw_xlines(x)))
+              paste0("Number of function values = ", nf, "   Least value of F = ", .pw_ffmt(f),
+                     .pw_cvtext(cstrv, constr)), .pw_xlines(x), .pw_conlines(constr)))
   }
 }
-.pw_retmsg <- function(solver, iprint, info, nf, f, x) {
+.pw_retmsg <- function(solver, iprint, info, nf, f, x, cstrv = 0, constr = NULL) {
   if (iprint >= 1L) {
     why <- switch(as.character(info),
                   "0" = "the trust region radius reaches its lower bound.",
@@ -506,9 +516,12 @@
                   "-2" = "the objective or constraint functions return NaN or +Inf.",
                   "-3" = "NaN or Inf occurs in the models.",
                   "7" = "rounding errors are becoming damaging.",
+                  "6" = "there is no space between the lower and upper bounds of variable.",
+                  "8" = "one of the linear constraints has a zero gradient",
                   "UNKNOWN EXIT FLAG")
     .pw_say(c(if (iprint >= 2L) "", "", paste0("Return from ", solver, " because ", why),
-              paste0("Number of function values = ", nf, "   Least value of F = ", .pw_ffmt(f)), .pw_xlines(x)))
+              paste0("Number of function values = ", nf, "   Least value of F = ", .pw_ffmt(f),
+                     .pw_cvtext(cstrv, constr)), .pw_xlines(x), .pw_conlines(constr)))
   }
 }
 
@@ -521,7 +534,7 @@
 # preproc of PRIMA for UOBYQA, NEWUOA, BOBYQA and LINCOA: revises invalid
 # options (the parameters eta1, eta2, gamma1 and gamma2 keep their defaults,
 # which PRIMA.jl cannot change)
-.pw_preproc <- function(solver, n, maxfun, ftarget, rhobeg, rhoend, npt = NULL) {
+.pw_preproc <- function(solver, n, maxfun, ftarget, rhobeg, rhoend, npt = NULL, xl = NULL, xu = NULL, x0 = NULL) {
   min_maxfun <- if (solver == "UOBYQA") ((n + 1L) * (n + 2L)) %/% 2L + 1L else n + 3L
   warn <- function(...) warning(solver, ": Invalid ", ..., ".", call. = FALSE)
   if (maxfun < min_maxfun) {
@@ -539,14 +552,34 @@
          npt)
   }
   if (isTRUE(abs(rhobeg - rhoend) < 1e2 * .pr_eps * max(abs(rhobeg), 1))) rhoend <- rhobeg
+  bq <- solver == "BOBYQA"
+  rhobeg_dft <- if (bq) max(.pr_eps, min(1, min(xu - xl) / 4)) else 1
+  rhoend_dft <- if (bq) max(.pr_eps, min(0.1 * rhobeg_dft, 1e-6)) else 1e-6
+  if (bq && isTRUE(rhobeg > min(xu - xl) / 2)) {
+    rhobeg <- min(xu - xl) / 4
+    warning(solver, ": Invalid RHOBEG; BOBYQA requires 0 < RHOBEG <= MINVAL(XU-XL)/2; it is set to MINVAL(XU-XL)/4",
+            call. = FALSE)
+  }
   if (!isTRUE(rhobeg > 0) || !is.finite(rhobeg)) {
-    rhobeg <- if (is.finite(rhoend) && rhoend > 0) max(10 * rhoend, 1) else 1
+    rhobeg <- if (is.finite(rhoend) && rhoend > 0 && !bq) max(10 * rhoend, rhobeg_dft) else rhobeg_dft
     warn("RHOBEG; it should be a positive number; it is set to ", .pw_ffmt(rhobeg))
   }
   if (!isTRUE(rhoend > 0) || rhobeg < rhoend || !is.finite(rhoend)) {
-    rhoend <- max(.pr_eps, min(0.1 * rhobeg, 1e-6))
+    rhoend <- max(.pr_eps, min(0.1 * rhobeg, rhoend_dft))
     warn("RHOEND; it should be a positive number and RHOEND <= RHOBEG; it is set to ", .pw_ffmt(rhoend))
   }
+  if (bq) {
+    # honour_x0 is false (PRIMA.jl always passes rhobeg): x0 moves to a bound
+    # or at least rhobeg inside it
+    x00 <- x0
+    lo <- xl + 0.5 * rhobeg
+    x0 <- ifelse(x0 <= lo, xl, ifelse(x0 < xl + rhobeg, xl + rhobeg, x0))
+    hi <- xu - 0.5 * rhobeg
+    x0 <- ifelse(x0 >= hi, xu, ifelse(x0 > xu - rhobeg, xu - rhobeg, x0))
+    if (any(abs(x00 - x0) > 0))
+      warning(solver, ": X0 is revised so that the distance between X0 and the inactive bounds is at least RHOBEG; ",
+              "set HONOUR_X0 to .TRUE. if you prefer to keep X0 unchanged", call. = FALSE)
+  }
   list(maxfun = as.integer(maxfun), ftarget = ftarget, rhobeg = rhobeg, rhoend = rhoend,
-       npt = if (!is.null(npt)) as.integer(npt))
+       npt = if (!is.null(npt)) as.integer(npt), x0 = x0)
 }

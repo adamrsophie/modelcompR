@@ -30,14 +30,18 @@
 #' `iprint` go to the solver. `iprint` is a level of PRIMA.jl's `Message`:
 #' 0 (`"MSG_NONE"`), 1 (`"MSG_EXIT"`, the exit message), 2 (`"MSG_RHO"`,
 #' also each reduction of the trust region bound) or 3 (`"MSG_FEVL"`, also
-#' each function evaluation); the messages of `UOBYQA()` and `NEWUOA()` are
-#' those of libprima, printed to the console. Invalid `maxfun`, `npt`,
+#' each function evaluation); the messages of `UOBYQA()`, `NEWUOA()`,
+#' `BOBYQA()` and `LINCOA()` are those of libprima, printed to the console. Invalid `maxfun`, `npt`,
 #' `ftarget` or `rhoend` values are revised with a warning, as in libprima.
 #' `abstol`, `reltol` and `maxtime` are not supported, as in the Julia
 #' wrapper.
 #'
-#' `UOBYQA()`, `NEWUOA()` and `COBYLA()` are ported; `BOBYQA()` and
-#' `LINCOA()` are not yet ported and raise an error on [solve()].
+#' The constraints of `LINCOA()` must be linear (the problem's `cons` is
+#' split into linear equalities and inequalities as for `COBYLA()`); a
+#' nonlinear constraint raises an error. The Julia wrapper passes no
+#' constraints to LINCOA and so ignores them; here they are honored. `BOBYQA()` moves `u0` to the bounds
+#' or at least `rhobeg` inside them, with a warning, as libprima does when
+#' `rhobeg` is given.
 #'
 #' @return An algorithm object for [solve()].
 #' @examples
@@ -48,6 +52,9 @@
 #' rosen <- function(u, p) (1 - u[1]) * (1 - u[1]) + 100 * (u[2] - u[1] * u[1]) * (u[2] - u[1] * u[1])
 #' solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), UOBYQA())$u
 #' solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), NEWUOA(), npt = 4)$u
+#' solve(OptimizationProblem(rosen, c(-0.5, 1.5), numeric(), lb = c(-2, -2), ub = c(0.8, 4)), BOBYQA())$u
+#' solve(OptimizationProblem(rosen, c(0, 0), numeric(), cons = function(u, p) u[1] + u[2],
+#'                           lcons = -Inf, ucons = 1), LINCOA())$u
 #' @name prima_optimizers
 NULL
 
@@ -152,8 +159,6 @@ COBYLA <- function() .prima_alg("COBYLA", list(bounds = TRUE, cons = TRUE))
   if (!is.null(opts$maxtime) || !is.null(opts$abstol) || !is.null(opts$reltol))
     stop("maxtime, abstol and reltol kwargs not supported in ", cls, "()", call. = FALSE)
   if (identical(cls, "COBYLA")) return(.prima_solve_cobyla(a, alg, opts))
-  if (!cls %in% c("UOBYQA", "NEWUOA"))
-    stop(cls, "() of OptimizationPRIMA is not yet ported to native R in modelcompR", call. = FALSE)
   fn <- a$f
   p <- a$p
   x0 <- as.numeric(a$u0)
@@ -163,12 +168,12 @@ COBYLA <- function() .prima_alg("COBYLA", list(bounds = TRUE, cons = TRUE))
   unknown <- setdiff(names(kw), known)
   if (length(unknown)) stop("unsupported keyword argument `", unknown[1L], "` of ", cls, "()", call. = FALSE)
   has_cons <- is.function(fn$cons) && length(a$lcons %||% numeric()) > 0L
-  if (has_cons)
+  if (has_cons && cls != "LINCOA")
     stop(IncompatibleOptimizerError(paste0("The algorithm ", cls, " does not support constraints. Either ",
                                            "remove the `cons` function passed to `OptimizationFunction` or use ",
                                            "a different algorithm.")))
   bounded <- !is.null(a$lb) || !is.null(a$ub)
-  if (bounded)
+  if (bounded && cls %in% c("UOBYQA", "NEWUOA"))
     stop(IncompatibleOptimizerError(paste0("The algorithm ", cls, " does not support box constraints. ",
                                            "Either remove the `lb` or `ub` bounds passed to ",
                                            "`OptimizationProblem` or use a different algorithm.")))
@@ -194,8 +199,27 @@ COBYLA <- function() .prima_alg("COBYLA", list(bounds = TRUE, cons = TRUE))
   xs <- if (scaled) x0 / scl else x0
   common <- list(fun = f, x0 = xs, rhobeg = args$rhobeg, rhoend = args$rhoend, ftarget = args$ftarget,
                  maxfun = as.integer(args$maxfun), iprint = as.integer(args$iprint))
-  res <- if (cls == "UOBYQA") do.call(.uo_uobyqa, common) else
-    do.call(.nw_newuoa, c(common, list(npt = as.integer(args$npt))))
+  # the bounds reach PRIMA.jl only when ub is given, as in the Julia wrapper
+  bnd <- function(v, def) if (is.null(v) || is.null(a$ub)) rep(def, n) else rep_len(as.numeric(v), n) / scl
+  res <- switch(cls,
+    UOBYQA = do.call(.uo_uobyqa, common),
+    NEWUOA = do.call(.nw_newuoa, c(common, list(npt = as.integer(args$npt)))),
+    BOBYQA = do.call(.bq_bobyqa, c(common, list(npt = as.integer(args$npt), xl = bnd(a$lb, -Inf),
+                                                xu = bnd(a$ub, Inf)))),
+    LINCOA = {
+      lin <- list()
+      if (has_cons) {
+        lc <- .prima_cons_parts(a, n)
+        if (length(lc$nl))
+          stop("LINCOA() supports only linear constraints; constraint ", lc$nl[1L], " is nonlinear. Use COBYLA() ",
+               "for nonlinear constraints.", call. = FALSE)
+        # the gradients scaled as the variables (A[i, j] * scale[j] in PRIMA.jl)
+        sc <- function(A) if (!is.null(A)) A * rep(scl, each = nrow(A))
+        lin <- list(Aineq = sc(lc$Aineq), bineq = lc$bineq, Aeq = sc(lc$Aeq), beq = lc$beq)
+      }
+      do.call(.lc_lincoa, c(common, lin, list(npt = as.integer(args$npt), xl = bnd(a$lb, -Inf),
+                                              xu = bnd(a$ub, Inf))))
+    })
   status <- names(.pr_info)[match(res$info, .pr_info)]
   original <- list(fx = res$f, nf = res$nf, status = status, cstrv = res$cstrv %||% 0)
   .opt_solution(a, alg, if (scaled) res$x * scl else res$x, res$f, .prima_retcode(status), original)

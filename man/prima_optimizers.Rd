@@ -46,14 +46,18 @@ further arguments of \code{\link[=solve]{solve()}} such as \code{rhobeg}, \code{
 \code{iprint} go to the solver. \code{iprint} is a level of PRIMA.jl's \code{Message}:
 0 (\code{"MSG_NONE"}), 1 (\code{"MSG_EXIT"}, the exit message), 2 (\code{"MSG_RHO"},
 also each reduction of the trust region bound) or 3 (\code{"MSG_FEVL"}, also
-each function evaluation); the messages of \code{UOBYQA()} and \code{NEWUOA()} are
-those of libprima, printed to the console. Invalid \code{maxfun}, \code{npt},
+each function evaluation); the messages of \code{UOBYQA()}, \code{NEWUOA()},
+\code{BOBYQA()} and \code{LINCOA()} are those of libprima, printed to the console. Invalid \code{maxfun}, \code{npt},
 \code{ftarget} or \code{rhoend} values are revised with a warning, as in libprima.
 \code{abstol}, \code{reltol} and \code{maxtime} are not supported, as in the Julia
 wrapper.
 
-\code{UOBYQA()}, \code{NEWUOA()} and \code{COBYLA()} are ported; \code{BOBYQA()} and
-\code{LINCOA()} are not yet ported and raise an error on \code{\link[=solve]{solve()}}.
+The constraints of \code{LINCOA()} must be linear (the problem's \code{cons} is
+split into linear equalities and inequalities as for \code{COBYLA()}); a
+nonlinear constraint raises an error. The Julia wrapper passes no
+constraints to LINCOA and so ignores them; here they are honored. \code{BOBYQA()} moves \code{u0} to the bounds
+or at least \code{rhobeg} inside them, with a warning, as libprima does when
+\code{rhobeg} is given.
 }
 \examples{
 prob <- OptimizationProblem(function(u, p) (u[1] - 1) * (u[1] - 1) + (u[2] + 2) * (u[2] + 2),
@@ -63,4 +67,7 @@ solve(prob, COBYLA())$u
 rosen <- function(u, p) (1 - u[1]) * (1 - u[1]) + 100 * (u[2] - u[1] * u[1]) * (u[2] - u[1] * u[1])
 solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), UOBYQA())$u
 solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), NEWUOA(), npt = 4)$u
+solve(OptimizationProblem(rosen, c(-0.5, 1.5), numeric(), lb = c(-2, -2), ub = c(0.8, 4)), BOBYQA())$u
+solve(OptimizationProblem(rosen, c(0, 0), numeric(), cons = function(u, p) u[1] + u[2],
+                          lcons = -Inf, ucons = 1), LINCOA())$u
 }
