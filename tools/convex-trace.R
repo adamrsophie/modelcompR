@@ -8,8 +8,8 @@ suppressMessages(devtools::load_all(".", quiet = TRUE))
 ex <- parse("tests/testthat/test-convex.R")
 for (e in ex) if (!(is.call(e) && identical(e[[1]], as.name("test_that")))) eval(e, globalenv())
 cases <- commandArgs(TRUE)
-if (!length(cases)) cases <- c("pow", "expcon", "geomean", "relentr", "con_explog", "eig_nested", "logdet_con",
-                               "logdet", "rootdet_tri_nocd", "rootdet_sq_nocd")
+if (!length(cases)) cases <- c("pow", "expcon", "geomean", "dualgeomean", "relentr", "con_explog", "eig_nested",
+                               "logdet_con", "logdet", "rootdet_tri_nocd", "rootdet_sq_nocd")
 qnames <- c("mu", "sigma", "step_length", "cost_primal", "cost_dual", "res_primal", "res_dual", "gap_abs",
             "gap_rel", "ktratio", "res_primal_inf", "res_dual_inf")
 hx <- function(v) paste(vapply(v, function(x) if (is.nan(x)) "NaN" else if (is.infinite(x)) (if (x > 0) "Inf" else "-Inf")
@@ -18,6 +18,25 @@ num <- function(s) if (is.na(s) || !nzchar(s)) numeric() else as.numeric(strspli
 rel <- function(a, b) if (length(a) != length(b)) Inf else if (!length(a)) 0 else
   max(ifelse(a == b | (is.nan(a) & is.nan(b)), 0, abs(a - b) / pmax(abs(b), 1e-300)))
 
+# Hooks that record the affine step length, the affine step and the
+# Mehrotra shift of the last iteration, as the AFF lines of the probe
+hook <- new.env()
+ns <- asNamespace("modelcompR")
+orig_shift <- ns$.cl_combined_ds_shift
+orig_len <- ns$.cl_get_step_length
+unlockBinding(".cl_combined_ds_shift", ns)
+unlockBinding(".cl_get_step_length", ns)
+assign(".cl_combined_ds_shift", function(cones, step_z, step_s, sigmamu) {
+  out <- orig_shift(cones, step_z, step_s, sigmamu)
+  hook$aff <- list(alpha = hook$alpha, sigmamu = sigmamu, step_z = step_z, step_s = step_s, shift = out)
+  out
+}, ns)
+assign(".cl_get_step_length", function(S, steptype, scaling) {
+  a <- orig_len(S, steptype, scaling)
+  if (steptype == "affine") hook$alpha <- a
+  a
+}, ns)
+
 with_max_iter <- function(alg, k) {
   oc <- alg$optimizer_constructor
   st <- if (is.function(oc)) oc()$settings else oc$settings
@@ -25,6 +44,7 @@ with_max_iter <- function(alg, k) {
   ConvexMOI(structure(list(settings = st), class = "ClarabelOptimizer"))
 }
 r_iterate <- function(prob, alg, k) {
+  hook$aff <- NULL
   cache <- init(prob, with_max_iter(alg, k))
   suppressWarnings(solve_integrator(cache))
   S <- cache$model$solver
@@ -35,7 +55,11 @@ r_iterate <- function(prob, alg, k) {
                    c = S$data$c),
        step = with(S$step_lhs, list(x = x, z = z, s = s, tau = tau, kappa = kappa)),
        cones = lapply(S$cones$cones, function(K) if (is.null(K$H_dual)) NULL else
-         list(H_dual = as.numeric(K$H_dual), Hs = as.numeric(K$Hs), grad = K$grad, z = K$z)))
+         list(H_dual = as.numeric(K$H_dual), Hs = as.numeric(K$Hs), grad = K$grad, z = K$z)),
+       state = lapply(S$cones$cones, function(K) switch(K$type,
+         SecondOrder = list(w = K$w, lambda = K$lambda, eta = K$eta),
+         PSDTriangle = list(lambda = K$lambda, R = as.numeric(K$R), Rinv = as.numeric(K$Rinv)), NULL)),
+       aff = hook$aff)
 }
 deep <- function(nm, tag, got, want) {
   d <- mapply(function(a, b) rel(a, num(b)), got, want)
@@ -74,6 +98,16 @@ for (nm in cases) {
     if (startsWith(r[[2]], "CONE")) {
       kj <- as.integer(strsplit(sub("CONE", "", r[[2]]), ":", fixed = TRUE)[[1]])
       deep(nm, r[[2]], r_iterate(prob, alg, kj[1])$cones[[kj[2]]], r[3:6])
+      next
+    }
+    if (grepl("^(SOC|PSD)", r[[2]])) {
+      kj <- as.integer(strsplit(sub("^(SOC|PSD)", "", r[[2]]), ":", fixed = TRUE)[[1]])
+      st <- r_iterate(prob, alg, kj[1])$state[[kj[2]]]
+      deep(nm, r[[2]], st, r[2 + seq_along(st)])
+      next
+    }
+    if (startsWith(r[[2]], "AFF")) {
+      deep(nm, r[[2]], r_iterate(prob, alg, as.integer(sub("AFF", "", r[[2]])))$aff, r[3:7])
       next
     }
     k <- as.integer(r[[2]])

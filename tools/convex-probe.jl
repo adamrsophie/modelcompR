@@ -102,9 +102,28 @@ end
 # per k the status, mu, sigma, step length, primal and dual cost, primal and
 # dual residuals, absolute and relative gap, ktratio, the infeasibility
 # residuals and the unscaled x, z and s.
-const TRACE_CASES = Set(["pow", "expcon", "geomean", "relentr", "con_explog", "eig_nested", "logdet_con", "logdet",
+const TRACE_CASES = Set(["pow", "expcon", "geomean", "dualgeomean", "relentr", "con_explog", "eig_nested", "logdet_con", "logdet",
     "rootdet_tri_nocd", "rootdet_sq_nocd"])
 const TRACE_PATH = get(ENV, "TRACE", "convex-trace.tsv")
+# Hooks that record, for the last iteration of a solve, the affine step
+# length and the affine step and Mehrotra shift that enter the combined step.
+# They repeat the bodies of the Clarabel 0.11.1 functions they replace.
+const HOOK = Dict{Symbol,Any}()
+function Clarabel._calc_centering_parameter(α::T) where {T}
+    HOOK[:alpha] = α
+    return σ = (1 - α)^3
+end
+function Clarabel.combined_ds_shift!(cones::Clarabel.CompositeCone{T}, shift::Vector{T}, step_z::Vector{T},
+        step_s::Vector{T}, σμ::T) where {T}
+    HOOK[:step_z] = copy(step_z)
+    HOOK[:step_s] = copy(step_s)
+    HOOK[:sigmamu] = σμ
+    for (cone, rng) in zip(cones, cones.rng_cones)
+        Clarabel.combined_ds_shift!(cone, view(shift, rng), view(step_z, rng), view(step_s, rng), σμ)
+    end
+    HOOK[:shift] = copy(shift)
+    return nothing
+end
 isfile(TRACE_PATH) && rm(TRACE_PATH)
 function with_max_iter(alg, k)
     c = alg.optimizer_constructor
@@ -118,6 +137,7 @@ function trace(name, prob, alg, iters)
     open(TRACE_PATH, "a") do io
         for k in 0:iters
             try
+                empty!(HOOK)
                 cache = SciMLBase.init(build(prob), with_max_iter(alg, k))
                 # the solver state is read even if the wrapper rejects an early exit
                 try
@@ -141,10 +161,18 @@ function trace(name, prob, alg, iters)
                     st = s.step_lhs
                     println(io, join([name, "STEP" * string(k), hv(st.x), hv(st.z), hv(st.s), hx(st.τ), hx(st.κ)], "\t"))
                     for (j, K) in enumerate(s.cones)
+                        tag = string(k) * ":" * string(j)
+                        if K isa Clarabel.SecondOrderCone
+                            println(io, join([name, "SOC" * tag, hv(K.w), hv(K.λ), hx(K.η)], "\t"))
+                        elseif K isa Clarabel.PSDTriangleCone
+                            println(io, join([name, "PSD" * tag, hv(K.data.λ), hv(K.data.R), hv(K.data.Rinv)], "\t"))
+                        end
                         hasproperty(K, :H_dual) || continue
-                        println(io, join([name, "CONE" * string(k) * ":" * string(j), hv(K.H_dual), hv(K.Hs),
+                        println(io, join([name, "CONE" * tag, hv(K.H_dual), hv(K.Hs),
                             hv(K.grad), hv(K.z)], "\t"))
                     end
+                    haskey(HOOK, :shift) && println(io, join([name, "AFF" * string(k), hx(HOOK[:alpha]),
+                        hx(HOOK[:sigmamu]), hv(HOOK[:step_z]), hv(HOOK[:step_s]), hv(HOOK[:shift])], "\t"))
                 end
             catch e
                 e isa InterruptException && rethrow()

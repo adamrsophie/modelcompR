@@ -706,13 +706,9 @@ cvx_check <- function(name, got, want, ref) {
 cvx_hash_order <- c("abs", "square", "con_two")
 
 cvx_compare <- function(name, got, want) {
-  # the exponential and power cones solve their barrier systems with FMA and
-  # BLAS sums that drift by rounding, so their final iterates agree to 1e-4
-  # and the iteration count may differ near the tolerances
-  nonsym <- grepl("Exponential|Power", want$cones)
-  tol <- if (nonsym) 1e-4 else 1e-7
+  tol <- 1e-7
   expect_identical(got$retcode, want$retcode, label = paste(name, "retcode"))
-  if (!nonsym) expect_identical(got$iters, want$iters, label = paste(name, "iterations"))
+  expect_identical(got$iters, want$iters, label = paste(name, "iterations"))
   expect_identical(got$cones, want$cones, label = paste(name, "cones"))
   expect_identical(c(got$n, got$m), c(want$n, want$m), label = paste(name, "size"))
   if (name %in% cvx_hash_order) {
