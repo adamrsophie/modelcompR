@@ -569,3 +569,15 @@ test_that("Vern6 and Vern8 converge and interpolate", {
   for (alg in list(AutoVern6(Rodas5P()), AutoVern8(Rodas5P()), AutoVern9(Rodas5P())))
     expect_equal(tail(solve(p, alg, reltol = 1e-8, abstol = 1e-10)$u, 1)[[1]][1], sin(20), tolerance = 1e-5)
 })
+
+test_that("DefaultImplicitODEAlgorithm starts and stays with the stiff method", {
+  prob <- ODEProblem(function(u, p, t) -1000 * u, 1, c(0, 1))
+  s <- solve(prob, DefaultImplicitODEAlgorithm())
+  expect_identical(unique(s$alg_choice), 3L)
+  s <- solve(prob, DefaultImplicitODEAlgorithm(), reltol = 1e-8, abstol = 1e-10)
+  expect_identical(unique(s$alg_choice), 4L)
+  expect_equal(s$u[[length(s$u)]], exp(-1000), tolerance = 1e-6)
+  # with Julia's thresholds of DefaultODEAlgorithm it can switch back
+  s <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 10)), DefaultImplicitODEAlgorithm(stol = 9 / 10, ntol = 9 / 10))
+  expect_true(any(s$alg_choice == 1L))
+})

@@ -198,8 +198,10 @@
   eig <- NULL
   repeat {
     gdt <- if (dirk) gamma * dt else gamma * dt / alpha
+    # do_newJW measures the step change by 1 / (gamma dt), without alpha
     w <- .update_W(nl, ctx, t, uprev, gdt,
-                   dae = if (dae) list(cj = alpha * invgdt, du_pred = tmp * invgdt) else NULL)
+                   dae = if (dae) list(cj = alpha * invgdt, du_pred = tmp * invgdt) else NULL,
+                   gdt_test = gamma * dt)
     add(w)
     if (!is.null(w$eigen_est)) eig <- w$eigen_est
     nl$status <- "Convergence"
@@ -225,6 +227,9 @@
         dz <- .wsolve(nl$W, ztmp)
         cnt$nsolve <- cnt$nsolve + 1L
         ndz <- .err_norm(dz, uprev, ustep, ctx$abstol, ctx$reltol)
+        # has_special_newton_error (QNDF, NordsieckBDF): the increment norm
+        # times the error constant
+        if (!is.null(ctx$newton_scale)) ndz <- ndz * ctx$newton_scale
       }
       if (!is.finite(ndz)) {
         nl$status <- "Divergence"

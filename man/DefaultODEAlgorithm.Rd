@@ -2,12 +2,18 @@
 % Please edit documentation in R/solvers-default.R
 \name{DefaultODEAlgorithm}
 \alias{DefaultODEAlgorithm}
+\alias{DefaultImplicitODEAlgorithm}
 \title{The default ODE algorithm}
 \usage{
 DefaultODEAlgorithm(stiffalgfirst = FALSE)
+
+DefaultImplicitODEAlgorithm(stol = 0, ntol = Inf)
 }
 \arguments{
 \item{stiffalgfirst}{Start with the stiff method.}
+
+\item{stol, ntol}{Stiffness thresholds while the stiff and the nonstiff
+method runs.}
 }
 \value{
 A composite algorithm.
@@ -23,8 +29,15 @@ it uses \code{Rodas5P()} up to 50 states and \code{FBDF()} above, without
 switching. \code{sol$alg_choice} records the method of every step (1 Tsit5,
 2 Vern7, 3 Rosenbrock23, 4 Rodas5P, 5 FBDF).
 }
+\details{
+\code{DefaultImplicitODEAlgorithm()} starts with the stiff method and
+compares the stiffness estimate with \code{stol} while stiff and \code{ntol} while
+nonstiff; with the defaults 0 and \code{Inf} it keeps the stiff method.
+}
 \examples{
 prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
 sol <- solve(prob)
+unique(sol$alg_choice)
+sol <- solve(ODEProblem(function(u, p, t) -1000 * u, 1, c(0, 1)), DefaultImplicitODEAlgorithm())
 unique(sol$alg_choice)
 }

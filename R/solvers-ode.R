@@ -187,18 +187,34 @@ RK4 <- function() {
 # Step size control and initial step, after OrdinaryDiffEqCore
 # (initdt.jl, integrators/controllers.jl, alg_utils.jl).
 
-# ODE_DEFAULT_NORM of DiffEqBase: the root of the sum of squares over the
-# length. Its loop runs under @fastmath, so LLVM contracts each step to a fused
-# multiply add; vectors shorter than eight elements take the scalar loop, done
-# here. (mean() adds a correction pass that rounds differently.)
-# ponytail: longer vectors run LLVM's vectorized reduction, whose association
-# depends on the CPU; sum() stands in for it.
+# ODE_DEFAULT_NORM (DiffEqBase common_defaults.jl) as Julia compiles its
+# @fastmath loop on aarch64: the first square is rounded, every later one is
+# added by a fused multiply add. From 9 elements on, x[2], ..., x[1 + 8m]
+# go to 8 fma accumulators (four 2 lane vectors, the first starting at
+# x[1]^2) reduced as (v4 + v3) + (v2 + v1) and then lane 1 + lane 2; the
+# rest follows by the fma chain. Only double arithmetic, so every platform
+# gives the same bits (mean() and sum() round differently).
 .rms_norm <- function(x) {
   n <- length(x)
-  if (n >= 8L) return(sqrt(sum(x * x) / n))
-  s <- 0
-  for (xi in x) s <- .fma(xi, xi, s)
-  sqrt(s / max(n, 1L))
+  if (n == 0L) return(0)
+  s <- x[1L] * x[1L]
+  k <- 2L
+  if (n >= 9L) {
+    m <- ((n - 1L) %/% 8L) * 8L
+    lanes <- c(s, 0, 0, 0, 0, 0, 0, 0)
+    for (b in seq_len(m %/% 8L)) {
+      v <- x[(8L * b - 6L):(8L * b + 1L)]
+      lanes <- .fma(v, v, lanes)
+    }
+    v0 <- (lanes[7:8] + lanes[5:6]) + (lanes[3:4] + lanes[1:2])
+    s <- v0[1L] + v0[2L]
+    k <- m + 2L
+  }
+  while (k <= n) {
+    s <- .fma(x[k], x[k], s)
+    k <- k + 1L
+  }
+  sqrt(s / n)
 }
 
 # calculate_residuals and the norm: the weights abstol + max(|u0|, |u1|) reltol
@@ -327,7 +343,11 @@ RK4 <- function() {
     # PredictiveController: the factor from the error of this step alone
     cs$first <- first
     if (EEst == 0) return(list(q = 1 / qmax, cs = cs))
-    q <- if (is.finite(EEst)) .fastpower(EEst, 1 / (co$adaptive_order + 1)) / co$gamma else Inf
+    # the FIRK methods (fac_default_gamma false) scale gamma by their Newton
+    # iteration count; AdaptiveRadau's order is its current stage count
+    fac <- if (!is.null(alg$pred_fac)) alg$pred_fac(cache, co$gamma) else co$gamma
+    ord <- if (!is.null(alg$cur_adaptive_order)) alg$cur_adaptive_order(cache) else co$adaptive_order
+    q <- if (is.finite(EEst)) .fastpower(EEst, 1 / (ord + 1)) / fac else Inf
     q <- min(1 / co$qmin, max(1 / qmax, q))
     cs$qold <- q
     return(list(q = q, cs = cs))
@@ -367,14 +387,17 @@ RK4 <- function() {
   if (co$type == "Predictive") {
     # Gustafsson's predictive factor from the last accepted step
     qacc <- q
+    ord <- if (!is.null(alg$cur_adaptive_order)) alg$cur_adaptive_order(cache) else co$adaptive_order
     if (!cs$first) {
-      qgus <- (cs$dtacc / dt) * .fastpower((EEst^2) / cs$erracc, 1 / (co$adaptive_order + 1))
+      qgus <- (cs$dtacc / dt) * .fastpower((EEst^2) / cs$erracc, 1 / (ord + 1))
       qgus <- max(1 / co$qmax, min(1 / co$qmin, qgus / co$gamma))
       qacc <- max(q, qgus)
     }
     if (qacc >= co$qsteady_min && qacc <= co$qsteady_max) qacc <- 1
     cs$dtacc <- dt
     cs$erracc <- max(1e-2, EEst)
+    # AdaptiveRadau's stage count update (firk_step_accept_controller!)
+    if (!is.null(alg$on_accept)) alg$on_accept(cache)
     return(list(dt = dt / qacc, cs = cs))
   }
   if (q >= co$qsteady_min && q <= co$qsteady_max) q <- 1
@@ -518,7 +541,9 @@ solve.ODEProblem <- function(a, b, ...) {
               # the dimension of the position part of a DynamicalODEProblem and
               # the count of f2 calls (nf2) of the partitioned methods
               # (R/solvers-symplectic.R)
-              nv = prob$nv, counts = new.env(parent = emptyenv()))
+              nv = prob$nv, counts = new.env(parent = emptyenv()),
+              # opts.dense (QNDF evaluates f at the end of a step only for dense output)
+              dense = dense)
   ctx$lazy_nf$n <- 0L
   if (any(!is.finite(integ$u))) stop("initial values are not finite: ",
                                      paste(names(integ$u)[!is.finite(integ$u)], collapse = ", "), call. = FALSE)
@@ -763,6 +788,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     ctx$du <- integ$du
     ctx$derivative_discontinuity <- isTRUE(disc_next)
     disc_next <- FALSE
+    # the controller, for methods that pseudo step it (ExplicitTaylorAdaptiveOrder)
+    ctx$ctrl <- list(co = co, cs = css[[cur]])
     res <- a$step(ctx, integ$t, integ$u, tdir * dtcur, caches[[cur]])
     add_stats(res)
     if (isTRUE(res$disco_used)) is_disco_step <- FALSE

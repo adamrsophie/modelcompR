@@ -221,3 +221,26 @@ test_that("a two state machine switches on ticks with immediate and delayed tran
     else expect_equal(got, c(10, 20, 30, 40, 50))
   }
 })
+
+test_that("SimpleIDSolve steps an implicit map with SimpleNewtonRaphson", {
+  # implicit Euler for u' = -u: u_next = u / (1 + dt)
+  prob <- ImplicitDiscreteProblem(function(un, u, p, t) un - u + 0.01 * un, c(1, 2), c(0, 0.5))
+  s <- solve(prob, SimpleIDSolve(), dt = 0.01)
+  expect_identical(s$retcode, "Success")
+  expect_equal(length(s$t), 51L)
+  # the solve at t0 that makes the initial state consistent applies the map
+  # once more, as in SimpleImplicitDiscreteSolve
+  expect_equal(s$u[[1]], c(1, 2) / 1.01, tolerance = 1e-12)
+  expect_equal(s$u[[51]], c(1, 2) / 1.01^51, tolerance = 1e-12)
+  # Lotka-Volterra as in the tests of SimpleImplicitDiscreteSolve
+  lv <- function(u, p, t) c(1.5 * u[1] - u[1] * u[2], -3 * u[2] + u[1] * u[2])
+  idp <- ImplicitDiscreteProblem(function(un, u, p, t) un - u - 0.01 * lv(un, p, t), c(1, 1), c(0, 0.5))
+  ids <- solve(idp, SimpleIDSolve(), dt = 0.01)
+  ref <- solve(ODEProblem(lv, c(1, 1), c(0, 0.5)), ImplicitEuler())
+  expect_equal(ids$u[[length(ids$u) - 1L]], ref$u[[length(ref$u)]], tolerance = 0.1)
+  last <- solve(prob, SimpleIDSolve(), dt = 0.01, save_everystep = FALSE)
+  expect_equal(last$t, c(0, 0.5))
+  # no real root: the initial solve fails
+  bad <- ImplicitDiscreteProblem(function(un, u, p, t) un^2 + 1, 1, c(0, 1))
+  expect_identical(solve(bad, SimpleIDSolve())$retcode, "InitialFailure")
+})

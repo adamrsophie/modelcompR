@@ -17,7 +17,7 @@
 .composite_alg <- function(name, algs, choice_state, choose) {
   structure(list(name = name, algs = algs, order = algs[[1L]]$order, adaptive = TRUE,
                  mass_matrix = all(vapply(algs, function(a) isTRUE(a$mass_matrix), TRUE)) ||
-                   name == "DefaultODEAlgorithm",
+                   name %in% c("DefaultODEAlgorithm", "DefaultImplicitODEAlgorithm"),
                  stiff = FALSE, choice_state = choice_state, choose = choose),
             class = c(name, "CompositeAlgorithm", "ODEAlgorithm"))
 }
@@ -30,10 +30,10 @@
   AS
 }
 
-# is_stiff: the stiffness ratio |eigen_est * dt / stability size| against tol.
+# is_stiff: the stiffness ratio |eigen_est * dt / stability size| against
+# tol; NaN counts as stiff, and Inf is not stiff against tol = Inf
 .is_stiff <- function(eigen_est, dt, size, tol) {
-  stiffness <- abs(eigen_est * dt / size)
-  !(is.finite(stiffness) && stiffness <= tol)
+  !isTRUE(abs(eigen_est * dt / size) <= tol)
 }
 
 .count_update <- function(AS, stiff) {
@@ -138,17 +138,31 @@ AutoVern9 <- function(alg, ...) AutoSwitch(Vern9(), alg, ...)
 #' switching. `sol$alg_choice` records the method of every step (1 Tsit5,
 #' 2 Vern7, 3 Rosenbrock23, 4 Rodas5P, 5 FBDF).
 #'
+#' `DefaultImplicitODEAlgorithm()` starts with the stiff method and
+#' compares the stiffness estimate with `stol` while stiff and `ntol` while
+#' nonstiff; with the defaults 0 and `Inf` it keeps the stiff method.
+#'
 #' @param stiffalgfirst Start with the stiff method.
 #' @return A composite algorithm.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
 #' sol <- solve(prob)
 #' unique(sol$alg_choice)
+#' sol <- solve(ODEProblem(function(u, p, t) -1000 * u, 1, c(0, 1)), DefaultImplicitODEAlgorithm())
+#' unique(sol$alg_choice)
 #' @export
-DefaultODEAlgorithm <- function(stiffalgfirst = FALSE) {
+DefaultODEAlgorithm <- function(stiffalgfirst = FALSE) .default_alg("DefaultODEAlgorithm", stiffalgfirst, 9 / 10, 9 / 10)
+
+#' @rdname DefaultODEAlgorithm
+#' @param stol,ntol Stiffness thresholds while the stiff and the nonstiff
+#'   method runs.
+#' @export
+DefaultImplicitODEAlgorithm <- function(stol = 0, ntol = Inf) .default_alg("DefaultImplicitODEAlgorithm", TRUE, stol, ntol)
+
+.default_alg <- function(name, stiffalgfirst, stol, ntol) {
   algs <- list(Tsit5(), Vern7(), Rosenbrock23(), Rodas5P(), FBDF())
   sizes <- c(algs[[1L]]$stability_size, algs[[2L]]$stability_size)
-  maxstiffstep <- 10L; maxnonstiffstep <- 3L; tol <- 9 / 10; dtfac <- 2
+  maxstiffstep <- 10L; maxnonstiffstep <- 3L; dtfac <- 2
   choose <- function(AS, info) {
     identity_mass <- .is_identity_mass(info$mass)
     if (isTRUE(info$init)) {
@@ -158,7 +172,7 @@ DefaultODEAlgorithm <- function(stiffalgfirst = FALSE) {
       return(AS$current)
     }
     dt <- info$dt
-    stiff <- .is_stiff(info$eigen_est, dt, sizes[.nonstiffchoice(info$reltol)], tol)
+    stiff <- .is_stiff(info$eigen_est, dt, sizes[.nonstiffchoice(info$reltol)], if (AS$is_stiffalg) stol else ntol)
     .count_update(AS, stiff)
     if (!identity_mass) {
       # a mass matrix problem keeps its stiff method
@@ -173,11 +187,11 @@ DefaultODEAlgorithm <- function(stiffalgfirst = FALSE) {
     }
     list(current = AS$current, dt = dt)
   }
-  .composite_alg("DefaultODEAlgorithm", algs, function() .autoswitch_state(stiffalgfirst), choose)
+  .composite_alg(name, algs, function() .autoswitch_state(stiffalgfirst), choose)
 }
 
 #' @export
 print.CompositeAlgorithm <- function(x, ...) {
-  cat(x$name, if (inherits(x, "DefaultODEAlgorithm")) "()", "\n", sep = "")
+  cat(x$name, if (inherits(x, c("DefaultODEAlgorithm", "DefaultImplicitODEAlgorithm"))) "()", "\n", sep = "")
   invisible(x)
 }
