@@ -318,7 +318,7 @@ build_amf_function <- function(f, jac, split = NULL, amf_factors = NULL, jac_cac
 # start of that step.
 .amf_ros23_step <- function(ctx, t, u, dt, cache) {
   f <- ctx$f; p <- ctx$p
-  c32 <- .ROS23$c32; d <- .ROS23$d
+  c32 <- .ROSEN_TABLEAUS$Rosenbrock23Tableau$c32; d <- .ROSEN_TABLEAUS$Rosenbrock23Tableau$d
   dtg <- dt * d
   neginvdtg <- -(1 / dtg)
   dto2 <- dt / 2
