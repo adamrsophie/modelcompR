@@ -76,11 +76,15 @@ gl_ref <- list(
 
 gl_check <- function(name, r) {
   e <- gl_ref[[name]]
-  expect_identical(r$ret, e$ret, info = name)
   if (ref_platform()) {
+    # off the reference platform the last bits differ, which can change which
+    # stopping test fires first (PRAXIS stops with SUCCESS on Linux)
+    expect_identical(r$ret, e$ret, info = name)
     expect_identical(r$x, as.numeric(e$x), info = name)
     expect_identical(r$minf, as.numeric(e$f), info = name)
     expect_identical(r$numevals, e$numevals, info = name)
+  } else {
+    expect_true(is.finite(r$minf), info = name)
   }
 }
 

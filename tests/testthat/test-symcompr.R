@@ -53,7 +53,7 @@ test_that("attaching modelcompR masks nothing from symcompR or base R", {
   ns <- getNamespaceExports("modelcompR")
   shared <- intersect(ns, getNamespaceExports("symcompR"))
   expect_true(all(c("flatten", "compose") %in% shared))
-  expect_true(all(shared %in% c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream", "distance", "hadamard_product")))
+  expect_true(all(shared %in% c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream", "distance", "hadamard_product", "IdentityOperator")))
   x <- symcompR::Symbol("x")
   expect_equal(format(compose(x^2, x + 1)), format(symcompR::compose(x^2, x + 1)))
 })
@@ -142,4 +142,13 @@ test_that("shared names forward symcompR calls with their original arguments", {
     expect_s3_class(System(), "physics_obj")
     expect_equal(class(System(frame = NULL)), class(sc("System")(frame = NULL)))
   }
+})
+
+test_that("IdentityOperator without a numeric size is symcompR's quantum operator", {
+  skip_if_not("IdentityOperator" %in% getNamespaceExports("symcompR"))
+  expect_identical(format(IdentityOperator()), format(symcompR::IdentityOperator()))
+  N <- symcompR::Symbol("N")
+  expect_identical(format(IdentityOperator(N)), format(symcompR::IdentityOperator(N)))
+  # a numeric size is the SciMLOperators identity
+  expect_equal(as.matrix(IdentityOperator(2)), diag(2))
 })

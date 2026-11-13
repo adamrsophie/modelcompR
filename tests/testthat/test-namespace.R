@@ -5,9 +5,10 @@
 # processes) are allowed because the modelcompR functions hand foreign
 # arguments to symcompR. Stream is a value in modelcompR, which a call skips.
 # distance and hadamard_product (the SymbolicAnalysis atoms) hand ordinary
-# arguments to symcompR's.
+# arguments to symcompR's. IdentityOperator without a numeric size is
+# symcompR's quantum operator.
 mcr_shared <- c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream",
-                "distance", "hadamard_product")
+                "distance", "hadamard_product", "IdentityOperator")
 default_pkgs <- c("base", "stats", "utils", "graphics", "grDevices", "methods", "datasets")
 
 test_that("exports do not mask base R functions", {

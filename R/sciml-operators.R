@@ -131,9 +131,14 @@ ScalarOperator <- function(alpha, update_func = NULL) {
 
 #' @rdname sciml_operators
 #' @export
-IdentityOperator <- function(n)
+IdentityOperator <- function(n, ...) {
+  # symcompR's IdentityOperator(...) is the quantum operator of
+  # sympy.physics.quantum: a call without a numeric size goes to it
+  if ((missing(n) || !is.numeric(n) || ...length() > 0L) && .symcompr_has("IdentityOperator"))
+    return(.symcompr_forward("IdentityOperator", sys.call(), parent.frame()))
   .sop("IdentityOperator", c(n, n), function(v) v, function() diag(n), function(b) b,
        adjoint = function() IdentityOperator(n))
+}
 
 #' @rdname sciml_operators
 #' @export

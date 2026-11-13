@@ -956,7 +956,7 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     # the controller, for methods that pseudo step it (ExplicitTaylorAdaptiveOrder)
     ctx$ctrl <- list(co = co, cs = css[[cur]])
     res <- a$step(ctx, integ$t, integ$u, tdir * dtcur, caches[[cur]])
-    if (length(res$u) != length(integ$u)) .check_f_length(res$u, length(integ$u))
+    if (!isTRUE(res$fail) && length(res$u) != length(integ$u)) .check_f_length(res$u, length(integ$u))
     add_stats(res)
     if (isTRUE(res$disco_used)) is_disco_step <- FALSE
     if (!is.null(res$eigen_est)) eigen_est <- res$eigen_est
