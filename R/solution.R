@@ -274,7 +274,7 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
       findInterval(-tt, -starts, rightmost.closed = TRUE)
     i <- max(1L, min(length(steps), i))
     # after an event, prefer the step that starts at the event time
-    dti <- ends[i] - starts[i]
+    dti <- if (isTRUE(steps[[i]]$truncated)) steps[[i]]$dt else ends[i] - starts[i]
     out[q, ] <- if (deriv == 0L) .step_value(steps[[i]], tt, dti) else .step_deriv(steps[[i]], tt, deriv, dti)
   }
   out

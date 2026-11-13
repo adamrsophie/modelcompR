@@ -310,6 +310,9 @@ u_modified <- function(integ, value = TRUE) {
       integ$u[] <- uev
       st <- integ$last_step
       st$tend <- best$t
+      # the stages stay those of the full step (OrdinaryDiffEq recomputes them
+      # for the shortened step), so its interpolant keeps the full dt
+      st$truncated <- TRUE
       integ$last_step <- st
       left <- list(t = best$t, u = integ$u)
       u_before <- integ$u; p_before <- integ$p
