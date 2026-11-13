@@ -459,31 +459,18 @@ build_eigenvalue_solution <- function(alg, values, vectors = NULL, retcode = "Su
 #' @rdname solution_builders
 #' @export
 sensitivity_solution <- function(sol, u, t = NULL) {
-  env <- .sol_env(sol)
-  U <- .interp_rows(u)
-  env$U <- U
-  if (!is.null(t)) env$t <- as.numeric(t)
-  env$steps <- NULL
-  env$dense <- FALSE
-  sol
+  # a new solution, as SciMLBase rebuilds the ODESolution; sol is unchanged
+  .sol_copy(sol, U = .interp_rows(u), t = if (is.null(t)) .sol_env(sol)$t else as.numeric(t),
+            steps = NULL, dense = FALSE)
 }
 
 #' @rdname solution_builders
 #' @export
-strip_interpolation <- function(sol) {
-  env <- .sol_env(sol)
-  env$steps <- NULL
-  env$dense <- FALSE
-  sol
-}
+strip_interpolation <- function(sol) .sol_copy(sol, steps = NULL, dense = FALSE)
 
 #' @rdname solution_builders
 #' @export
-solution_new_retcode <- function(sol, retcode) {
-  env <- .sol_env(sol)
-  env$retcode <- retcode
-  sol
-}
+solution_new_retcode <- function(sol, retcode) .sol_copy(sol, retcode = retcode)
 
 #' @rdname solution_builders
 #' @export

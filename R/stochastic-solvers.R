@@ -949,6 +949,8 @@ solve.SDEProblem <- function(a, b, ...) {
   opts$alg_hints <- NULL
   seed <- opts$seed
   opts$seed <- NULL
+  # build_null_solution for a problem without unknowns
+  if (!is.null(ns <- .null_solution(a, alg, opts))) return(.as_rode_solution(ns))
   .with_seed(seed, .as_rode_solution(.sde_integrate(a, alg, opts)))
 }
 

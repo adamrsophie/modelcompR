@@ -20,6 +20,17 @@
 
 .sol_env <- function(sol) get("env", envir = environment(unclass(sol)))
 
+# A copy of a solution with some fields replaced: a new data environment, so
+# the original keeps its values (the SciMLBase solution builders return new
+# solutions).
+.sol_copy <- function(sol, ...) {
+  data <- as.list(.sol_env(sol), all.names = TRUE)
+  data$obs_cache <- NULL
+  new <- list(...)
+  for (nm in names(new)) data[nm] <- list(new[[nm]])
+  .new_solution(setdiff(class(sol), c("SciMLSolution", "function")), data)
+}
+
 .new_ode_solution <- function(t, u, prob, alg, retcode, steps = NULL, stats = list(), p = NULL,
                               events = list(), dense = FALSE) {
   .new_solution("ODESolution", list(t = t, U = u, prob = prob, alg = alg, retcode = retcode,
@@ -189,12 +200,25 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 
 # Interpolation at arbitrary times.
 .sol_interp <- function(env, tq, idxs = NULL, deriv = 0L) {
-  if (deriv != 0L) stop("derivatives of the interpolant are not supported", call. = FALSE)
+  deriv <- as.integer(deriv)
+  if (length(deriv) != 1L || is.na(deriv) || deriv < 0L) stop("deriv must be 0, 1, 2, ...", call. = FALSE)
   # the copies solve_gradient() differentiates a loss on (R/sensitivity-interface.R)
   if (isTRUE(env$sens_frozen))
     stop("the loss of solve_gradient() may use the saved values (sol$u, sol[x], as.matrix(sol)) but not ",
          "interpolation sol(t); give the times it needs as `saveat`", call. = FALSE)
-  U <- .interp_states(env, tq)
+  U <- .interp_states(env, tq, deriv)
+  if (deriv > 0L && !is.null(idxs)) {
+    # error_if_observed_derivative of SciMLBase
+    ids <- if (is.list(idxs) && !is_sym(idxs)) idxs else list(idxs)
+    observed_idx <- vapply(ids, function(z) {
+      if (is.numeric(z) && !is_sym(z)) return(FALSE)
+      is.na(match(.key(as_sym(z)), .keys(unknowns(env$sys))))
+    }, TRUE)
+    if (any(observed_idx))
+      stop("Cannot interpolate derivatives of observed variables. A possible solution could be\n",
+           "interpolating the symbolic expression that evaluates to the derivative of the\n",
+           "observed variable or using DataInterpolations.jl.", call. = FALSE)
+  }
   if (is.null(idxs)) {
     if (length(tq) == 1L) return(U[1L, ])
     return(U)
@@ -216,19 +240,20 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   .eval_observed(.sol_observed_fn(env, v), env, U, tq)
 }
 
-.interp_states <- function(env, tq) {
+.interp_states <- function(env, tq, deriv = 0L) {
   steps <- env$steps
   n <- ncol(env$U)
   out <- matrix(NA_real_, length(tq), n)
   colnames(out) <- colnames(env$U)
   if (is.null(steps) || !length(steps)) {
     # linear interpolation between saved points; a solve that stopped at its
-    # first point holds that state
+    # first point holds that state (its slope is 0 / 0)
     if (length(env$t) == 1L) {
-      out[] <- rep(env$U[1L, ], each = length(tq))
+      if (deriv > 1L) .deriv_order_error()
+      out[] <- rep(if (deriv == 1L) NaN else env$U[1L, ], each = length(tq))
       return(out)
     }
-    for (j in seq_len(n)) out[, j] <- stats::approx(env$t, env$U[, j], xout = tq, rule = 2, ties = "ordered")$y
+    out[] <- .linear_states(env$t, env$U, tq, deriv)
     return(out)
   }
   starts <- vapply(steps, `[[`, 0, "t0")
@@ -241,7 +266,7 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
       findInterval(-tt, -starts, rightmost.closed = TRUE)
     i <- max(1L, min(length(steps), i))
     # after an event, prefer the step that starts at the event time
-    out[q, ] <- .step_value(steps[[i]], tt)
+    out[q, ] <- if (deriv == 0L) .step_value(steps[[i]], tt) else .step_deriv(steps[[i]], tt, deriv)
   }
   out
 }
@@ -281,4 +306,204 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
   graphics::matplot(ts, vals, type = "l", lty = 1, xlab = "t", ylab = "", ...)
   graphics::legend("topright", legend = labs, col = seq_along(labs), lty = 1, bty = "n")
   invisible(x)
+}
+
+# ---------------------------------------------------------------------------
+# Derivatives of the interpolants, sol(t, deriv = n): the Val{n} methods of
+# _ode_interpolant (OrdinaryDiffEqCore dense/generic_dense.jl and the
+# interpolants.jl of the solver libraries). The first derivatives are those
+# of R/globaldiffeq-companion.R (.gde_dinterp_of); the higher ones follow
+# the same polynomials. Each interpolant supports the orders its Julia
+# cache does (Hermite 3, Tsit5, DP5 and Vern9 4, the Rodas H matrix 3,
+# SSPRK 2, the others 1).
+
+.DERIVATIVE_ORDER_NOT_POSSIBLE_MESSAGE <- paste0(
+  "Derivative order too high for interpolation order. An interpolation derivative is\n",
+  "only accurate to a certain derivative. For example, a second order interpolation\n",
+  "is a quadratic polynomial, and thus third derivatives cannot be computed (will be\n",
+  "incorrectly zero). Thus use a solver with a higher order interpolation or compute\n",
+  "the higher order derivative through other means.\n\n",
+  "You can find the list of available ODE/DAE solvers with their documented interpolations at:\n\n",
+  "* https://docs.sciml.ai/DiffEqDocs/stable/solvers/ode_solve/\n",
+  "* https://docs.sciml.ai/DiffEqDocs/stable/solvers/dae_solve/\n")
+
+.deriv_order_error <- function() stop(.DERIVATIVE_ORDER_NOT_POSSIBLE_MESSAGE, call. = FALSE)
+
+# The n-th derivative at theta of the polynomial sum_i c[i] theta^(i - 1).
+.dpoly <- function(c, theta, n) {
+  p <- seq_along(c) - 1L
+  keep <- p >= n & c != 0
+  if (!any(keep)) return(0)
+  sum(c[keep] * choose(p[keep], n) * factorial(n) * theta^(p[keep] - n))
+}
+
+# hermite_interpolant at Val{1}, Val{2} and Val{3}
+.hermite_dn <- function(theta, dt, y0, y1, k, n) {
+  k1 <- k[[1L]]; k2 <- k[[2L]]
+  switch(n,
+    .gde_hermite_d(theta, dt, y0, y1, k),
+    (-4 * dt * k1 - 2 * dt * k2 - 6 * y0 + theta * (6 * dt * k1 + 6 * dt * k2 + 12 * y0 - 12 * y1) + 6 * y1) /
+      (dt * dt),
+    (6 * dt * k1 + 6 * dt * k2 + 12 * y0 - 12 * y1) / (dt * dt * dt))
+}
+
+# with differential_vars: the algebraic components (dv FALSE, or a missing
+# slope when dv is NULL) take the derivative of the linear interpolant,
+# (y1 - y0) / dt and then 0
+.hermite_dv_dn <- function(theta, dt, y0, y1, k, n, dv) {
+  lin <- if (n == 1L) (y1 - y0) / dt else 0 * y0
+  if (identical(dv, FALSE)) return(lin)
+  h <- .hermite_dn(theta, dt, y0, y1, k, n)
+  if (is.null(dv)) return(ifelse(is.na(h), lin, h))
+  ifelse(dv, h, lin)
+}
+
+# y0 + dt * sum_j K_j b_j(theta) with b_j(theta) = sum_p C[j, p + 1] theta^p:
+# the n-th time derivative dt^(1 - n) sum_j K_j b_j^(n)(theta)
+.rk_poly_dn <- function(theta, dt, K, C, n) {
+  acc <- 0
+  for (j in seq_along(K)) {
+    w <- .dpoly(C[j, ], theta, n)
+    if (w != 0) acc <- acc + K[[j]] * w
+  }
+  acc * dt^(1 - n)
+}
+
+.tsit5_coefs <- function() {
+  r <- .TSIT5$r
+  C <- matrix(0, 7L, 5L)
+  C[1L, 2:5] <- r[[1L]]
+  for (i in 2:7) C[i, 3:5] <- r[[i]]
+  C
+}
+
+# dp5pre: k1 theta + k2 b20 + k3 theta b20 + k4 b20^2 with b20 = theta (1 - theta)
+.DP5_COEFS <- rbind(c(0, 1, 0, 0, 0), c(0, 1, -1, 0, 0), c(0, 0, 1, -1, 0), c(0, 0, 1, -2, 1))
+
+# The derivative of order n of an interpolant: list(max, f) with f(theta,
+# dt, y0, y1, k, n) and the highest order max (NA when f checks it), or NULL
+# when the interpolant has no derivative in the port.
+.interp_deriv_spec <- function(interp) {
+  if (!is.function(interp)) return(NULL)
+  spec <- function(max, f) list(max = max, f = f)
+  same_body <- function(g) identical(body(interp), body(g))
+  if (identical(interp, .hermite_interp) || identical(interp, .hermite_interp_fused))
+    return(spec(3L, .hermite_dn))
+  if (identical(interp, .hermite_dae_interp))
+    return(spec(3L, function(theta, dt, y0, y1, k, n) .hermite_dv_dn(theta, dt, y0, y1, k, n, NULL)))
+  if (identical(interp, .dabdf2_interp))
+    return(spec(3L, function(theta, dt, y0, y1, k, n) {
+      if (length(k) < 2L) return(if (n == 1L) (y1 - y0) / dt else 0 * y0)
+      dv <- k[[3L]]
+      if (is.null(dv) || all(dv)) .hermite_dn(theta, dt, y0, y1, k, n) else .hermite_dv_dn(theta, dt, y0, y1, k, n, dv)
+    }))
+  if (identical(interp, .lsrk_interp) || identical(interp, .lsrk_interp_fused))
+    return(spec(3L, function(theta, dt, y0, y1, k, n) .hermite_dn(theta, dt, y0, y1, .lsrk_ends(k, y0, y1), n)))
+  if (identical(interp, .newmark_interp))
+    return(spec(3L, function(theta, dt, y0, y1, k, n)
+      .hermite_dn(theta, dt, y0, y1, list(k$f(y0, k$p, k$t), k$f(y1, k$p, k$t + dt)), n)))
+  # DPRKN6 has no Val{n} interpolant: the generic Hermite fallback
+  if (same_body(.dprkn6_interp(0, 0)))
+    return(spec(3L, function(theta, dt, y0, y1, k, n)
+      .hermite_dn(theta, dt, y0, y1, list(c(k[[1L]], k[[2L]]), c(k[[3L]], k[[4L]])), n)))
+  if (identical(interp, .tsit5_interp))
+    return(spec(4L, function(theta, dt, y0, y1, k, n)
+      if (n == 1L) .gde_tsit5_d(theta, dt, y0, y1, k) else .rk_poly_dn(theta, dt, k, .tsit5_coefs(), n)))
+  if (identical(interp, .dp5_interp))
+    return(spec(4L, function(theta, dt, y0, y1, k, n)
+      if (n == 1L) .gde_dp5_d(theta, dt, y0, y1, k) else .rk_poly_dn(theta, dt, k, .DP5_COEFS, n)))
+  if (identical(interp, .verner_interp))
+    return(spec(NA_integer_, function(theta, dt, y0, y1, k, n) {
+      # Vern9 has Val{1} to Val{4}, Vern6, Vern7 and Vern8 only Val{1}
+      if (n > (if (identical(k$tab$name, "Vern9")) 4L else 1L)) .deriv_order_error()
+      if (n == 1L) return(.gde_verner_d(theta, dt, y0, y1, k))
+      if (!k$lazy$done) .verner_interp(theta, dt, y0, y1, k)
+      K <- lapply(seq_len(ncol(k$lazy$K)), function(j) k$lazy$K[, j])
+      .rk_poly_dn(theta, dt, K, cbind(0, k$tab$R)[seq_along(K), , drop = FALSE], n)
+    }))
+  if (identical(interp, .ssprk_interp))
+    return(spec(2L, function(theta, dt, y0, y1, k, n)
+      if (n == 1L) .gde_ssprk_d(theta, dt, y0, y1, k) else (2 * y1 - 2 * y0) / (dt * dt) - 2 * k[[1L]] / dt))
+  if (same_body(.rosen_interp(2L))) {
+    order <- environment(interp)$order
+    if (order < 0L)
+      return(spec(3L, function(theta, dt, y0, y1, k, n) {
+        m <- attr(k, "dvars")
+        if (is.null(m)) .hermite_dn(theta, dt, y0, y1, k, n) else .hermite_dv_dn(theta, dt, y0, y1, k, n, m)
+      }))
+    # (1 - theta) y0 + theta y1 + theta (1 - theta) sum_j k_j theta^(j - 1)
+    return(spec(3L, function(theta, dt, y0, y1, k, n) {
+      if (n == 1L) return(.gde_rodas_d(order, theta, dt, y0, y1, k))
+      acc <- 0 * y0
+      for (j in seq_len(order)) {
+        cj <- numeric(j + 2L)
+        cj[j + 1L] <- 1
+        cj[j + 2L] <- -1
+        acc <- acc + k[[j]] * .dpoly(cj, theta, n)
+      }
+      acc / dt^n
+    }))
+  }
+  if (same_body(.rosen_interp23(0))) {
+    d <- environment(interp)$d
+    return(spec(1L, function(theta, dt, y0, y1, k, n) .gde_rosenbrock23_d(d)(theta, dt, y0, y1, k)))
+  }
+  if (identical(interp, .qndf_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) {
+      # the QNDF Val{1}: phi'_(j+1) = (phi'_j (s + j) + phi_j) / (j + 1)
+      s <- theta - 1
+      phi <- s
+      dphi <- 1
+      out <- dphi * k[[1L]]
+      if (length(k) >= 2L) for (j in 2:length(k)) {
+        dphi_new <- (dphi * (s + j - 1) + phi) / j
+        phi <- phi * ((s + j - 1) / j)
+        dphi <- dphi_new
+        out <- out + dphi * k[[j]]
+      }
+      out * (1 / dt)
+    }))
+  if (identical(interp, .bdf_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) .gde_bdf_d(theta, dt, y0, y1, k)))
+  if (identical(interp, .taylor2_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) k[[1L]] + k[[2L]] * (theta * dt)))
+  if (identical(interp, .taylor_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) {
+      P <- length(k)
+      h <- theta * dt
+      res <- P * k[[P]]
+      if (P > 1L) for (i in (P - 1L):1L) res <- i * k[[i]] + h * res
+      res
+    }))
+  if (identical(interp, .sde_linear_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) (y1 - y0) / dt))
+  NULL
+}
+
+# The n-th derivative of the interpolant of a dense step at time t.
+.step_deriv <- function(step, t, n) {
+  sp <- .interp_deriv_spec(step$interp)
+  if (is.null(sp)) stop("the interpolant of this method has no derivatives in the port", call. = FALSE)
+  if (!is.na(sp$max) && n > sp$max) .deriv_order_error()
+  theta <- if (step$dt == 0) 1 else (t - step$t0) / step$dt
+  as.numeric(sp$f(theta, step$dt, step$y0, step$y1, step$k, n))
+}
+
+# Linear interpolation between the saved points (linear_interpolant), the
+# value or (deriv = 1) the slope, with OrdinaryDiffEq's left continuity
+# ts[i-] < t <= ts[i+] in the direction of integration, so a backward
+# solution and a time saved twice at an event are handled. Outside the
+# saved times the value is held (rule = 2 of approx).
+.linear_states <- function(ts, U, tq, deriv) {
+  n <- length(ts)
+  if (deriv > 1L) .deriv_order_error()
+  tdir <- if (ts[n] < ts[1L]) -1 else 1
+  i <- findInterval(tdir * tq, tdir * ts, left.open = TRUE)
+  lo <- pmin(pmax(i, 1L), n - 1L)
+  hi <- lo + 1L
+  dt <- ts[hi] - ts[lo]
+  if (deriv == 1L) return((U[hi, , drop = FALSE] - U[lo, , drop = FALSE]) / dt)
+  theta <- ifelse(dt == 0, 1, (tq - ts[lo]) / dt)
+  theta <- pmin(pmax(theta, 0), 1)
+  .fma(theta, U[hi, , drop = FALSE], (1 - theta) * U[lo, , drop = FALSE])
 }

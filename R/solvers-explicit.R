@@ -105,6 +105,7 @@
                              c(.VERN8_TAB[paste0("c", 2:11)], 1, 1)),
       Vern9 = .verner_method(.VERN9_TAB, .VERN9_EXTRA, .VERN9_INTERP, 16L,
                              c(.VERN9_TAB[paste0("c", 1:13)], 1, 1)))
+    tab$name <- name
     assign(name, tab, envir = .verner_tabs)
   }
   tab

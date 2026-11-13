@@ -22,8 +22,15 @@ missing.}
 \item{...}{Solver options: \code{saveat} (times to save at), \code{abstol},
 \code{reltol}, \code{dt} (initial or fixed step), \code{dtmax}, \code{dtmin}, \code{maxiters},
 \code{tstops}, \code{callback}, \code{save_everystep}, \code{save_start}, \code{save_end},
-\code{dense}, \code{adaptive}, \code{step_limiter} (a function \code{limiter(u, integ, p, t)} returning the state to keep after each accepted step), and the
-controller settings \code{qmin}, \code{qmax}, \code{gamma}, \code{beta1}, \code{beta2}.}
+\code{dense}, \code{adaptive}, \code{step_limiter} (a function \code{limiter(u, integ, p, t)} returning the state to keep after each accepted step), the
+controller settings \code{qmin}, \code{qmax}, \code{gamma}, \code{beta1}, \code{beta2}, and the
+step checks \code{isoutofdomain} (a function \verb{(u, p, t)}; a step whose
+state it flags is rejected), \code{unstable_check} (a function \verb{(dt, u, p, t)}; the solve ends with "Unstable" when it returns \code{TRUE} after a
+step), \code{internalnorm} (the error norm, a function \verb{(u, t)}) and
+\code{force_dtmin}. An unknown keyword is an error; \code{kwargshandle = "warn"}
+or \code{"silent"} warns or ignores it. A problem without unknowns returns
+its save times without integrating. The solution interpolates
+derivatives too: \code{sol(t, deriv = 1)}.}
 }
 \value{
 A solution object. Its \code{retcode} is one of "Success",

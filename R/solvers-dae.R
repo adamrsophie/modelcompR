@@ -300,6 +300,11 @@ solve.DAEProblem <- function(a, b, ...) {
   if (!inherits(alg, "ODEAlgorithm") || !isTRUE(alg$dae))
     stop("a DAEProblem needs a DAE algorithm such as DFBDF() or DImplicitEuler()", call. = FALSE)
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
+  if (!is.null(ns <- .null_solution(a, alg, opts))) {
+    class(ns) <- c("DAESolution", class(ns))
+    return(ns)
+  }
   .integrate(a, alg, opts)
 }
 

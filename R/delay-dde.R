@@ -570,6 +570,8 @@ solve.DDEProblem <- function(a, b = NULL, ...) {
   if (!inherits(inner, "ODEAlgorithm") || inherits(inner, "CompositeAlgorithm"))
     stop("DDE problems need a single ODE algorithm in MethodOfSteps(), such as Tsit5()", call. = FALSE)
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  # build_null_solution for a problem without unknowns
+  if (!is.null(ns <- .null_solution(a, mos, opts))) return(ns)
   hs <- .dde_history_store(a)
   H <- .dde_H(hs)
   fdde <- a$f$f

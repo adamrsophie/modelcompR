@@ -73,6 +73,12 @@ ImplicitDiscreteProblem <- function(sys, op = list(), tspan = NULL, ..., u0 = NU
   if (is.function(sys) || inherits(sys, "ImplicitDiscreteFunction")) {
     f <- if (inherits(sys, "ImplicitDiscreteFunction")) sys else ImplicitDiscreteFunction(sys)
     if (is.null(u0)) u0 <- op
+    # ImplicitDiscreteProblem(f, u0, tspan, p) as in SciMLBase: an unnamed
+    # fourth argument is p
+    if (is.null(p) && length(dots) && (is.null(names(dots)) || !nzchar(names(dots)[1L]))) {
+      p <- dots[[1L]]
+      dots <- dots[-1L]
+    }
     return(.new_problem("ImplicitDiscreteProblem", f = f, u0 = as.numeric(unlist(u0)),
                         tspan = .as_tspan(tspan), p = if (is.null(p)) numeric() else p, sys = NULL,
                         kwargs = dots))

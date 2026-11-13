@@ -195,6 +195,8 @@ RK4 <- function() {
 # rest follows by the fma chain. Only double arithmetic, so every platform
 # gives the same bits (mean() and sum() round differently).
 .rms_norm <- function(x) {
+  # the internalnorm(u, t) option of the solve replaces the norm
+  if (!is.null(.ode_norm$f)) return(.ode_norm$f(x))
   n <- length(x)
   if (n == 0L) return(0)
   s <- x[1L] * x[1L]
@@ -221,15 +223,36 @@ RK4 <- function() {
 # are a fused multiply add under @muladd
 .err_norm <- function(err, u0, u1, abstol, reltol) {
   if (!length(err)) return(0)
+  nf <- .ode_norm$f
+  # calculate_residuals with a user internalnorm: the weights take the norm
+  # of each component
+  if (!is.null(nf)) return(nf(err / (abstol + pmax(.elem_norm(u0), .elem_norm(u1)) * reltol)))
   .rms_norm(err / .fma(pmax(abs(u0), abs(u1)), reltol, abstol))
 }
+
+# The internalnorm option of the solve (DiffEqBase's ODE_DEFAULT_NORM by
+# default): .ode_norm$f is the user's norm at the current time while an
+# integrator steps, NULL otherwise. .with_ode_norm(I, expr) evaluates expr
+# with the norm of the integrator I.
+.ode_norm <- new.env(parent = emptyenv())
+
+.with_ode_norm <- function(I, expr) {
+  old <- .ode_norm$f
+  .ode_norm$f <- I$internalnorm
+  on.exit(.ode_norm$f <- old)
+  expr
+}
+
+# internalnorm(u[i], t) of each component, as calculate_residuals and initdt
+# broadcast it
+.elem_norm <- function(u) vapply(u, .ode_norm$f, 0)
 
 # _ode_initdt_oop of initdt.jl (Hairer and Wanner's estimate).
 .initial_dt <- function(ctx, t0, u0, f0, tdir, order, abstol, reltol, dtmax, dtmin = 0) {
   if (!length(u0)) return(dtmax)
   smalldt <- max(dtmin, 1e-6)
   # the weights and the trial state are fused multiply adds under @muladd
-  sc <- .fma(abs(u0), reltol, abstol)
+  sc <- if (is.null(.ode_norm$f)) .fma(abs(u0), reltol, abstol) else abstol + .elem_norm(u0) * reltol
   d0 <- .rms_norm(u0 / sc)
   d1 <- .rms_norm(f0 / sc)
   if (!is.finite(d1)) return(max(dtmin, 1e-12))
@@ -440,8 +463,16 @@ RK4 <- function() {
 #'   `reltol`, `dt` (initial or fixed step), `dtmax`, `dtmin`, `maxiters`,
 #'   `tstops`, `callback`, `save_everystep`, `save_start`, `save_end`,
 #'   `dense`, `adaptive`, `step_limiter` (a function `limiter(u, integ, p,
-#'   t)` returning the state to keep after each accepted step), and the
-#'   controller settings `qmin`, `qmax`, `gamma`, `beta1`, `beta2`.
+#'   t)` returning the state to keep after each accepted step), the
+#'   controller settings `qmin`, `qmax`, `gamma`, `beta1`, `beta2`, and the
+#'   step checks `isoutofdomain` (a function `(u, p, t)`; a step whose
+#'   state it flags is rejected), `unstable_check` (a function `(dt, u, p,
+#'   t)`; the solve ends with "Unstable" when it returns `TRUE` after a
+#'   step), `internalnorm` (the error norm, a function `(u, t)`) and
+#'   `force_dtmin`. An unknown keyword is an error; `kwargshandle = "warn"`
+#'   or `"silent"` warns or ignores it. A problem without unknowns returns
+#'   its save times without integrating. The solution interpolates
+#'   derivatives too: `sol(t, deriv = 1)`.
 #' @return A solution object. Its `retcode` is one of "Success",
 #'   "Terminated", "MaxIters", "DtLessThanMin", "Unstable",
 #'   "InitialFailure" or "ConvergenceFailure"; `sol$stats` counts function
@@ -467,10 +498,64 @@ solve.ODEProblem <- function(a, b, ...) {
   # a problem whose initialization failed is not integrated (R/initialization-problem.R)
   if (identical(a$initialization_data$retcode, "InitialFailure")) return(.init_failure_solution(a, alg))
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
+  if (!is.null(ns <- .null_solution(a, alg, opts))) return(ns)
   # solve(prob, alg, sensealg = ...) records events for the adjoint (R/sensitivity-interface.R)
   if (!is.null(opts$sensealg) && !is.null(.mtk$hooks$sensitivity_solve))
     return(.mtk$hooks$sensitivity_solve(a, alg, opts))
   .integrate(a, alg, opts)
+}
+
+# checkkwargs of SciMLBase (solve.jl, errors.jl): a keyword that is not one of
+# the allowed keywords of solve stops the solve (kwargshandle = "error", the
+# default), warns ("warn") or is ignored ("silent"). The allowed keywords are
+# SciMLBase.allowedkeywords (.dv_allowedkeywords) and the step size controller
+# options that the port still takes as keywords. Only the keywords given to
+# solve or init are checked: the problem keywords also hold the
+# ModelingToolkit construction options (guesses, use_scc, ...).
+.R_SOLVE_KEYWORDS <- c("qmin", "qmax", "gamma", "beta1", "beta2", "pid_beta", "qsteady_min", "qsteady_max",
+                       "discontinuity_detection", "sys_tstops", "stald", "time_filter", "kwargs_verbosity")
+
+.check_solve_kwargs <- function(opts, keys = names(opts)) {
+  handle <- opts$kwargshandle %||% "error"
+  if (!handle %in% c("error", "warn", "silent"))
+    stop("kwargshandle must be \"error\", \"warn\" or \"silent\"", call. = FALSE)
+  bad <- setdiff(keys, c(.dv_allowedkeywords, .R_SOLVE_KEYWORDS))
+  bad <- bad[nzchar(bad)]
+  if (!length(bad) || handle == "silent") return(invisible())
+  msg <- paste0("Unrecognized keyword arguments found. The only allowed keyword arguments to `solve` are: ",
+                paste(c(.dv_allowedkeywords, .R_SOLVE_KEYWORDS), collapse = ", "),
+                ".\n\nSee <https://docs.sciml.ai/DiffEqDocs/stable/basics/common_solver_opts> for more details.",
+                "\nUnrecognized keyword arguments: ", paste(bad, collapse = ", "))
+  if (handle == "error") stop(.cond("CommonKwargError", msg))
+  warning(paste0(msg, "\n\nSet kwargshandle = \"error\" for an error message.\n",
+                 "Set kwargshandle = \"silent\" to ignore this message."), call. = FALSE)
+  invisible()
+}
+
+# The right-hand side must return one value per state: R would recycle a
+# shorter result or grow the state with a longer one.
+.check_f_length <- function(v, n) {
+  if (length(v) != n)
+    stop("the right-hand side returned ", length(v), " values for a state of length ", n,
+         "; f(u, p, t) must return one value per state", call. = FALSE)
+  invisible()
+}
+
+# build_null_solution of DiffEqBase (solve.jl): a problem without unknowns
+# and without callbacks is not integrated; the solution holds the save times
+# with empty states. NULL when the problem has unknowns or callbacks.
+.null_solution <- function(prob, alg, opts) {
+  if (length(prob$u0) || (!is.null(opts$callback) && length(opts$callback))) return(NULL)
+  t0 <- prob$tspan[1L]; tf <- prob$tspan[2L]
+  sa <- opts$saveat
+  se <- opts$save_everystep %||% TRUE
+  ss <- opts$save_start %||% (se || !length(sa) || length(sa) == 1L || t0 %in% sa)
+  send <- opts$save_end %||% TRUE
+  ts <- if (!length(sa)) c(if (ss) t0, if (send) tf) else if (length(sa) == 1L) .jl_range(t0, sa, tf)
+        else as.numeric(sa)
+  .new_ode_solution(t = as.numeric(ts), u = matrix(numeric(), length(ts), 0L), prob = prob, alg = alg,
+                    retcode = "Success", dense = TRUE)
 }
 
 .integrate <- function(prob, alg, opts) {
@@ -485,6 +570,8 @@ solve.ODEProblem <- function(a, b, ...) {
 # between steps. .integ_step makes attempts until one step is accepted or
 # the integration ends (I$done).
 .INTEG_INIT <- quote({
+  if (length(prob$tspan) != 2L || anyNA(prob$tspan))
+    stop("the time span must be two numbers c(t0, tf) without NA, not ", deparse(prob$tspan), call. = FALSE)
   t0 <- prob$tspan[1L]; tf <- prob$tspan[2L]
   tdir <- sign(tf - t0)
   if (tdir == 0) tdir <- 1
@@ -509,6 +596,14 @@ solve.ODEProblem <- function(a, b, ...) {
     if (code == "DtLessThanMin") "step size fell below dtmin at t = " else "step size fell below eps(t) at t = "
   }
   is_dae <- inherits(prob, "DAEProblem")
+  # the step checks of DiffEqBase's solve options: isoutofdomain(u, p, t)
+  # rejects an adaptive step whose state leaves the domain, unstable_check(dt,
+  # u, p, t) ends the integration after an accepted step with Unstable, and
+  # force_dtmin accepts a step at dtmin instead of failing (internalnorm is
+  # set by .with_ode_norm)
+  isoutofdomain <- opts$isoutofdomain
+  unstable_check <- opts$unstable_check
+  force_dtmin <- isTRUE(opts$force_dtmin)
   algs <- if (inherits(alg, "CompositeAlgorithm")) alg$algs else list(alg)
   adaptive <- (opts$adaptive %||% TRUE) && all(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))
   # maxiters of OrdinaryDiffEqCore solve.jl: 1e6 for an adaptive algorithm
@@ -516,6 +611,7 @@ solve.ODEProblem <- function(a, b, ...) {
   if (is.null(opts$maxiters)) maxiters <- if (any(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))) 1e6 else Inf
   saveat <- sort(unique(as.numeric(opts$saveat %||% numeric())), decreasing = tdir < 0)
   if (length(saveat) == 1L && !is.null(opts$saveat) && length(opts$saveat) == 1L) {
+    if (!is.finite(tf - t0)) stop("saveat as a step needs a finite time span", call. = FALSE)
     # initialize_saveat: the range (t0 + s):s:tf of Julia, with the start
     # and the end saved as well
     ds <- tdir * abs(saveat)
@@ -523,12 +619,13 @@ solve.ODEProblem <- function(a, b, ...) {
     if (saveat[length(saveat)] != tf) saveat <- c(saveat, tf)
   }
   save_everystep <- opts$save_everystep %||% !length(saveat)
-  save_start <- opts$save_start %||% (!length(saveat) || any(abs(saveat - t0) < 1e-14))
-  save_end <- opts$save_end %||% (!length(saveat) || any(abs(saveat - tf) < 1e-14))
+  save_start <- opts$save_start %||% (!length(saveat) || any(saveat == t0 | abs(saveat - t0) < 1e-14, na.rm = TRUE))
+  save_end <- opts$save_end %||% (!length(saveat) || any(saveat == tf | abs(saveat - tf) < 1e-14, na.rm = TRUE))
   # default_linear_interpolation (VerletLeapfrog): no dense output by default
   dense <- opts$dense %||% (!length(saveat) && save_everystep && !isTRUE(alg$linear_interpolation))
   tstops <- as.numeric(c(unlist(opts$tstops), unlist(opts$sys_tstops)))
-  tstops <- tstops[(tstops - t0) * tdir > 0 & (tstops - tf) * tdir <= 0]
+  # tdir * t comparisons (not (t - tf) * tdir), so infinite times compare
+  tstops <- tstops[tdir * tstops > tdir * t0 & tdir * tstops <= tdir * tf]
   tstops <- sort(unique(c(tstops, tf)), decreasing = tdir < 0)
 
   integ <- new.env(parent = emptyenv())
@@ -563,8 +660,14 @@ solve.ODEProblem <- function(a, b, ...) {
               # opts.dense (QNDF evaluates f at the end of a step only for dense output)
               dense = dense)
   ctx$lazy_nf$n <- 0L
-  if (any(!is.finite(integ$u))) stop("initial values are not finite: ",
-                                     paste(names(integ$u)[!is.finite(integ$u)], collapse = ", "), call. = FALSE)
+  if (any(!is.finite(integ$u))) {
+    # the message of OrdinaryDiffEqCore's initdt.jl, with the components
+    bad <- which(!is.finite(integ$u))
+    lab <- if (is.null(names(integ$u))) bad else names(integ$u)[bad]
+    stop("First function call produced NaNs. Exiting. Double check that none of the initial conditions, ",
+         "parameters, or timespan values are NaN. Initial values that are not finite: ",
+         paste(lab, collapse = ", "), call. = FALSE)
+  }
   stats <- list(nf = 0L, nf2 = 0L, njacs = 0L, nsolve = 0L, nw = 0L, naccept = 0L, nreject = 0L)
   add_stats <- function(res) {
     for (s in c("nf", "nf2", "njacs", "nsolve", "nw")) stats[[s]] <<- stats[[s]] + as.integer(res[[s]] %||% 0L)
@@ -636,7 +739,7 @@ solve.ODEProblem <- function(a, b, ...) {
   ctx$calck <- opts$calck %||% (length(cbs$continuous) + length(cbs$discrete) > 0L || dense || length(saveat) > 0L)
   for (cb in cbs$discrete) {
     cts <- if (!is.null(cb$tstops_fn)) cb$tstops_fn(prob$tspan) else cb$tstops
-    tstops <- sort(unique(c(tstops, cts[(cts - t0) * tdir > 0 & (cts - tf) * tdir <= 0])),
+    tstops <- sort(unique(c(tstops, cts[tdir * cts > tdir * t0 & tdir * cts <= tdir * tf])),
                    decreasing = tdir < 0)
   }
   # parameter values in force from each time on, for observed expressions
@@ -669,17 +772,31 @@ solve.ODEProblem <- function(a, b, ...) {
   css <- lapply(algs, function(a) .ctrl_state())
   caches[[cur]] <- algs[[cur]]$init(ctx, integ$t, integ$u)
   add_init(caches[[cur]])
+  if (!is_dae && is.null(prob$nv) && is.numeric(caches[[cur]]$fsal))
+    .check_f_length(caches[[cur]]$fsal, length(integ$u))
   start_dt <- function(a, cache) {
     if (is_dae) return(1e-6 * abs(tf - t0))
     # isdae of OrdinaryDiffEqCore: only a singular mass matrix (a zero pivot of
     # its LU factorization, ArrayInterface.issingular) takes the small step
     if (mm && !is.finite(determinant(as.matrix(M))$modulus)) return(max(1e-6, dtmin_at(integ$t)))
     f0 <- cache$fsal %||% ctx$f(integ$u, ctx$p, integ$t)
+    if (is.null(prob$nv)) .check_f_length(f0, length(integ$u))
     # _determine_initdt: the first step does not pass the first tstop
     dtm <- if (length(tstops)) min(dtmax, abs(tstops[1L] - integ$t)) else dtmax
     .initial_dt(ctx, integ$t, integ$u, f0, tdir, a$order, abstol, reltol, dtm, dtmin_at(integ$t))
   }
   dt <- opts$dt %||% NULL
+  # handle_dt!: an adaptive dt of 0 asks for the automatic initial step
+  if (!is.null(dt) && adaptive && dt == 0) dt <- NULL
+  # a fixed step of 0: every step reaches the next tstop (modify_dt_for_tstops!
+  # with dtcache 0); saving every step, OrdinaryDiffEq sizes the save arrays
+  # by ceil(Int, (tf - t0) / dt) first, which fails
+  if (!is.null(dt) && !adaptive && dt == 0) {
+    if (save_everystep && is.finite(tf - t0))
+      stop("InexactError: ceil(Int64, Inf): a fixed step method needs dt > 0 when it saves every step",
+           call. = FALSE)
+    dt <- abs(tf - t0)
+  }
   if (is.null(dt)) {
     if (!adaptive && isFALSE(algs[[cur]]$dt_required)) {
       # dt_required(alg) = false: the step reaches the next tstop
@@ -716,8 +833,10 @@ solve.ODEProblem <- function(a, b, ...) {
   I$done <- FALSE
   I$disc_next <- FALSE
   I$early <- NULL
+  # internalnorm(u, t) of the solve options, at the current time
+  I$internalnorm <- if (is.function(opts$internalnorm)) function(x) opts$internalnorm(x, I$integ$t)
   # .INTEG_INIT is the initialization code above, run in the integrator
-  eval(.INTEG_INIT, I)
+  .with_ode_norm(I, eval(.INTEG_INIT, I))
   I$integ$.I <- I
   .integ_bindings(I)
   I
@@ -726,16 +845,19 @@ solve.ODEProblem <- function(a, b, ...) {
 # .integ_step and .integ_finalize evaluate their bodies in the integrator
 # state environment I (set up by .INTEG_INIT), so these names are bindings
 # of I, not globals.
-utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
+utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "unstable_check", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
                          "dense", "dtmax", "dtmin", "dtmin_at", "fail_code", "fail_msg", "finish", "is_dae",
                          "maxiters", "mm", "opts", "prob",
                          "push_save", "reltol", "disc_next", "add_init", "save_end", "save_everystep",
                          "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us"))
 
 .integ_step <- function(I) {
+  old_norm <- .ode_norm$f
+  .ode_norm$f <- I$internalnorm
+  on.exit(.ode_norm$f <- old_norm)
   evalq(repeat {
     if (done) break
-    if (!((integ$t - tf) * tdir < 0 && !integ$terminate)) {
+    if (!(tdir * integ$t < tdir * tf && !integ$terminate)) {
       done <- TRUE
       break
     }
@@ -754,6 +876,14 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     if (iter > maxiters) {
       retcode <- "MaxIters"
       warning("maximum number of iterations reached at t = ", integ$t, call. = FALSE)
+      done <- TRUE
+      break
+    }
+    # de_check_error: a user unstable_check after an accepted step
+    if (is.function(unstable_check) && accept_prev && stats$naccept > 0L &&
+        isTRUE(unstable_check(dt, integ$u, integ$p, integ$t))) {
+      retcode <- "Unstable"
+      warning("unstable_check reported an instability at t = ", integ$t, call. = FALSE)
       done <- TRUE
       break
     }
@@ -792,7 +922,19 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     # eps ends exactly at the stop, with the shorter of its size and the
     # distance to the stop
     dist <- abs(next_stop - integ$t)
-    if (dtcur + 100 * .eps64(max(abs(integ$t), abs(next_stop))) >= dist) {
+    # fix_dt_at_bounds!: no fixed step is shorter than eps(t) (or dtmin)
+    if (!adaptive) dtcur <- max(dtcur, dtmin_at(integ$t))
+    # the tolerance is 0 at an infinite stop
+    tol_stop <- if (is.finite(next_stop)) 100 * .eps64(max(abs(integ$t), abs(next_stop))) else 0
+    if (!is.finite(dtcur)) {
+      # an unbounded step (an infinite time span with dtmax = Inf whose step
+      # size overflowed) cannot be taken
+      retcode <- "Unstable"
+      warning("the step size is not finite at t = ", integ$t, call. = FALSE)
+      done <- TRUE
+      break
+    }
+    if (dtcur + tol_stop >= dist) {
       dtcur <- min(dtcur, dist)
       hit_stop <- TRUE
     }
@@ -814,6 +956,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     # the controller, for methods that pseudo step it (ExplicitTaylorAdaptiveOrder)
     ctx$ctrl <- list(co = co, cs = css[[cur]])
     res <- a$step(ctx, integ$t, integ$u, tdir * dtcur, caches[[cur]])
+    if (length(res$u) != length(integ$u)) .check_f_length(res$u, length(integ$u))
     add_stats(res)
     if (isTRUE(res$disco_used)) is_disco_step <- FALSE
     if (!is.null(res$eigen_est)) eigen_est <- res$eigen_est
@@ -832,7 +975,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       # a method that finishes the failed step keeps its error estimate
       if (!is.null(res$EEst)) EEst_prev <- res$EEst
       dt <- if (!is.null(a$newton_fail)) a$newton_fail(caches[[cur]], dtcur, co) else dtcur / co$failfactor
-      if (!is.null(fc <- fail_code(dt))) {
+      if (force_dtmin) dt <- max(dt, dtmin_at(integ$t))
+      if (!force_dtmin && !is.null(fc <- fail_code(dt))) {
         retcode <- fc
         warning(fail_msg(fc), integ$t, "; the nonlinear solver does not converge", call. = FALSE)
         done <- TRUE
@@ -847,11 +991,19 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       css[[cur]] <- qq$cs
     }
     EEst_prev <- EEst
-    if (adaptive && .ctrl_rejects(co, css[[cur]], EEst)) {
+    # _loopfooter!: a state outside the domain is rejected; force_dtmin accepts
+    # a step at the smallest step size
+    isout <- adaptive && is.function(isoutofdomain) &&
+      isTRUE(isoutofdomain(res$u, integ$p, integ$t + tdir * dtcur))
+    if (adaptive && (isout || .ctrl_rejects(co, css[[cur]], EEst)) &&
+        !(force_dtmin && dtcur <= dtmin_at(integ$t))) {
       stats$nreject <- stats$nreject + 1L
       accept_prev <- FALSE
       ddt <- -1
-      if (co$discontinuity_detection) {
+      if (isout) {
+        # handle_step_rejection!: dt * qmin instead of the controller
+        ddt <- dtcur * co$qmin
+      } else if (co$discontinuity_detection) {
         # handle_disco_reject!: retry just before the first callback root
         disco_attempt <- list(t0 = integ$t, dt = tdir * dtcur, y0 = integ$u, y1 = res$u, k = res$k,
                               interp = a$interp)
@@ -863,7 +1015,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       }
       dt <- if (ddt > 0) ddt else .ctrl_reject(co, css[[cur]], dtcur, EEst, a, caches[[cur]])
       if (!is.null(a$on_reject)) a$on_reject(caches[[cur]])
-      if (!is.null(fc <- fail_code(dt))) {
+      if (force_dtmin) dt <- max(dt, dtmin_at(integ$t))
+      if (!force_dtmin && !is.null(fc <- fail_code(dt))) {
         retcode <- fc
         warning(fail_msg(fc), integ$t, "; the problem may be stiff or singular", call. = FALSE)
         done <- TRUE
@@ -871,7 +1024,9 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       }
       next
     }
-    if (any(!is.finite(res$u))) {
+    # ODE_DEFAULT_UNSTABLE_CHECK (a state that is not finite), checked before
+    # the step is accepted; a user unstable_check replaces it and runs after
+    if (!is.function(unstable_check) && any(!is.finite(res$u))) {
       retcode <- "Unstable"
       warning("the solution became non finite at t = ", integ$t, call. = FALSE)
       done <- TRUE
@@ -903,6 +1058,13 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       if (!is.null(a$dtnew_mod)) dtnew <- a$dtnew_mod(dtnew, eigen_est)
     } else dtnew <- dt
     tnew <- if (hit_stop) next_stop else integ$t + tdir * dtcur
+    if (tnew == integ$t) {
+      # a step that does not advance t would repeat forever
+      retcode <- "Unstable"
+      warning("the step size ", dtcur, " does not advance t = ", integ$t, call. = FALSE)
+      done <- TRUE
+      break
+    }
     # calc_dt_propose!: the step is the interval it spans in floating point
     if (adaptive) dtnew <- abs((tnew + tdir * abs(dtnew)) - tnew)
     # apply_solve_step_limiter!: the limiter may change the accepted state
@@ -938,7 +1100,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
     # saving
     tend_step <- integ$t
     if (length(saveat)) {
-      while (next_save <= length(saveat) && (saveat[next_save] - tend_step) * tdir <= 0) {
+      while (next_save <= length(saveat) && tdir * saveat[next_save] <= tdir * tend_step) {
         ts_ <- saveat[next_save]
         if (!(abs(ts_ - t0) < 1e-14 && save_start) &&
             (ts_ - step$t0) * tdir >= -1e-14) {
@@ -951,7 +1113,7 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         next_save <- next_save + 1L
       }
     }
-    if (save_everystep && (integ$t - tf) * tdir < 0 && !isTRUE(ev$modified) &&
+    if (save_everystep && tdir * integ$t < tdir * tf && !isTRUE(ev$modified) &&
         !(length(ts) && ts[length(ts)] == integ$t)) {
       # after an event the points before and after the affect are saved below
       push_save(integ$t, integ$u)
@@ -982,7 +1144,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         if (ev$save_pre && !(length(ts) && ts[length(ts)] == ev$left$t)) push_save(ev$left$t, ev$left$u)
         if (ev$save_post) push_save(integ$t, integ$u)
       } else {
-        if (save_everystep && !is.null(ev$left)) push_save(ev$left$t, ev$left$u)
+        # save_positions[1]: the state before the affect
+        if (save_everystep && !is.null(ev$left) && !isFALSE(ev$save_pre)) push_save(ev$left$t, ev$left$u)
         if ((save_everystep && !isFALSE(ev$save_post)) ||
             (!save_everystep && length(saveat) && length(ts) && abs(ts[length(ts)] - integ$t) <= 1e-14 * max(1, abs(integ$t)))) {
           # a saved point at the event time takes the value after the affect
@@ -1026,7 +1189,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
 .integ_finalize <- function(I) {
   if (!is.null(I$early)) return(I$early)
   evalq({
-  if (save_end && (!length(ts) || abs(ts[length(ts)] - integ$t) > 1e-14 * max(1, abs(integ$t)) ||
+  if (save_end && (!length(ts) || (ts[length(ts)] != integ$t &&
+                                   !isTRUE(abs(ts[length(ts)] - integ$t) <= 1e-14 * max(1, abs(integ$t)))) ||
                    integ$terminate)) {
     if (!length(ts) || ts[length(ts)] != integ$t) push_save(integ$t, integ$u)
   }

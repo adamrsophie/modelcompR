@@ -76,6 +76,7 @@ init.ODEProblem <- function(prob, alg = NULL, ...) {
   if (!.is_identity_mass(prob$f$mass_matrix) && !isTRUE(alg$mass_matrix))
     stop(alg$name, "() does not support mass matrices; use a mass matrix solver such as Rodas5P()", call. = FALSE)
   opts <- utils::modifyList(prob$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
   .integ_public(.integ_init(prob, alg, opts))
 }
 
@@ -83,6 +84,7 @@ init.ODEProblem <- function(prob, alg = NULL, ...) {
 init.DAEProblem <- function(prob, alg = NULL, ...) {
   alg <- alg %||% DFBDF()
   opts <- utils::modifyList(prob$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
   .integ_public(.integ_init(prob, alg, opts))
 }
 
@@ -298,7 +300,7 @@ reinit <- function(integ, u0 = NULL, t0 = NULL, tf = NULL, erase_sol = TRUE, p =
   # reinit_noise! of an SDE integrator: the noise restarts at the new t0
   if (is.function(I$reinit_noise)) I$reinit_noise(prob$tspan[1L])
   # .INTEG_INIT is the package's own initialization code (R/solvers-ode.R)
-  eval(.INTEG_INIT, I)
+  .with_ode_norm(I, eval(.INTEG_INIT, I))
   # the user's handle stays the same environment
   fresh <- I$integ
   for (nm in setdiff(ls(integ, all.names = TRUE), ls(fresh, all.names = TRUE))) rm(list = nm, envir = integ)
@@ -318,8 +320,31 @@ reinit <- function(integ, u0 = NULL, t0 = NULL, tf = NULL, erase_sol = TRUE, p =
 get_du <- function(integ) {
   I <- .integ_I(integ)
   if (!is.null(integ$du)) return(integ$du)
-  as.numeric(I$ctx$f(integ$u, integ$p, integ$t))
+  a <- I$algs[[I$cur %||% 1L]] %||% I$alg
+  fu <- function() as.numeric(I$ctx$f(integ$u, integ$p, integ$t))
+  # SciMLBase.get_du of OrdinaryDiffEqCore: fsallast (f at the state, also
+  # with a mass matrix) for an FSAL method without a stiff interpolation,
+  # otherwise the derivative of the last step's interpolant at t
+  if (!(a$name %in% .NOT_FSAL_ALGS) && !(a$name %in% .STIFF_INTERP_ALGS)) return(fu())
+  st <- integ$last_step
+  if (is.null(st)) return(fu())
+  if (is.null(.interp_deriv_spec(st$interp))) {
+    # an interpolant without a derivative in the port: M^-1 f
+    return(as.numeric(.mm_deriv(I$ctx, fu())))
+  }
+  .step_deriv(st, integ$t, 1L)
 }
+
+# isfsal(alg) = false and has_stiff_interpolation(alg) = true of the solver
+# libraries' alg_utils.jl
+.NOT_FSAL_ALGS <- c("Vern7", "Vern8", "Vern9", "RKV76IIa", "RKO65", "PSRK3p5q4", "PSRK3p6q5", "PSRK4p7q6",
+                    "PDIRK44", "SDC", "MREIL", "IDSolve", "Rodas3P", "Rodas23W", "Rodas5", "Rodas5P",
+                    "Rodas5Pr", "Rodas5Pe", "Rodas4", "Rodas42", "Rodas4P", "Rodas4P2", "Rodas4PW", "Rodas6P",
+                    "HybridExplicitImplicitRK")
+.STIFF_INTERP_ALGS <- c("Rosenbrock23", "Rosenbrock32", "Rodas23W", "Rodas3P", "Rodas4", "Rodas4P", "Rodas4P2",
+                        "Rodas4PW", "Rodas5", "Rodas5P", "Rodas5Pe", "Rodas5Pr", "Rodas6P",
+                        "HybridExplicitImplicitRK", "QNDF", "FBDF", "DFBDF", "RadauIIA3", "RadauIIA5",
+                        "RadauIIA9", "AdaptiveRadau", "NordsieckBDF", "DNordsieckBDF")
 
 #' @export
 print.DEIntegrator <- function(x, ...) {
