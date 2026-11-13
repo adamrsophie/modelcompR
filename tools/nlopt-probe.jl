@@ -195,3 +195,84 @@ runhex("ld_lbfgs_rosen_m3", :LD_LBFGS, 2, rosen, nothing, nothing, [-1.2, 1.0]; 
 runhex("ld_var2_quart5_tolg", :LD_VAR2, 5, quart5, nothing, nothing, fill(1.0, 5); maxeval = 3000,
        params = Dict("tolg" => 1e-4))
 close(TRACEIO)
+
+# ---------------------------------------------------------------------------
+# Bit level references of the DIRECT family (GN_DIRECT*, GN_ORIG_DIRECT*),
+# LN_PRAXIS, StoGO (GD_STOGO, GD_STOGO_RAND) and AGS (GN_AGS) ports: every
+# run is seeded with NLopt.srand(1234); the summary goes to standard output
+# as R assignments of `ghex`, the objective trace to the file named by
+# TRACE_GLOBAL (one line per case: the name, then the values, tab separated).
+const GTRACEIO = open(get(ENV, "TRACE_GLOBAL", "probe-out/nlopt-trace-global.tsv"), "w")
+
+function runghex(name, a, n, f, lb, ub, x0; cons = :none, xtol_rel = 0.0, ftol_rel = 0.0, maxeval = 0,
+                 params = Dict{String,Float64}())
+    tr = Float64[]
+    fw = (x, g) -> (v = f(x, g); push!(tr, v); v)
+    NLopt.srand(1234)
+    try
+        opt = Opt(a, n)
+        opt.min_objective = fw
+        lb === nothing || (opt.lower_bounds = lb)
+        ub === nothing || (opt.upper_bounds = ub)
+        opt.xtol_rel = xtol_rel; opt.ftol_rel = ftol_rel; opt.maxeval = maxeval
+        for (k, v) in params
+            opt.params[k] = v
+        end
+        cons == :ineq && inequality_constraint!(opt, ball, 1e-8)
+        (minf, minx, ret) = optimize(opt, copy(x0))
+        println("ghex\$$name <- list(x = $(hv(minx)), f = \"$(hx(minf))\", ret = \"$(ret)\", numevals = $(opt.numevals)L)")
+    catch e
+        println("ghex\$$name <- list(error = $(repr(sprint(showerror, e))))")
+    end
+    println(GTRACEIO, name, "\t", join(hx.(tr), "\t"))
+end
+
+const GBOX3 = (fill(-5.0, 3), fill(5.0, 3))
+const GBOX2 = ([-2.0, -2.0], [2.0, 2.0])
+for a in (:GN_DIRECT, :GN_DIRECT_L, :GN_DIRECT_L_RAND, :GN_DIRECT_NOSCAL, :GN_DIRECT_L_NOSCAL,
+          :GN_DIRECT_L_RAND_NOSCAL, :GN_ORIG_DIRECT, :GN_ORIG_DIRECT_L)
+    s = lowercase(string(a))
+    runghex("$(s)_poly3", a, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; xtol_rel = 1e-8, maxeval = 600)
+    runghex("$(s)_rosen", a, 2, rosen, GBOX2..., [-1.2, 1.0]; xtol_rel = 1e-8, maxeval = 500)
+    runghex("$(s)_quart5", a, 5, quart5, fill(-3.0, 5), fill(2.0, 5), fill(1.0, 5); maxeval = 800)
+    runghex("$(s)_xtol", a, 2, rosen, GBOX2..., [-1.2, 1.0]; xtol_rel = 1e-3, maxeval = 20000)
+end
+runghex("gn_direct_magic", :GN_DIRECT, 2, rosen, GBOX2..., [-1.2, 1.0]; maxeval = 400,
+        params = Dict("magic_eps" => 1e-4))
+runghex("gn_direct_l_fixed", :GN_DIRECT_L, 3, poly3, [-5.0, 2.0, -5.0], [5.0, 2.0, 5.0], [0.0, 2.0, 0.0];
+        maxeval = 400)
+runghex("gn_direct_l_ftol", :GN_DIRECT_L, 2, rosen, GBOX2..., [-1.2, 1.0]; ftol_rel = 1e-3, maxeval = 5000)
+for a in (:GN_ORIG_DIRECT, :GN_ORIG_DIRECT_L)
+    s = lowercase(string(a))
+    runghex("$(s)_cons", a, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; cons = :ineq, maxeval = 600)
+end
+runghex("gn_orig_direct_magic", :GN_ORIG_DIRECT, 2, rosen, GBOX2..., [-1.2, 1.0]; maxeval = 400,
+        params = Dict("magic_eps" => 1e-4, "magic_eps_abs" => 1e-6))
+
+runghex("ln_praxis_poly3", :LN_PRAXIS, 3, poly3, nothing, nothing, [0.0, 0.0, 0.0]; xtol_rel = 1e-10, maxeval = 2000)
+runghex("ln_praxis_poly3_box", :LN_PRAXIS, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; xtol_rel = 1e-8, maxeval = 2000)
+runghex("ln_praxis_poly3_half", :LN_PRAXIS, 3, poly3, fill(-1.0, 3), fill(Inf, 3), [0.0, 0.0, 0.0];
+        xtol_rel = 1e-8, maxeval = 2000)
+runghex("ln_praxis_poly3_upper", :LN_PRAXIS, 3, poly3, fill(-Inf, 3), fill(1.5, 3), [0.0, 0.0, 0.0];
+        xtol_rel = 1e-8, maxeval = 2000)
+runghex("ln_praxis_rosen", :LN_PRAXIS, 2, rosen, nothing, nothing, [-1.2, 1.0]; ftol_rel = 1e-14, maxeval = 3000)
+runghex("ln_praxis_rosen_box", :LN_PRAXIS, 2, rosen, [-2.0, -2.0], [0.8, 2.0], [-1.2, 1.0]; ftol_rel = 1e-14,
+        maxeval = 3000)
+runghex("ln_praxis_rosen_max", :LN_PRAXIS, 2, rosen, nothing, nothing, [-1.2, 1.0]; maxeval = 25)
+runghex("ln_praxis_quart5", :LN_PRAXIS, 5, quart5, fill(-3.0, 5), fill(3.0, 5), fill(1.0, 5); xtol_rel = 1e-9,
+        maxeval = 4000)
+runghex("ln_praxis_t0", :LN_PRAXIS, 2, rosen, nothing, nothing, [-1.2, 1.0]; maxeval = 3000,
+        params = Dict("t0_tol" => 1e-6))
+
+for a in (:GD_STOGO, :GD_STOGO_RAND)
+    s = lowercase(string(a))
+    runghex("$(s)_poly3", a, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; xtol_rel = 1e-8, maxeval = 600)
+    runghex("$(s)_rosen", a, 2, rosen, GBOX2..., [-1.2, 1.0]; xtol_rel = 1e-8, maxeval = 600)
+    runghex("$(s)_quart5", a, 5, quart5, fill(-3.0, 5), fill(2.0, 5), fill(1.0, 5); maxeval = 800)
+end
+
+runghex("gn_ags_poly3", :GN_AGS, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; maxeval = 600)
+runghex("gn_ags_rosen", :GN_AGS, 2, rosen, GBOX2..., [-1.2, 1.0]; maxeval = 500)
+runghex("gn_ags_rosen_xtol", :GN_AGS, 2, rosen, GBOX2..., [-1.2, 1.0]; xtol_rel = 1e-3, maxeval = 5000)
+runghex("gn_ags_cons", :GN_AGS, 3, poly3, GBOX3..., [0.0, 0.0, 0.0]; cons = :ineq, maxeval = 600)
+close(GTRACEIO)
