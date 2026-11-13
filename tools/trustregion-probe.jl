@@ -7,8 +7,11 @@ using NonlinearSolve, LinearAlgebra
 
 rv(v) = "c(" * join([repr(Float64(t)) for t in v], ", ") * ")"
 function emit(name, sol)
+    st = sol.stats
+    nsteps = st === nothing ? -1 : st.nsteps
+    nf = st === nothing ? -1 : st.nf
     println("tr\$$name <- list(u = $(rv(sol.u)), resid = $(rv(sol.resid)), retcode = \"$(sol.retcode)\", ",
-            "nsteps = $(sol.stats.nsteps)L, nf = $(sol.stats.nf)L)")
+            "nsteps = $(nsteps)L, nf = $(nf)L)")
 end
 
 rosen(u, p) = [10 * (u[2] - u[1] * u[1]), 1 - u[1]]
