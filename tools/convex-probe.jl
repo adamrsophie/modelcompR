@@ -269,17 +269,23 @@ probe("normone_set", () -> ConvexOptimizationProblem(OptimizationFunction((u, p)
 probe("norminf_set", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 3.0), (3, -4.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.NormInfinityCone(3))]))
 Mf = [2.0, 0.5, 1.0, 0.5, 1.0, 3.0]   # a 2x3 matrix by columns
-probe("normspec", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
+# Clarabel's PSD completion of the dual indexes an OrderedSet and throws a
+# MethodError whenever a cone is decomposed, so each such case also runs
+# without the completion to give the decomposed solve a reference
+const ALG_NOCD = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+    "chordal_decomposition_complete_dual" => false))
+probe_both(name, prob) = (probe(name, prob); probe(name * "_nocd", prob; alg = ALG_NOCD))
+probe_both("normspec", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
     constraints = [cz([(i + 1, Mf[i]) for i in 1:6]), ConeConstraint((u, p) -> [u[i] for i in 1:7], MOI.NormSpectralCone(2, 3))]))
 probe("normnuc", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
     constraints = [cz([(i + 1, Mf[i]) for i in 1:6]), ConeConstraint((u, p) -> [u[i] for i in 1:7], MOI.NormNuclearCone(2, 3))]))
 probe("logdet_tri", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 0.5), (5, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:5], MOI.LogDetConeTriangle(2))]))
-probe("logdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(6);
+probe_both("logdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(6);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 0.5), (5, 0.5), (6, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:6], MOI.LogDetConeSquare(2))]))
-probe("rootdet_tri", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
+probe_both("rootdet_tri", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
     constraints = [cz([(2, 2.0), (3, 0.5), (4, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:4], MOI.RootDetConeTriangle(2))]))
-probe("rootdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
+probe_both("rootdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
     constraints = [cz([(2, 2.0), (3, 0.5), (4, 0.5), (5, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:5], MOI.RootDetConeSquare(2))]))
 probe("psdsq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[4]), [1.0, 0.0, 0.0, 1.0];
     constraints = [cz([(2, 1.0), (3, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:4], MOI.PositiveSemidefiniteConeSquare(2))]))
@@ -322,4 +328,8 @@ for (nm, f, n) in (("band6", bandsq, 6), ("arrow6", arrowsq, 6), ("band9", bands
         "chordal_decomposition_compact" => false)))
     probe("chordal_$(nm)_nocd", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
         "chordal_decomposition_complete_dual" => false)))
+    probe("chordal_$(nm)_nm_nocd", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+        "chordal_decomposition_merge_method" => :none, "chordal_decomposition_complete_dual" => false)))
+    probe("chordal_$(nm)_std_nocd", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+        "chordal_decomposition_compact" => false, "chordal_decomposition_complete_dual" => false)))
 end
