@@ -29,6 +29,8 @@ Flow <- "Flow"
 
 #' @rdname Flow
 #' @export
+# a value, not a function: a call Stream(...) skips it and reaches the codegen
+# Stream() of symcompR when both packages are attached
 Stream <- "Stream"
 
 .connect_type <- function(v) .meta_get(v, "connect") %||% "Equality"

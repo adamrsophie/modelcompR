@@ -1,8 +1,10 @@
 # No exported name may mask a function of the packages R attaches by default.
-# Names shared with symcompR (flatten, compose, and Differential, extend and
-# System in symcompR versions with differential geometry, unit systems and
-# multibody mechanics) are allowed because the modelcompR functions hand
-# foreign arguments to symcompR.
+# Names shared with symcompR (flatten, compose, and Differential, extend,
+# System, Variable and WienerProcess in symcompR versions with differential
+# geometry, unit systems, multibody mechanics, codegen and stochastic
+# processes) are allowed because the modelcompR functions hand foreign
+# arguments to symcompR. Stream is a value in modelcompR, which a call skips.
+mcr_shared <- c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream")
 default_pkgs <- c("base", "stats", "utils", "graphics", "grDevices", "methods", "datasets")
 
 test_that("exports do not mask base R functions", {
@@ -14,7 +16,7 @@ test_that("exports do not mask base R functions", {
 
 test_that("exports do not mask symcompR functions except delegating ones", {
   ns <- getNamespaceExports("modelcompR")
-  hit <- setdiff(intersect(ns, getNamespaceExports("symcompR")), c("flatten", "compose", "Differential", "extend", "System"))
+  hit <- setdiff(intersect(ns, getNamespaceExports("symcompR")), mcr_shared)
   expect_identical(hit, character(0))
 })
 
@@ -41,6 +43,18 @@ test_that("delegating functions keep symcompR behavior", {
     N <- symcompR::ReferenceFrame("N")
     expect_s3_class(System(N), "physics_obj")
     expect_s3_class(System(frame = N), "physics_obj")
+  }
+  sx <- symcompR::Symbol("x")
+  if ("Variable" %in% getNamespaceExports("symcompR")) {
+    expect_identical(class(Variable(sx)), class(symcompR::Variable(sx)))
+    expect_identical(format(Variable(sx)), format(symcompR::Variable(sx)))
+  }
+  if ("WienerProcess" %in% getNamespaceExports("symcompR")) {
+    expect_identical(format(WienerProcess("W")), format(symcompR::WienerProcess("W")))
+  }
+  if ("Stream" %in% getNamespaceExports("symcompR")) {
+    expect_identical(Stream, "Stream")
+    expect_identical(format(Stream("stdout")), format(symcompR::Stream("stdout")))
   }
 })
 

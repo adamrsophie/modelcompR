@@ -225,8 +225,13 @@ SimpleNoiseProcess <- function(t0, W0, Z0 = NULL, dist, bridge = NULL, save_ever
 
 #' @rdname noise_processes
 #' @export
-WienerProcess <- function(t0, W0, Z0 = NULL, ...)
+WienerProcess <- function(t0, W0, Z0 = NULL, ...) {
+  # symcompR's WienerProcess(sym) is the stochastic process of sympy.stats,
+  # named by a string or a symbol
+  if ((is.character(t0) || is_sym(t0)) && "WienerProcess" %in% getNamespaceExports("symcompR"))
+    return(getExportedValue("symcompR", "WienerProcess")(t0))
   .np_process(t0, W0, Z0, .white_dist, .white_bridge, ..., cls = "WienerProcess")
+}
 
 #' @rdname noise_processes
 #' @export

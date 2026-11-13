@@ -53,7 +53,7 @@ test_that("attaching modelcompR masks nothing from symcompR or base R", {
   ns <- getNamespaceExports("modelcompR")
   shared <- intersect(ns, getNamespaceExports("symcompR"))
   expect_true(all(c("flatten", "compose") %in% shared))
-  expect_true(all(shared %in% c("flatten", "compose", "Differential", "extend", "System")))
+  expect_true(all(shared %in% c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream")))
   x <- symcompR::Symbol("x")
   expect_equal(format(compose(x^2, x + 1)), format(symcompR::compose(x^2, x + 1)))
 })
