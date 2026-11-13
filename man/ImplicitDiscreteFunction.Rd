@@ -4,7 +4,6 @@
 \alias{ImplicitDiscreteFunction}
 \alias{ImplicitDiscreteProblem}
 \alias{IDSolve}
-\alias{SimpleIDSolve}
 \title{Implicit discrete functions and problems}
 \usage{
 ImplicitDiscreteFunction(sys, ...)
@@ -19,8 +18,6 @@ ImplicitDiscreteProblem(
 )
 
 IDSolve()
-
-SimpleIDSolve()
 }
 \arguments{
 \item{sys}{A compiled discrete \code{System}, or an R function.}
@@ -47,13 +44,6 @@ are evaluated at the next step. \code{ImplicitDiscreteFunction(sys)} builds
 \code{f(u_next, u, p, t)}. Solve with \code{IDSolve()}, which steps by \code{dt}
 (default 1) and solves each step with Newton's method; the initial state
 is made consistent by one solve at the initial time.
-}
-\details{
-\code{SimpleIDSolve()} is the solver of SimpleImplicitDiscreteSolve: it
-solves for the state at t0 and then at every point of \code{t0:dt:tf} with
-\code{SimpleNewtonRaphson()}, from the previous state, and stops with
-\code{"InitialFailure"} or \code{"ConvergenceFailure"} when a solve fails. It
-takes \code{dt} (default 1), \code{save_everystep}, \code{save_start} and \code{save_end}.
 }
 \examples{
 # u_next solves u_next + u_next^3 = u

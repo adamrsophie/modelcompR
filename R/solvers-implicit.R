@@ -89,7 +89,13 @@
   W[!is.finite(W)] <- NaN
   if (anyNA(W)) return(NULL)
   q <- qr(W)
-  if (q$rank < ncol(W)) return(NULL)
+  if (q$rank < ncol(W)) {
+    # the rank test of LINPACK (tol 1e-7) also rejects the nonsingular but
+    # badly scaled W of index-2 DAEs; like the LU of Julia, fail only on an
+    # exactly singular factor
+    q <- qr(W, LAPACK = TRUE)
+    if (any(diag(q$qr) == 0)) return(NULL)
+  }
   q
 }
 

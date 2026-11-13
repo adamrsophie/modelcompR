@@ -456,6 +456,9 @@ RK4 <- function() {
 solve.ODEProblem <- function(a, b, ...) {
   alg <- if (missing(b) || is.null(b)) .default_ode_alg(a) else b
   if (!inherits(alg, "ODEAlgorithm")) stop("not an ODE algorithm: ", class(alg)[1L], call. = FALSE)
+  # algorithms that wrap the solve (GlobalRichardson, the GLEE methods; R/globaldiffeq.R)
+  if (is.function(alg$solve_override))
+    return(alg$solve_override(a, alg, utils::modifyList(a$kwargs %||% list(), list(...))))
   if (isTRUE(alg$dae)) stop(alg$name, "() solves DAEProblem objects; use a mass matrix method such as Rodas5P()",
                             call. = FALSE)
   if (!.is_identity_mass(a$f$mass_matrix) && !isTRUE(alg$mass_matrix))

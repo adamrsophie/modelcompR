@@ -71,6 +71,10 @@
 # problems, the Gauss adjoint otherwise.
 .sens_default_alg <- function(prob) {
   if (inherits(prob, c("AbstractNonlinearProblem", "SteadyStateProblem"))) return(SteadyStateAdjoint())
+  # the KKT adjoint when constraints or bounds enter the optimality conditions
+  if (inherits(prob, "OptimizationProblem"))
+    return(if (is.null(prob$f$cons) && is.null(prob$lb) && is.null(prob$ub)) UnconstrainedOptimizationAdjoint()
+           else OptimizationAdjoint())
   if (length(prob$u0) + length(prob$p) <= 100L) ForwardDiffSensitivity() else GaussAdjoint()
 }
 
@@ -99,7 +103,9 @@
 #' * [SteadyStateAdjoint()] for `NonlinearProblem` and `SteadyStateProblem`
 #'   (the implicit function theorem),
 #' * pathwise forward sensitivities for `SDEProblem` (with a fixed step
-#'   method, a `dt` and a `seed`, the derivative of the sampled path).
+#'   method, a `dt` and a `seed`, the derivative of the sampled path), or
+#'   for `SDEProblem` and `RODEProblem` the adjoints [BacksolveAdjoint()]
+#'   and [InterpolatingAdjoint()] of [SDEAdjointProblem()].
 #'
 #' Events are differentiated, including the dependence of event times on
 #' the parameters. When the problem was built from a System whose initial
@@ -107,8 +113,8 @@
 #' with respect to `p` includes that dependence.
 #'
 #' @param loss A function of the solution returning a number.
-#' @param prob An `ODEProblem`, `NonlinearProblem`, `SteadyStateProblem` or
-#'   `SDEProblem`.
+#' @param prob An `ODEProblem`, `NonlinearProblem`, `SteadyStateProblem`,
+#'   `OptimizationProblem`, `SDEProblem` or `RODEProblem`.
 #' @param alg The algorithm for [solve()].
 #' @param ... Options for [solve()] (`saveat`, `abstol`, `reltol`, `dt`,
 #'   `seed`, ...); the adjoint is solved with the same tolerances.
@@ -130,9 +136,14 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   if (!.is_sensealg(sensealg)) stop("`sensealg` must be a sensitivity algorithm", call. = FALSE)
   if (inherits(prob, c("AbstractNonlinearProblem", "SteadyStateProblem")))
     return(.sens_nl_gradient(loss, prob, alg, dots, sensealg))
+  if (inherits(prob, "OptimizationProblem")) return(.sens_opt_gradient(loss, prob, alg, dots, sensealg))
+  # the SDE and RODE adjoints (R/sensitivity-sde.R)
+  if (inherits(prob, c("SDEProblem", "RODEProblem")) && inherits(sensealg, c("BacksolveAdjoint", "InterpolatingAdjoint")))
+    return(.sens_stochastic_gradient(loss, prob, alg, dots, sensealg))
   if (inherits(prob, "SDEProblem")) return(.sens_sde_gradient(loss, prob, alg, dots, sensealg))
-  if (!inherits(prob, "ODEProblem")) stop("solve_gradient() supports ODE, nonlinear, steady state and SDE problems",
-                                          call. = FALSE)
+  if (!inherits(prob, "ODEProblem"))
+    stop("solve_gradient() supports ODE, nonlinear, steady state, optimization and SDE problems, and RODE problems ",
+         "with BacksolveAdjoint() or InterpolatingAdjoint()", call. = FALSE)
   if (.is_sensealg(sensealg, "ShadowingSensitivityAlgorithm"))
     stop("shadowing methods differentiate long time averages: use ForwardLSSProblem(), NILSSProblem(), ",
          "AdjointLSSProblem() or NILSASProblem()", call. = FALSE)
@@ -335,8 +346,8 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
 
 .sens_sde_gradient <- function(loss, prob, alg, dots, sensealg) {
   if (!.is_sensealg(sensealg, "ForwardSensitivityAlgorithm"))
-    stop("SDE problems are differentiated pathwise with ForwardDiffSensitivity(); the SDE adjoints of ",
-         "SciMLSensitivity are not ported", call. = FALSE)
+    stop("SDE problems are differentiated pathwise with ForwardDiffSensitivity() or with the adjoints ",
+         "BacksolveAdjoint() and InterpolatingAdjoint()", call. = FALSE)
   n <- length(prob$u0); np <- length(prob$p); m <- n + np
   f <- prob$f$f; gfun <- prob$f$g
   type <- prob$noise_type %||% prob$f$noise_type %||% "diagonal"

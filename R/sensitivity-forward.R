@@ -89,16 +89,8 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   if (has_cb && prob$tspan[2L] < prob$tspan[1L])
     stop("events with a decreasing time span are not supported by the sensitivity methods", call. = FALSE)
   nq <- if (has_cb) np * m else 0L
-  iu <- seq_len(n); iS <- n + seq_len(n * m); iQ <- n + n * m + seq_len(nq)
-  f <- fns$f
-  rhs <- function(z, p, t) {
-    u <- z[iu]
-    S <- matrix(z[iS], n, m)
-    Q <- if (has_cb) matrix(z[iQ], np, m) else Q0
-    dS <- fns$jac(u, p, t) %*% S
-    if (np) dS <- dS + fns$pjac(u, p, t) %*% Q
-    c(f(u, p, t), as.numeric(dS), numeric(nq))
-  }
+  iu <- seq_len(n)
+  rhs <- ODEForwardSensitivityFunction(prob, sensealg, Q0, tracked = has_cb)
   M <- fns$mass
   Maug <- if (is.null(M)) NULL else
     .sens_blockdiag(c(rep(list(M), m + 1L), if (nq) list(diag(1, nq))))

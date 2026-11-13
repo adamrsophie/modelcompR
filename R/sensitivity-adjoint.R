@@ -40,7 +40,8 @@
 #' including the dependence of the event time on the state and parameters,
 #' and changes of parameters by the event. Mass matrix (semi-explicit index
 #' 1) DAEs are supported by the interpolating, quadrature and Gauss methods.
-#' For nonlinear and steady state solutions, see [SteadyStateAdjoint()].
+#' For nonlinear and steady state solutions, see [SteadyStateAdjoint()];
+#' for optimization solutions, [OptimizationAdjoint()].
 #'
 #' `ODEAdjointProblem()` returns the backward problem without solving it;
 #' its element `finish` turns the backward solution into the gradients.
@@ -86,17 +87,45 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
   env <- .sol_env(sol)
   prob <- env$prob
   sensealg <- sensealg %||% if (.is_sensealg(env$sensealg, "AdjointSensitivityAlgorithm")) env$sensealg
+  if (inherits(prob, "OptimizationProblem"))
+    return(.sens_opt_adjoint(sol, sensealg %||% .sens_default_alg(prob), dgdu = dgdu, dgdp = dgdp, g = g))
   if (inherits(prob, c("AbstractNonlinearProblem", "SteadyStateProblem")) ||
       inherits(sensealg, "SteadyStateAdjoint"))
     return(.sens_steady_adjoint(sol, sensealg %||% SteadyStateAdjoint(), dgdu = dgdu, dgdp = dgdp, g = g))
   sensealg <- sensealg %||% InterpolatingAdjoint()
-  if (!inherits(prob, "ODEProblem"))
-    stop("Continuous adjoint sensitivities are only supported for ODE problems (and mass matrix DAEs).",
-         call. = FALSE)
-  if (!.is_sensealg(sensealg, "AdjointSensitivityAlgorithm"))
-    stop("sensealg must be an adjoint method such as InterpolatingAdjoint()", call. = FALSE)
   if (inherits(sensealg, "QuadratureAdjoint") && missing(abstol)) abstol <- sensealg$abstol
   if (inherits(sensealg, "QuadratureAdjoint") && missing(reltol)) reltol <- sensealg$reltol
+  # fully implicit DAEs (R/sensitivity-dae.R)
+  if (inherits(prob, "DAEProblem")) {
+    ap <- DAEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
+                            dgdp_continuous, g, callback = callback, no_start = no_start,
+                            abstol = abstol, reltol = reltol)
+    return(ap$finish(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...)))
+  }
+  # SDEs and RODEs, solved on the forward grid (R/sensitivity-sde.R)
+  if (inherits(prob, c("SDEProblem", "RODEProblem"))) {
+    dots <- list(...)
+    sde <- inherits(prob, "SDEProblem")
+    ap <- if (sde) SDEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
+                                     dgdp_continuous, g, callback = callback,
+                                     corfunc_analytical = dots$corfunc_analytical,
+                                     diffusion_jac = dots$diffusion_jac, diffusion_paramjac = dots$diffusion_paramjac,
+                                     no_start = no_start) else
+      RODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous, dgdp_continuous, g,
+                         callback = callback, no_start = no_start)
+    dots$corfunc_analytical <- dots$diffusion_jac <- dots$diffusion_paramjac <- NULL
+    dots$dt <- dots$dt %||% ap$dt
+    dots$tstops <- sort(unique(c(ap$tstops, if (!is.null(dots$tstops)) ap$time_map(dots$tstops))))
+    if (sde) {
+      dots$abstol <- abstol
+      dots$reltol <- reltol
+    }
+    return(ap$finish(do.call(solve, c(list(ap, ap$alg), dots))))
+  }
+  if (!inherits(prob, "ODEProblem"))
+    stop("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE/DAE problems.", call. = FALSE)
+  if (!.is_sensealg(sensealg, "AdjointSensitivityAlgorithm"))
+    stop("sensealg must be an adjoint method such as InterpolatingAdjoint()", call. = FALSE)
   ap <- ODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                           dgdp_continuous, g, checkpoints = checkpoints, callback = callback,
                           no_start = no_start, abstol = abstol, reltol = reltol)
@@ -351,12 +380,8 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
       FALSE
     }, function(integ) NULL)
   }
-  mu_integrand <- function(l, p, s) {
-    y <- tr$at(s)
-    v <- fns$vjp(l, y, p, s)$p
-    if (cont && !is.null(gp_c)) v <- v + as.numeric(gp_c(y, p, s))
-    v
-  }
+  mu_integrand <- .sens_mu_integrand(fns, tr, if (cont) gp_c)
+  rhs <- structure(rhs, class = c(.sens_function_class(method), SensitivityFunction, "function"))
   fn <- ODEFunction(rhs, mass_matrix = Madj, jac_fn = jac)
   aprob <- .new_problem("ODEProblem", f = fn, u0 = z0, tspan = c(tend, t0), p = pT, sys = NULL,
                         kwargs = list(callback = CallbackSet(gauss_cb, cb_rev, callback),

@@ -5,12 +5,26 @@
 #   julia tools/upstream_exports_src.jl
 # Reads the monorepo sources of OrdinaryDiffEq (lib/ holds the solver
 # sublibraries) and Optimization (lib/ holds the solver wrappers) from the
-# Julia depot and writes tools/upstream_exports_src.tsv (package, name).
+# Julia depot and writes tools/upstream_exports_src.tsv (package, name). A
+# sublibrary also installed as its own registered release (such as
+# GlobalDiffEq, whose monorepo copy lags behind) is read from whichever of the
+# two has the higher version.
 # A `@reexport using M` is listed as the line `package  @reexport M`.
 function latest(pkg)
     d = joinpath(first(DEPOT_PATH), "packages", pkg)
     vs = filter(isdir, joinpath.(d, readdir(d)))
     vs[argmax(mtime.(vs))]
+end
+function version_of(dir)
+    for l in eachline(joinpath(dir, "Project.toml"))
+        startswith(l, "version") && return VersionNumber(split(l, '"')[2])
+    end
+    v"0"
+end
+function newest(libdir, pkg)
+    isdir(joinpath(first(DEPOT_PATH), "packages", pkg)) || return libdir
+    alone = latest(pkg)
+    version_of(alone) > version_of(libdir) ? alone : libdir
 end
 function exports_of(dir)
     out = String[]
@@ -46,7 +60,7 @@ open(joinpath(@__DIR__, "upstream_exports_src.tsv"), "w") do io
         lib = joinpath(latest(mono), "lib")
         for sub in sort(readdir(lib))
             isdir(joinpath(lib, sub, "src")) || continue
-            for n in sort(exports_of(joinpath(lib, sub)))
+            for n in sort(exports_of(newest(joinpath(lib, sub), sub)))
                 println(io, sub, "\t", n)
             end
         end

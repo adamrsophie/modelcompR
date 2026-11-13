@@ -293,6 +293,9 @@ generate_dae_jacobian <- function(sys, ...) {
 #' @export
 solve.DAEProblem <- function(a, b, ...) {
   alg <- if (missing(b) || is.null(b)) DFBDF() else b
+  # GlobalRichardson wraps a DAE algorithm (R/globaldiffeq.R)
+  if (inherits(alg, "ODEAlgorithm") && is.function(alg$solve_override) && isTRUE(alg$dae))
+    return(alg$solve_override(a, alg, utils::modifyList(a$kwargs %||% list(), list(...))))
   if (!inherits(alg, "ODEAlgorithm") || !isTRUE(alg$dae))
     stop("a DAEProblem needs a DAE algorithm such as DFBDF() or DImplicitEuler()", call. = FALSE)
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))

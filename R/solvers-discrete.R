@@ -125,60 +125,14 @@ ImplicitDiscreteProblem <- function(sys, op = list(), tspan = NULL, ..., u0 = NU
 #' @export
 IDSolve <- function() structure(list(name = "IDSolve"), class = c("IDSolve", "DiscreteAlgorithm"))
 
-#' @rdname ImplicitDiscreteFunction
-#' @details `SimpleIDSolve()` is the solver of SimpleImplicitDiscreteSolve: it
-#'   solves for the state at t0 and then at every point of `t0:dt:tf` with
-#'   `SimpleNewtonRaphson()`, from the previous state, and stops with
-#'   `"InitialFailure"` or `"ConvergenceFailure"` when a solve fails. It
-#'   takes `dt` (default 1), `save_everystep`, `save_start` and `save_end`.
-#' @export
-SimpleIDSolve <- function() structure(list(name = "SimpleIDSolve"), class = c("SimpleIDSolve", "DiscreteAlgorithm"))
-
-# solve of SimpleImplicitDiscreteSolve.jl. Julia indexes past its save buffer
-# when save_start = false, and pairs every time with two states when
-# save_everystep = false; here the saved times follow the saved states.
-.simple_idsolve <- function(prob, alg, dt = 1, save_everystep = TRUE, save_start = TRUE, save_end = TRUE,
-                            adaptive = FALSE, dense = FALSE, ...) {
-  if (isTRUE(adaptive) || isTRUE(dense)) stop("SimpleIDSolve takes fixed steps without dense output", call. = FALSE)
-  f <- prob$f$f
-  nms <- names(prob$u0)
-  nl <- function(uprev, t) {
-    solve(NonlinearProblem(function(u, p) as.numeric(f(u, uprev, p, t)), uprev, prob$p), SimpleNewtonRaphson())
-  }
-  out <- function(ts, us, retcode) {
-    U <- do.call(rbind, us)
-    colnames(U) <- nms
-    .new_ode_solution(t = ts, u = U, prob = prob, alg = alg, retcode = retcode)
-  }
-  t0 <- prob$tspan[1L]
-  ini <- nl(as.numeric(prob$u0), t0)
-  if (ini$retcode != "Success") return(out(t0, list(as.numeric(prob$u0)), "InitialFailure"))
-  ts <- .jl_range(t0, dt, prob$tspan[2L])
-  u <- ini$u
-  keep <- if (save_start) 1L else integer()
-  us <- list(u)
-  for (i in seq_along(ts)[-1L]) {
-    s <- nl(u, ts[i])
-    u <- s$u
-    us[[i]] <- u
-    if (s$retcode != "Success") {
-      k <- if (save_everystep) c(keep, 2:i) else c(keep, i)
-      return(out(ts[k], us[k], "ConvergenceFailure"))
-    }
-  }
-  n <- length(ts)
-  k <- if (save_everystep) c(keep, seq_len(n)[-1L]) else c(keep, if (save_end && n > 1L) n)
-  out(ts[k], us[k], "Success")
-}
-
 #' @rdname solve.ODEProblem
 #' @export
 solve.ImplicitDiscreteProblem <- function(a, b, ...) {
-  if (!missing(b) && inherits(b, "SimpleIDSolve"))
-    return(do.call(.simple_idsolve, c(list(a, b), utils::modifyList(a$kwargs %||% list(), list(...)))))
+  opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  # SimpleIDSolve (R/solvers-simpleid.R)
+  if (!missing(b) && inherits(b, "SimpleIDSolve")) return(.sids_solve(a, opts))
   if (!missing(b) && !is.null(b) && !inherits(b, "IDSolve"))
     stop("an ImplicitDiscreteProblem is solved with IDSolve() or SimpleIDSolve()", call. = FALSE)
-  opts <- utils::modifyList(a$kwargs %||% list(), list(...))
   t0 <- a$tspan[1L]; tf <- a$tspan[2L]
   dt <- abs(opts$dt %||% 1)
   tol <- opts$abstol %||% 1e-10

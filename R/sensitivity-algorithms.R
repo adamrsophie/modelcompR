@@ -68,6 +68,9 @@ print.SensitivityAlgorithm <- function(x, ...) {
 #'   points instead of reading a dense forward solution. For
 #'   `BacksolveAdjoint()`: reset the backward state to the saved forward
 #'   values.
+#' @param noisemixing For the adjoints of SDEs with diagonal noise: use the
+#'   full Jacobian of the noise (each noise term may depend on all states)
+#'   instead of its diagonal; see [SDEAdjointProblem()].
 #' @param abstol,reltol Tolerances of the quadrature of
 #'   `QuadratureAdjoint()`.
 #' @param convert_tspan Unused; kept for the Julia signature.
@@ -94,16 +97,16 @@ ForwardDiffSensitivity <- function(autojacvec = NULL, convert_tspan = NULL) {
 
 #' @rdname sensitivity_algorithms
 #' @export
-InterpolatingAdjoint <- function(autojacvec = NULL, checkpointing = FALSE) {
+InterpolatingAdjoint <- function(autojacvec = NULL, checkpointing = FALSE, noisemixing = FALSE) {
   .sensealg("InterpolatingAdjoint", "AdjointSensitivityAlgorithm", autojacvec = autojacvec,
-            checkpointing = isTRUE(checkpointing))
+            checkpointing = isTRUE(checkpointing), noisemixing = isTRUE(noisemixing))
 }
 
 #' @rdname sensitivity_algorithms
 #' @export
-BacksolveAdjoint <- function(autojacvec = NULL, checkpointing = TRUE) {
+BacksolveAdjoint <- function(autojacvec = NULL, checkpointing = TRUE, noisemixing = FALSE) {
   .sensealg("BacksolveAdjoint", "AdjointSensitivityAlgorithm", autojacvec = autojacvec,
-            checkpointing = isTRUE(checkpointing))
+            checkpointing = isTRUE(checkpointing), noisemixing = isTRUE(noisemixing))
 }
 
 #' @rdname sensitivity_algorithms

@@ -17,9 +17,13 @@ ForwardSensitivity(autojacvec = NULL)
 
 ForwardDiffSensitivity(autojacvec = NULL, convert_tspan = NULL)
 
-InterpolatingAdjoint(autojacvec = NULL, checkpointing = FALSE)
+InterpolatingAdjoint(
+  autojacvec = NULL,
+  checkpointing = FALSE,
+  noisemixing = FALSE
+)
 
-BacksolveAdjoint(autojacvec = NULL, checkpointing = TRUE)
+BacksolveAdjoint(autojacvec = NULL, checkpointing = TRUE, noisemixing = FALSE)
 
 QuadratureAdjoint(autojacvec = NULL, abstol = 1e-06, reltol = 0.001)
 
@@ -46,6 +50,10 @@ counterpart.}
 points instead of reading a dense forward solution. For
 \code{BacksolveAdjoint()}: reset the backward state to the saved forward
 values.}
+
+\item{noisemixing}{For the adjoints of SDEs with diagonal noise: use the
+full Jacobian of the noise (each noise term may depend on all states)
+instead of its diagonal; see \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}}.}
 
 \item{abstol, reltol}{Tolerances of the quadrature of
 \code{QuadratureAdjoint()}.}

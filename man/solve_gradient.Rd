@@ -9,8 +9,8 @@ solve_gradient(loss, prob, alg = NULL, ..., sensealg = NULL)
 \arguments{
 \item{loss}{A function of the solution returning a number.}
 
-\item{prob}{An \code{ODEProblem}, \code{NonlinearProblem}, \code{SteadyStateProblem} or
-\code{SDEProblem}.}
+\item{prob}{An \code{ODEProblem}, \code{NonlinearProblem}, \code{SteadyStateProblem},
+\code{OptimizationProblem}, \code{SDEProblem} or \code{RODEProblem}.}
 
 \item{alg}{The algorithm for \code{\link[=solve]{solve()}}.}
 
@@ -48,7 +48,9 @@ problems), \code{\link[=GaussKronrodAdjoint]{GaussKronrodAdjoint()}}) through \c
 \item \code{\link[=SteadyStateAdjoint]{SteadyStateAdjoint()}} for \code{NonlinearProblem} and \code{SteadyStateProblem}
 (the implicit function theorem),
 \item pathwise forward sensitivities for \code{SDEProblem} (with a fixed step
-method, a \code{dt} and a \code{seed}, the derivative of the sampled path).
+method, a \code{dt} and a \code{seed}, the derivative of the sampled path), or
+for \code{SDEProblem} and \code{RODEProblem} the adjoints \code{\link[=BacksolveAdjoint]{BacksolveAdjoint()}}
+and \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}} of \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}}.
 }
 
 Events are differentiated, including the dependence of event times on

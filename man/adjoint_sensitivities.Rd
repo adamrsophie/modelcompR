@@ -96,7 +96,8 @@ including the dependence of the event time on the state and parameters,
 and changes of parameters by the event. Mass matrix (semi-explicit index
 \enumerate{
 \item DAEs are supported by the interpolating, quadrature and Gauss methods.
-For nonlinear and steady state solutions, see \code{\link[=SteadyStateAdjoint]{SteadyStateAdjoint()}}.
+For nonlinear and steady state solutions, see \code{\link[=SteadyStateAdjoint]{SteadyStateAdjoint()}};
+for optimization solutions, \code{\link[=OptimizationAdjoint]{OptimizationAdjoint()}}.
 }
 
 \code{ODEAdjointProblem()} returns the backward problem without solving it;

@@ -39,16 +39,32 @@ DiffEqDevTools	imaginary_stability_interval
 DiffEqDevTools	merge_wp_sets
 DiffEqDevTools	residual_order_condition
 DiffEqDevTools	stability_region
+DiffEqDevTools	tag_kind
 DiffEqDevTools	test_convergence
 DiffEqDevTools	unique_tags
 DiffEqDevTools	with_autodiff_variants
 DiffEqDevTools	wp_area
 GlobalDiffEq	@reexport DiffEqBase
+GlobalDiffEq	DefectCorrection
+GlobalDiffEq	EndpointError
+GlobalDiffEq	ErrorTransport
 GlobalDiffEq	GLEE23
 GlobalDiffEq	GLEE24
 GlobalDiffEq	GLEE35
+GlobalDiffEq	GlobalAdjoint
+GlobalDiffEq	GlobalAdjointControl
+GlobalDiffEq	GlobalAdjointScope
+GlobalDiffEq	GlobalErrorEquation
+GlobalDiffEq	GlobalErrorEstimation
+GlobalDiffEq	GlobalErrorMode
 GlobalDiffEq	GlobalRichardson
+GlobalDiffEq	InterpolatingMode
 GlobalDiffEq	MM5GEE
+GlobalDiffEq	SimultaneousMode
+GlobalDiffEq	StepGridRefinement
+GlobalDiffEq	ToleranceRefinement
+GlobalDiffEq	TrajectoryError
+GlobalDiffEq	adjoint_error_estimate
 GlobalDiffEq	global_error_estimate
 ImplicitDiscreteSolve	@reexport SciMLBase
 ImplicitDiscreteSolve	IDSolve
@@ -113,6 +129,7 @@ OrdinaryDiffEqExponentialRK	EXPRB53s3
 OrdinaryDiffEqExponentialRK	Exp4
 OrdinaryDiffEqExponentialRK	Exprb32
 OrdinaryDiffEqExponentialRK	Exprb43
+OrdinaryDiffEqExponentialRK	Friedli
 OrdinaryDiffEqExponentialRK	HochOst4
 OrdinaryDiffEqExponentialRK	LawsonEuler
 OrdinaryDiffEqExponentialRK	NorsettEuler
@@ -699,6 +716,7 @@ StochasticDiffEqRODE	BAOAB
 StochasticDiffEqRODE	RandomEM
 StochasticDiffEqRODE	RandomHeun
 StochasticDiffEqRODE	RandomTamedEM
+StochasticDiffEqRODE	RandomTaylor15
 StochasticDiffEqWeak	@reexport StochasticDiffEqCore
 StochasticDiffEqWeak	COM
 StochasticDiffEqWeak	DRI1
