@@ -117,3 +117,81 @@ end
 # fixed variable (lb == ub) exercises the dimension elimination
 run("ln_neldermead_fixed", :LN_NELDERMEAD, 3, poly3, [-5.0, 2.0, -5.0], [5.0, 2.0, 5.0], [0.0, 2.0, 0.0])
 run("gn_crs2_lm_fixed", :GN_CRS2_LM, 3, poly3, [-5.0, 2.0, -5.0], [5.0, 2.0, 5.0], [0.0, 2.0, 0.0])
+
+# ---------------------------------------------------------------------------
+# Bit level references of the Luksan (LD_LBFGS, LD_VAR1, LD_VAR2, the
+# LD_TNEWTON family), COBYLA, NEWUOA, BOBYQA and SLSQP ports: the minimum,
+# the point and every evaluated objective value in hexadecimal (%a, which R
+# reads back as a numeric literal). The objective trace goes to the file
+# named by TRACE (one line per case: the name, then the values, tab
+# separated), the summary to standard output as R assignments of `hex`.
+using Printf
+hx(t) = isnan(t) ? "NaN" : isinf(t) ? (t > 0 ? "Inf" : "-Inf") : @sprintf("%a", t)
+hv(v) = "c(" * join(["\"$(hx(Float64(t)))\"" for t in v], ", ") * ")"
+const TRACEIO = open(get(ENV, "TRACE", "nlopt-trace.tsv"), "w")
+println("# NLopt ", NLopt.version())
+
+function quart5(x, g)
+    s = sum(x)
+    if length(g) > 0
+        for i in 1:5
+            g[i] = 2 * i * (x[i] - 0.1 * i) + 0.4 * s * s * s
+        end
+    end
+    v = 0.1 * s * s * s * s
+    for i in 1:5
+        d = x[i] - 0.1 * i
+        v += i * d * d
+    end
+    v
+end
+
+function runhex(name, a, n, f, lb, ub, x0; cons = :none, xtol_rel = 0.0, ftol_rel = 0.0, maxeval = 0,
+                params = Dict{String,Float64}(), vector_storage = 0)
+    tr = Float64[]
+    fw = (x, g) -> (v = f(x, g); push!(tr, v); v)
+    try
+        opt = Opt(a, n)
+        opt.min_objective = fw
+        lb === nothing || (opt.lower_bounds = lb)
+        ub === nothing || (opt.upper_bounds = ub)
+        opt.xtol_rel = xtol_rel; opt.ftol_rel = ftol_rel; opt.maxeval = maxeval
+        vector_storage > 0 && (opt.vector_storage = vector_storage)
+        for (k, v) in params
+            opt.params[k] = v
+        end
+        if cons != :none
+            inequality_constraint!(opt, ball, 1e-8)
+            cons == :eq && equality_constraint!(opt, plane, 1e-8)
+        end
+        (minf, minx, ret) = optimize(opt, copy(x0))
+        println("hex\$$name <- list(x = $(hv(minx)), f = \"$(hx(minf))\", ret = \"$(ret)\", numevals = $(opt.numevals)L)")
+    catch e
+        println("hex\$$name <- list(error = $(repr(sprint(showerror, e))))")
+    end
+    println(TRACEIO, name, "\t", join(hx.(tr), "\t"))
+end
+
+const BOX3 = (fill(-5.0, 3), fill(5.0, 3))
+for a in (:LD_LBFGS, :LD_VAR1, :LD_VAR2, :LD_TNEWTON, :LD_TNEWTON_RESTART, :LD_TNEWTON_PRECOND,
+          :LD_TNEWTON_PRECOND_RESTART, :LN_COBYLA, :LN_NEWUOA, :LN_NEWUOA_BOUND, :LN_BOBYQA, :LD_SLSQP)
+    s = lowercase(string(a))
+    nd = a in (:LN_NEWUOA,)
+    runhex("$(s)_poly3", a, 3, poly3, nothing, nothing, [0.0, 0.0, 0.0]; xtol_rel = 1e-10, maxeval = 2000)
+    runhex("$(s)_poly3_box", a, 3, poly3, BOX3..., [0.0, 0.0, 0.0]; xtol_rel = 1e-8, maxeval = 2000)
+    runhex("$(s)_rosen", a, 2, rosen, nothing, nothing, [-1.2, 1.0]; ftol_rel = 1e-14, maxeval = 3000)
+    runhex("$(s)_rosen_box", a, 2, rosen, [-2.0, -2.0], [0.8, 2.0], [-1.2, 1.0]; ftol_rel = 1e-14, maxeval = 3000)
+    runhex("$(s)_rosen_max", a, 2, rosen, [-2.0, -2.0], [2.0, 2.0], [-1.2, 1.0]; maxeval = 25)
+    runhex("$(s)_quart5", a, 5, quart5, fill(-3.0, 5), fill(3.0, 5), fill(1.0, 5); xtol_rel = 1e-9, maxeval = 4000)
+    if a in (:LN_COBYLA, :LD_SLSQP)
+        runhex("$(s)_cons", a, 3, poly3, BOX3..., [0.0, 0.0, 0.0]; cons = :eq, xtol_rel = 1e-10, maxeval = 5000)
+        runhex("$(s)_cons_ineq", a, 3, poly3, BOX3..., [0.0, 0.0, 0.0]; cons = :ineq, xtol_rel = 1e-10,
+               maxeval = 5000)
+    end
+end
+# the Luksan parameters: a small vector storage and a gradient tolerance
+runhex("ld_lbfgs_rosen_m3", :LD_LBFGS, 2, rosen, nothing, nothing, [-1.2, 1.0]; ftol_rel = 1e-14, maxeval = 3000,
+       vector_storage = 3)
+runhex("ld_var2_quart5_tolg", :LD_VAR2, 5, quart5, nothing, nothing, fill(1.0, 5); maxeval = 3000,
+       params = Dict("tolg" => 1e-4))
+close(TRACEIO)
