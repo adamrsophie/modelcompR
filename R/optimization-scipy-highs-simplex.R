@@ -33,10 +33,10 @@
 # HEkk::computeFactor: HFactor::build orders the basic variables by pivot
 # row. A rank deficient basis is repaired as
 # HEkk::initialiseSimplexLpBasisAndFactor does with buildMarkSingC and
-# HEkk::handleRankDeficiency; ponytail: the backtracking of
-# HEkk::getNonsingularInverse after a singular refactor is not ported, the
-# same repair is used there.
-.hs_invert <- function(ek) {
+# HEkk::handleRankDeficiency; with repair = FALSE (the refactor of a
+# rebuild) the basis is left alone and the rank deficiency returned for
+# HEkk::getNonsingularInverse to backtrack.
+.hs_invert <- function(ek, repair = TRUE) {
   n <- ek$n
   cols <- lapply(ek$basicIndex, function(v) {
     if (v > n) return(list(index = v - n, value = 1, logical = TRUE))
@@ -46,6 +46,10 @@
   # computeFactor clears the bad basis changes
   ek$bad <- list()
   f <- .hs_factor_build(ek$m, cols)
+  if (!repair && f$rank_deficiency > 0L) {
+    ek$update_count <- 0L
+    return(f$rank_deficiency)
+  }
   repaired <- NULL
   if (f$rank_deficiency > 0L) {
     k <- seq_len(f$rank_deficiency)
@@ -69,6 +73,7 @@
   }
   ek$fa <- f
   ek$update_count <- 0L
+  0L
 }
 
 # HEkk::initialiseControl: the running averages of the result densities
@@ -133,6 +138,7 @@
   hv <- .hs_factor_ftran(ek$fa, hv, ek$dens[[dens]], pack)
   .hs_density_update(ek, dens, hv$count)
   ek$last_index <- hv$index
+  ek$last_tick <- hv$tick %||% 0
   hv$array
 }
 .hs_btran <- function(ek, r, dens = "row_ep", pack = FALSE) {
@@ -141,6 +147,7 @@
   hv <- .hs_factor_btran(ek$fa, hv, ek$dens[[dens]], pack)
   .hs_density_update(ek, dens, hv$count)
   ek$last_index <- hv$index
+  ek$last_tick <- hv$tick %||% 0
   hv$array
 }
 
@@ -165,6 +172,19 @@
   .hs_factor_update_ft(ek$fa, col_aq[r], r)
   ek$update_count <- ek$update_count + 1L
 }
+
+# the rebuild reason HEkk::updateFactor hints after an update: the update
+# limit (6), or the synthetic clock (10) once the ticks of the solves since
+# the rebuild reach those of the last build and 50 updates are done
+# (kSyntheticTickReinversionMinUpdateCount)
+.hs_update_hint <- function(ek, reason) {
+  if (ek$update_count >= ek$update_limit) reason <- 6L
+  if ((ek$total_tick %||% 0) >= (ek$fa$build_tick %||% Inf) && ek$update_count >= 50L) reason <- 10L
+  reason
+}
+
+# HEkk::resetSyntheticClock
+.hs_reset_clock <- function(ek) ek$total_tick <- 0
 
 .hs_nearest_pow2_scale <- function(v) {
   if (v <= 0) return(1)
@@ -483,14 +503,52 @@
 # infeasible in primal simplex, 6 update limit, 7 possibly singular basis,
 # 8 choose column fail, 9 excessive primal value
 
-# HEkk::getNonsingularInverse: the dual edge weights follow their basic
-# variables through the permutation of the refactor
+# HEkk::putBacktrackingBasis: the basis (with basic_index in its order
+# before the refactor), the cost shift and perturbation flags, the cost
+# shifts and the dual edge weights scattered over the variables
+.hs_put_backtracking <- function(ek, basic_index = ek$basicIndex, scattered = NULL) {
+  if (is.null(scattered)) {
+    scattered <- numeric(ek$n + ek$m)
+    if (!is.null(ek$dual_edge_weight)) scattered[ek$basicIndex] <- ek$dual_edge_weight
+  }
+  ek$bt <- list(basicIndex = basic_index, nonbasicFlag = ek$nonbasicFlag, nonbasicMove = ek$nonbasicMove,
+                costs_shifted = ek$costs_shifted, costs_perturbed = ek$costs_perturbed,
+                workShift = ek$workShift, weight = scattered)
+}
+
+# HEkk::getNonsingularInverse: refactor and keep the basis as the
+# backtracking basis, or after a rank deficient refactor go back to the
+# last nonsingular basis with half the update limit; FALSE when that is not
+# possible. The dual edge weights follow their basic variables through the
+# permutation of the refactor.
 .hs_reinvert <- function(ek) {
-  if (is.null(ek$dual_edge_weight)) return(.hs_invert(ek))
+  before <- ek$basicIndex
+  updates <- ek$update_count
   scattered <- numeric(ek$n + ek$m)
-  scattered[ek$basicIndex] <- ek$dual_edge_weight
-  .hs_invert(ek)
-  ek$dual_edge_weight <- scattered[ek$basicIndex]
+  if (!is.null(ek$dual_edge_weight)) scattered[ek$basicIndex] <- ek$dual_edge_weight
+  if (.hs_invert(ek, repair = FALSE) > 0L) {
+    if (is.null(ek$bt)) return(FALSE)
+    deficient <- .hs_basis_key(ek)
+    bt <- ek$bt
+    ek$basicIndex <- bt$basicIndex; ek$nonbasicFlag <- bt$nonbasicFlag; ek$nonbasicMove <- bt$nonbasicMove
+    ek$costs_shifted <- bt$costs_shifted; ek$costs_perturbed <- bt$costs_perturbed
+    ek$workShift <- bt$workShift
+    scattered <- bt$weight
+    ek$backtracking <- TRUE
+    ek$visited <- new.env(parent = emptyenv())
+    ek$visited[[.hs_basis_key(ek)]] <- TRUE
+    ek$visited[[deficient]] <- TRUE
+    ek$has_fresh_rebuild <- FALSE
+    if (.hs_invert(ek, repair = FALSE) > 0L) return(FALSE)
+    if (updates <= 1L) return(FALSE)
+    ek$update_limit <- updates %/% 2L
+  } else {
+    .hs_put_backtracking(ek, before, scattered)
+    ek$backtracking <- FALSE
+    ek$update_limit <- 5000L
+  }
+  if (!is.null(ek$dual_edge_weight)) ek$dual_edge_weight <- scattered[ek$basicIndex]
+  TRUE
 }
 
 # HEkkDual::computeDualSteepestEdgeWeights for a nonlogical basis

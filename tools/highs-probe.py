@@ -323,3 +323,111 @@ for name, kw in MILPS:
         integrality=kw["integrality"], dev=1, **MOFF)
 milp("milp_knapsack_gap", mip_rel_gap=0.5, **MILPS[4][1])
 milp("milp_knapsack_nodes1", node_limit=1, presolve=False, **MILPS[4][1])
+
+# MILPs that need a search tree (pseudocost and reliability branching, the
+# node queue, diving, conflicts), a node limit that stops with an incumbent,
+# a gap limit that stops early, symmetric bins (orbitopes and orbital
+# fixing) and a knapsack where root reduced cost fixing triggers a restart.
+# A separate generator keeps the draws of the cases above unchanged.
+rng2 = np.random.default_rng(20261114)
+MILPS2 = []
+wm = rng2.integers(1, 21, (4, 20)).astype(float)
+MILPS2.append(("milp_mknap", dict(c=-rng2.integers(5, 31, 20).astype(float), integrality=np.ones(20),
+                                  lb=np.zeros(20), ub=np.ones(20), A=wm, lbc=np.full(4, -inf),
+                                  ubc=np.floor(0.35 * wm.sum(axis=1)))))
+Ag = rng2.integers(-3, 9, (6, 10)).astype(float)
+MILPS2.append(("milp_genint", dict(c=-rng2.integers(1, 11, 10).astype(float), integrality=np.ones(10),
+                                   lb=np.zeros(10), ub=np.full(10, 8.0), A=Ag, lbc=np.full(6, -inf),
+                                   ubc=rng2.integers(15, 41, 6).astype(float))))
+cov2 = (rng2.uniform(0, 1, (30, 20)) < 0.15).astype(float)
+cov2[np.arange(30), rng2.integers(0, 20, 30)] = 1.0
+MILPS2.append(("milp_cover30", dict(c=rng2.uniform(1, 3, 20), integrality=np.ones(20), lb=np.zeros(20),
+                                    ub=np.ones(20), A=cov2, lbc=np.ones(30), ubc=np.full(30, inf))))
+Am = rng2.uniform(-1, 3, (7, 14)).round(2)
+MILPS2.append(("milp_mixed", dict(c=-rng2.uniform(1, 5, 14).round(2), integrality=np.r_[np.ones(8), np.zeros(6)],
+                                  lb=np.zeros(14), ub=np.r_[np.full(8, 6.0), np.full(6, 4.0)], A=Am,
+                                  lbc=np.full(7, -inf), ubc=rng2.uniform(8, 20, 7).round(2))))
+# bin packing: 6 items, 4 identical bins of capacity 10; x[i, b] then y[b]
+size = np.array([6.0, 5.0, 4.0, 4.0, 3.0, 3.0]); nb = 4; ni = len(size)
+Ab = np.zeros((ni + nb, ni * nb + nb))
+for i in range(ni):
+    Ab[i, i * nb:(i + 1) * nb] = 1.0
+for b in range(nb):
+    Ab[ni + b, b:ni * nb:nb] = size
+    Ab[ni + b, ni * nb + b] = -10.0
+MILPS2.append(("milp_binpack", dict(c=np.r_[np.zeros(ni * nb), np.ones(nb)], integrality=np.ones(ni * nb + nb),
+                                    lb=np.zeros(ni * nb + nb), ub=np.ones(ni * nb + nb), A=Ab,
+                                    lbc=np.r_[np.ones(ni), np.full(nb, -inf)], ubc=np.r_[np.ones(ni), np.zeros(nb)])))
+wr = rng2.integers(5, 40, 40).astype(float)
+vr = np.round(wr * rng2.uniform(0.2, 1.6, 40))
+MILPS2.append(("milp_restart", dict(c=-vr, integrality=np.ones(40), lb=np.zeros(40), ub=np.ones(40), A=[wr],
+                                    lbc=[-inf], ubc=[np.floor(0.3 * wr.sum())])))
+for name, kw in MILPS2:
+    print("== data", name)
+    for k, val in kw.items():
+        if val is not None:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+for name, kw in MILPS2:
+    milp(f"{name}_default", dev=1, **kw)
+    milp(f"{name}_nopresolve", dev=1, presolve=False, **kw)
+    raw(f"{name}_bare", kw["c"], kw.get("A"), kw.get("lbc", []), kw.get("ubc", []), kw["lb"], kw["ub"],
+        integrality=kw["integrality"], dev=1, **MOFF)
+mk = dict(MILPS2)["milp_mknap"]
+for lim in (2, 5):
+    milp(f"milp_mknap_nodes{lim}", dev=1, node_limit=lim, **mk)
+    milp(f"milp_mknap_nodes{lim}_nopresolve", dev=1, node_limit=lim, presolve=False, **mk)
+milp("milp_mknap_gap", dev=1, mip_rel_gap=0.05, **mk)
+milp("milp_mknap_gap_nopresolve", dev=1, mip_rel_gap=0.05, presolve=False, **mk)
+
+# LPs for three corners of the simplex port: a larger dense LP whose dual
+# simplex solve runs past 50 basis updates (the synthetic clock reinversion
+# of HEkk), and an LP with duplicate columns that presolve merges and
+# postsolve splits (HighsPostsolveStack::DuplicateColumn)
+A3 = rng2.uniform(-1, 1, (40, 60)); b3 = A3 @ rng2.uniform(0, 1, 60) + rng2.uniform(0.1, 1, 40)
+c3 = rng2.uniform(-1, 1, 60)
+LPS2 = [("lp_big", dict(c=c3, A_ub=A3, b_ub=b3, bounds=[(0, 3)] * 60))]
+LPS2.append(("lp_dupcol", dict(c=[-1.0, -1.0, -2.0, 1.0], A_ub=[[1.0, 1.0, 2.0, 1.0], [2.0, 2.0, 4.0, -1.0]],
+                               b_ub=[3.5, 5.0], bounds=[(0, 1), (0, 1), (0, 0.6), (0, None)])))
+for name, kw in LPS2:
+    print("== data", name)
+    for k, val in kw.items():
+        if k == "bounds":
+            print("lb", hx([-inf if b[0] is None else b[0] for b in val]))
+            print("ub", hx([inf if b[1] is None else b[1] for b in val]))
+        else:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+for name, kw in LPS2:
+    for lname, opts in LAYERS:
+        dev = 3 if lname in ("bare", "nopresolve", "default") else 0
+        if lname in ("nopresolve", "default"):
+            lp(f"{name}_ds_{lname}", method="highs-ds", dev=dev, **kw, **opts)
+        else:
+            raw_lp(f"{name}_ds_{lname}", dev=dev, solver="simplex", simplex_strategy=1, **kw, **opts)
+
+# an LP whose dual simplex solve runs well past 50 basis updates, so that
+# the synthetic clock of HEkk asks for a reinversion
+A4 = rng2.uniform(-1, 1, (80, 120)); A4[rng2.uniform(0, 1, (80, 120)) < 0.7] = 0.0
+b4 = A4 @ rng2.uniform(0, 1, 120) + rng2.uniform(0.1, 1, 80)
+c4 = rng2.uniform(-1, 1, 120)
+LPS3 = [("lp_huge", dict(c=c4, A_ub=A4, b_ub=b4, bounds=[(0, 3)] * 120))]
+for name, kw in LPS3:
+    print("== data", name)
+    for k, val in kw.items():
+        if k == "bounds":
+            print("lb", hx([-inf if b[0] is None else b[0] for b in val]))
+            print("ub", hx([inf if b[1] is None else b[1] for b in val]))
+        else:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+for name, kw in LPS3:
+    for lname, opts in LAYERS:
+        dev = 3 if lname in ("bare", "nopresolve", "default") else 0
+        if lname in ("nopresolve", "default"):
+            lp(f"{name}_ds_{lname}", method="highs-ds", dev=dev, **kw, **opts)
+        else:
+            raw_lp(f"{name}_ds_{lname}", dev=dev, solver="simplex", simplex_strategy=1, **kw, **opts)

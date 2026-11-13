@@ -49,3 +49,45 @@ test_that("the HiGHS LP presolve keeps the optimum of the original LP", {
   expect_identical(s$nit, 0L)
   expect_equal(s$col_value, c(1, 3, -2, 0))
 })
+
+test_that("postsolve resplits a duplicate column as DuplicateColumn::undoFix does", {
+  # C round is half away from zero
+  expect_identical(.hs_round(c(-2.5, -0.5, 0.5, 2.5, 2.4)), c(-3, -1, 1, 3, 2))
+  r <- list(scale = 2, cl = 0, cu = 1, dl = 0, du = 1)
+  expect_false(.hs_dupcol_split_error(r, 0.5, 0.25, 1, 1e-7))
+  expect_true(.hs_dupcol_split_error(r, 1.5, 0, 1.5, 1e-7))
+  # scale > 0: y at its upper bound leaves x below its lower bound, so x
+  # goes to its lower bound and y takes the rest
+  expect_identical(.hs_dupcol_undo_fix(r, 1.5, 1e-7), c(0, 0.75))
+  # scale < 0: y at its lower bound
+  expect_identical(.hs_dupcol_undo_fix(list(scale = -1, cl = 0, cu = 2, dl = 0, du = 1), 0.5, 1e-7), c(0.5, 0))
+  # integer x: the first integer value of x that leaves y within its bounds
+  expect_identical(.hs_dupcol_undo_fix(list(scale = 1, cl = 0, cu = 3, dl = 0, du = 0.8, ci = TRUE), 2.7, 1e-7),
+                   c(2, 0x1.6666666666668p-1))
+})
+
+test_that("a rank deficient refactor backtracks as HEkk::getNonsingularInverse does", {
+  ek <- .hs_new_ekk(c(-1, -1), matrix(1, 2, 2), c(-Inf, -Inf), c(1, 2), c(0, 0), c(Inf, Inf), list())
+  .hs_slack_basis(ek)
+  singular <- function(updates) {
+    ek$basicIndex <- c(1L, 2L); ek$nonbasicFlag <- c(0L, 0L, 1L, 1L); ek$update_count <- updates
+  }
+  # a nonsingular refactor keeps the basis for backtracking
+  expect_true(.hs_reinvert(ek))
+  expect_identical(ek$bt$basicIndex, c(3L, 4L))
+  expect_identical(ek$update_limit, 5000L)
+  expect_false(ek$backtracking)
+  # two equal basic columns: back to the slack basis with half the updates
+  singular(6L)
+  expect_true(.hs_reinvert(ek))
+  expect_identical(ek$basicIndex, c(3L, 4L))
+  expect_identical(ek$nonbasicFlag, c(1L, 1L, 0L, 0L))
+  expect_identical(ek$update_limit, 3L)
+  expect_true(ek$backtracking)
+  # no backtracking after a single update, nor without a backtracking basis
+  singular(1L)
+  expect_false(.hs_reinvert(ek))
+  ek$bt <- NULL
+  singular(6L)
+  expect_false(.hs_reinvert(ek))
+})

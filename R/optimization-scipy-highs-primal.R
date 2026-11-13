@@ -64,8 +64,15 @@
 
 .hs_primal_rebuild <- function(ek, ps) {
   .hs_clear_taboo(ek)
-  if (.hs_rebuild_refactor(ek, ps$rebuild_reason)) .hs_reinvert(ek)
+  if (.hs_rebuild_refactor(ek, ps$rebuild_reason) && !.hs_reinvert(ek)) {
+    ps$solve_phase <- -5L
+    return(invisible())
+  }
   ps$rebuild_reason <- 0L
+  if (isTRUE(ek$backtracking)) {
+    ps$solve_phase <- 0L
+    return(invisible())
+  }
   .hs_compute_primal(ek)
   if (ps$solve_phase == 2L) .hs_primal_correct(ek)
   inf <- .hs_primal_infeas(ek$baseValue, ek$baseLower, ek$baseUpper, ek$ptol)
@@ -84,6 +91,7 @@
   .hs_compute_primal_objective(ek)
   ps$num_flip_since_rebuild <- 0L
   ek$has_fresh_rebuild <- TRUE
+  .hs_reset_clock(ek)
 }
 
 .hs_primal_chuzc <- function(ek, ps) {
@@ -108,6 +116,7 @@
   ps$move_in <- if (updated > 0) -1L else 1L
   hv <- .hs_hv_collect(ek, list(array = numeric(ek$m), index = integer(), count = 0L), vin, 1)
   ps$col_aq <- .hs_ftran(ek, hv, "col_aq", pack = TRUE)
+  ps$col_aq_tick <- ek$last_tick
   computed <- ek$workCost[vin]
   for (i in ek$last_index) computed <- computed - ps$col_aq[i] * ek$workCost[ek$basicIndex[i]]
   ek$workDual[vin] <- computed
@@ -303,6 +312,7 @@
   }
   if (flipped) {
     ps$num_flip_since_rebuild <- ps$num_flip_since_rebuild + 1L
+    ek$total_tick <- (ek$total_tick %||% 0) + ps$col_aq_tick
     return(invisible())
   }
   r <- ps$row_out
@@ -368,9 +378,10 @@
     ek$dual_edge_weight <- dw
   }
   .hs_update_pivots(ek, vin, r, ps$move_out, col)
-  if (ek$update_count >= ek$update_limit) ps$rebuild_reason <- 6L
+  ps$rebuild_reason <- .hs_update_hint(ek, ps$rebuild_reason)
   ek$iteration_count <- ek$iteration_count + 1L
   if (ps$num_bad_devex > 3L) .hs_primal_init_devex(ek, ps)
+  ek$total_tick <- (ek$total_tick %||% 0) + ps$col_aq_tick + ps$row_ep_tick
 }
 
 .hs_primal_iterate <- function(ek, ps) {
@@ -399,6 +410,7 @@
     e <- numeric(ek$m); e[r] <- 1
     ps$row_ep <- .hs_btran(ek, e, "row_ep", pack = TRUE)
     ps$row_ep_index <- ek$last_index
+    ps$row_ep_tick <- ek$last_tick
     ps$row_ap <- .hs_price(ek, ps$row_ep)
     vin <- ps$variable_in
     alpha_row <- if (vin <= ek$n) ps$row_ap[vin] else ps$row_ep[vin - ek$n]
@@ -425,8 +437,10 @@
 }
 
 .hs_primal_loop <- function(ek, ps, phase) {
+  if (is.null(ek$bt)) .hs_put_backtracking(ek)
   repeat {
     .hs_primal_rebuild(ek, ps)
+    if (ps$solve_phase %in% c(0L, -5L)) return(invisible())
     if (.hs_bailout(ek)) return(invisible())
     if (ps$solve_phase != phase) break
     repeat {
@@ -451,6 +465,7 @@
   ek$model_status <- "Notset"
   ek$solve_bailout <- FALSE
   ek$exit_algorithm <- "primal"
+  ek$bt <- NULL; ek$backtracking <- FALSE
   if (!isTRUE(ek$has_dse_weights)) ek$dual_edge_weight <- rep(1, ek$m)
   .hs_primal_init_devex(ek, ps)
   ps$free_set <- which(ek$nonbasicFlag == 1L & ek$workLower == -Inf & ek$workUpper == Inf)
@@ -467,6 +482,15 @@
   ps$solve_phase <- if (ek$num_primal_infeasibilities > 0L) 1L else 2L
   if (force) ps$solve_phase <- 2L
   repeat {
+    if (ps$solve_phase == 0L) {
+      .hs_simplex_primal_infeasible(ek)
+      ps$solve_phase <- if (ek$num_primal_infeasibilities > 0L) 1L else 2L
+      if (isTRUE(ek$backtracking)) {
+        .hs_init_cost(ek, "primal")
+        .hs_init_nonbasic(ek)
+        ek$backtracking <- FALSE
+      }
+    }
     if (ps$solve_phase == 1L) {
       .hs_primal_loop(ek, ps, 1L)
       if (!ek$solve_bailout && ps$solve_phase == 1L && ps$variable_in < 0L) {

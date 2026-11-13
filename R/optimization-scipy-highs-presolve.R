@@ -1441,6 +1441,93 @@
                  col_lower = pr$cl[cols], col_upper = pr$cu[cols], offset = pr$offset))
 }
 
+# fractionality of util/HighsUtils.h with the C round (half away from zero)
+.hs_round <- function(v) {
+  a <- abs(v); f <- floor(a)
+  sign(v) * ifelse(a - f >= 0.5, f + 1, f)
+}
+.hs_fractionality <- function(v) abs(v - .hs_round(v))
+
+# the hasError check of HighsPostsolveStack::DuplicateColumn::undo
+.hs_dupcol_split_error <- function(r, xv, yv, merge, ptol) {
+  mtol <- 1e-6
+  abs(xv + r$scale * yv - merge) > ptol ||
+    yv < r$dl - mtol || yv > r$du + mtol || xv < r$cl - mtol || xv > r$cu + mtol
+}
+
+# HighsPostsolveStack::DuplicateColumn::undoFix: values for col (x) and the
+# duplicate column (y) with x + scale y equal to the merged value
+.hs_dupcol_undo_fix <- function(r, merge, ptol) {
+  mtol <- 1e-6
+  scale <- r$scale
+  x_int <- isTRUE(r$ci); y_int <- isTRUE(r$di)
+  x_lo <- if (x_int) ceiling(r$cl - mtol) else r$cl
+  x_up <- if (x_int) floor(r$cu + mtol) else r$cu
+  y_lo <- if (y_int) ceiling(r$dl - mtol) else r$dl
+  y_up <- if (y_int) floor(r$du + mtol) else r$du
+  is_int <- function(v) .hs_fractionality(v) <= mtol
+  feas <- function(l, v, u) v >= l - ptol && v <= u + ptol
+  value_of <- function(v) .cd_val(.cd_div(.cd_add(c(merge, 0), -v), scale))
+  inv_value_of <- function(v) {
+    p <- .cd_mul(c(v, 0), scale)
+    r <- .cd_add(c(merge, 0), -p[1L]); r[2L] <- r[2L] - p[2L]
+    .cd_val(r)
+  }
+  int_var <- function(lo, up) {
+    if (lo == -Inf) {
+      if (up == Inf) c(0, 1, 1000) else c(up, -1, -1000)
+    } else c(lo, 1, if (up == Inf) 1000 else up)
+  }
+  # findValue: walk the integer values z0, z0 + zd, ... up to z1
+  find_value <- function(zr, olo, oup, oint) {
+    z <- zr[1L]; zd <- zr[2L]; z1 <- zr[3L]
+    repeat {
+      ov <- value_of(z)
+      if (feas(olo, ov, oup) && (!oint || is_int(ov))) return(c(z, ov))
+      if (zd > 0 && z + zd >= z1 + 1e-8) return(c(z, ov))
+      if (zd < 0 && z + zd <= z1 - 1e-8) return(c(z, ov))
+      z <- z + zd
+    }
+  }
+  x_v <- merge; y_v <- -Inf
+  set_x <- function(v) { x_v <<- v; y_v <<- value_of(v) }
+  set_y <- function(v) { y_v <<- v; x_v <<- inv_value_of(v) }
+  if (x_int) {
+    v <- find_value(int_var(x_lo, x_up), y_lo, y_up, y_int); x_v <- v[1L]; y_v <- v[2L]
+  } else if (y_int) {
+    v <- find_value(int_var(y_lo, y_up), x_lo, x_up, x_int); y_v <- v[1L]; x_v <- v[2L]
+  } else if (scale > 0) {
+    if (y_up < Inf) {
+      set_y(y_up)
+      if (x_v < x_lo - ptol) {
+        set_x(x_lo)
+        if (y_v < y_lo - ptol) set_x(x_lo - ptol)
+      }
+    } else if (y_lo > -Inf) {
+      set_y(y_lo)
+      if (x_v > x_up + ptol) {
+        set_x(x_up)
+        if (y_v > y_up + ptol) set_x(x_up + ptol)
+      }
+    } else set_x(max(0, x_lo))
+  } else {
+    if (y_lo > -Inf) {
+      set_y(y_lo)
+      if (x_v < x_lo - ptol) {
+        set_x(x_lo)
+        if (y_v > y_up + ptol) set_x(x_lo - ptol)
+      }
+    } else if (y_up < Inf) {
+      set_y(y_up)
+      if (x_v > x_up + ptol) {
+        set_x(x_up)
+        if (y_v < y_lo - ptol) set_x(x_up + ptol)
+      }
+    } else set_x(max(0, x_lo))
+  }
+  c(x_v, y_v)
+}
+
 # HighsPostsolveStack::undo
 .hs_postsolve <- function(pre, sol, dtol = 1e-7) {
   pr <- pre$pr
@@ -1575,11 +1662,10 @@
         }
       },
       duplicatecol = {
-        # ponytail: DuplicateColumn::undoFix only runs when the split values
-        # break their bounds, which needs a merged value outside its bounds
         merge <- x[r$col]
         cd[r$dup] <- cd[r$col] * r$scale
         st <- cs[r$col]
+        ci <- isTRUE(r$ci); di <- isTRUE(r$di)
         if (st == "lower" || st == "upper") {
           x[r$col] <- if (st == "lower") r$cl else r$cu
           at_lower <- (st == "lower") == (r$scale > 0)
@@ -1595,11 +1681,36 @@
             x[r$dup] <- r$du; recompute <- TRUE; cs[r$dup] <- "upper"
           } else if (x[r$dup] < r$dl) {
             x[r$dup] <- r$dl; recompute <- TRUE; cs[r$dup] <- "lower"
+          } else if (di && .hs_fractionality(x[r$dup]) > 1e-6) {
+            x[r$dup] <- floor(x[r$dup]); recompute <- TRUE
           }
           if (recompute) {
             x[r$col] <- merge - r$scale * x[r$dup]
+            if (!di && ci) {
+              x[r$col] <- ceiling(x[r$col] - 1e-6)
+              x[r$dup] <- .cd_val(.cd_div(.cd_add(c(merge, 0), -x[r$col]), r$scale))
+            }
           } else {
             cs[r$dup] <- cs[r$col]; cs[r$col] <- "lower"
+          }
+          fx <- .hs_dupcol_split_error(r, x[r$col], x[r$dup], merge, pr$ptol)
+          if (fx) {
+            v <- .hs_dupcol_undo_fix(r, merge, pr$ptol)
+            x[r$col] <- v[1L]; x[r$dup] <- v[2L]
+            # the basis status after undoFix, keeping col basic when it can
+            at <- function(val, b) val >= b - pr$ptol && val <= b + pr$ptol
+            dup_basic <- FALSE
+            if (r$dl == -Inf && r$du == Inf) {
+              if (x[r$dup] == 0) { cs[r$col] <- "basic"; cs[r$dup] <- "zero" } else dup_basic <- TRUE
+            } else if (at(x[r$dup], r$dl)) {
+              cs[r$col] <- "basic"; cs[r$dup] <- "lower"
+            } else if (at(x[r$dup], r$du)) {
+              cs[r$col] <- "basic"; cs[r$dup] <- "upper"
+            } else dup_basic <- TRUE
+            if (dup_basic) {
+              cs[r$dup] <- "basic"
+              cs[r$col] <- if (at(x[r$col], r$cl)) "lower" else if (at(x[r$col], r$cu)) "upper" else "nonbasic"
+            }
           }
         }
       },

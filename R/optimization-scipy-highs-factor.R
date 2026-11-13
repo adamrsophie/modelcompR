@@ -33,6 +33,8 @@
     piv_row[k] <<- r; piv_val[k] <<- v
     l_idx[k] <<- list(li); l_val[k] <<- list(lv); u_idx[k] <<- list(ui); u_val[k] <<- list(uv)
   }
+  # the synthetic clock of the build (build_synthetic_tick)
+  tick <- 0; bcount <- 0
   # 1. unit columns
   for (c in seq_len(num_basic)) {
     col <- cols[[c]]
@@ -40,13 +42,13 @@
     if (isTRUE(col$logical)) {
       if (mrb[col$index] >= 0L) r <- col$index else {
         mrb[col$index] <- mrb[col$index] + 1L
-        work <- c(work, c)
+        work <- c(work, c); bcount <- bcount + 1
       }
     } else if (length(col$index) == 1L && col$value == 1 && mrb[col$index] >= 0L) {
       r <- col$index
     } else {
       mrb[col$index] <- mrb[col$index] + 1L
-      work <- c(work, c)
+      work <- c(work, c); bcount <- bcount + length(col$index)
     }
     if (r > 0L) {
       permute[c] <- r
@@ -54,6 +56,8 @@
       mrb[r] <- -num_basic
     }
   }
+  tick <- tick + bcount * 60 + (num_row - length(work)) * 80
+  t2_search <- 0; t2_l <- 0; t2_u <- 0; t2_p <- length(work)
   # 2. singletons
   while (length(work)) {
     last <- work
@@ -61,6 +65,7 @@
     for (c in last) {
       idx <- cols[[c]]$index; val <- cols[[c]]$value
       if (isTRUE(cols[[c]]$logical)) val <- 1
+      t2_search <- t2_search + length(idx)
       pivot_k <- 0L; found_row_singleton <- FALSE; count <- 0L
       for (k in seq_along(idx)) {
         if (mrb[idx[k]] == 1L) {
@@ -86,16 +91,20 @@
         mrb[idx[pivot_k]] <- 0L
         permute[c] <- idx[pivot_k]
         push(idx[pivot_k], val[pivot_k], li, lv, ui, uv)
+        t2_l <- t2_l + length(li); t2_u <- t2_u + length(ui)
       } else if (count == 1L) {
         mrb[idx[pivot_k]] <- 0L
         permute[c] <- idx[pivot_k]
         push(idx[pivot_k], val[pivot_k], ui = idx[-pivot_k], uv = val[-pivot_k])
+        t2_u <- t2_u + length(idx) - 1
       } else {
         work <- c(work, c)
       }
     }
     if (length(last) == length(work)) break
   }
+  t2_p <- t2_p - length(work)
+  tick <- tick + t2_search * 20 + (t2_p + t2_l + t2_u) * 80
   # 3. the kernel: active column entries, the entries in pivoted rows
   # (colStoreN, read back last first), row lists and count links
   mc_idx <- rep(list(integer()), num_basic); mc_val <- rep(list(numeric()), num_basic)
@@ -141,9 +150,11 @@
   }
   fix_max <- function(j) mc_min[j] <<- max(0, abs(mc_val[[j]])) * pivot_threshold
   for (i in seq_len(num_row)) if (mrb[i] > 0L) radd(i, mrb[i])
+  mr_countx <- 2 * sum(mrb[mrb > 0L]); mc_countx <- 0
   for (c in work) {
     col <- cols[[c]]
     val <- if (isTRUE(col$logical)) 1 else col$value
+    mc_countx <- mc_countx + 2 * length(col$index)
     for (k in seq_along(col$index)) {
       i <- col$index[k]
       if (mrb[i] > 0L) {
@@ -157,6 +168,8 @@
     cadd(c, length(mc_idx[[c]]))
   }
   nwork <- length(work)
+  tick <- tick + (num_row + nwork + mc_countx) * 40 + mr_countx * 20
+  fake_search <- 0; fake_fill <- 0; fake_eliminate <- 0
   rank_deficiency <- 0L
   while (nwork > 0L) {
     nwork <- nwork - 1L
@@ -190,6 +203,7 @@
           if (search_count >= search_limit && merit_pivot < merit_limit) found <- TRUE
           search_count <- search_count + 1L
           if (found) break
+          fake_search <- fake_search + count
           j <- cnext[j]
         }
       }
@@ -213,6 +227,7 @@
           if (found) break
           i <- rnext[i]
         }
+        fake_search <- fake_search + count
       }
       count <- count + 1L
     }
@@ -254,6 +269,7 @@
       row_delete(jp, i)
     }
     push(ip, pm, mwz_rows, mwz[mwz_rows], rev(mn_idx[[jp]]), rev(mn_val[[jp]]))
+    fake_fill <- fake_fill + 2 * length(mwz_rows) + length(mn_idx[[jp]])
     for (ic in mr[[ip]]) {
       my_count <- length(mc_idx[[ic]])
       my_pivot <- col_delete(ic, ip)
@@ -281,6 +297,7 @@
         mc_idx[[ic]] <- c(mc_idx[[ic]], add); mc_val[[ic]] <- c(mc_val[[ic]], -my_pivot * mwz[add])
         for (i in add) mr[[i]] <- c(mr[[i]], ic)
       }
+      fake_eliminate <- fake_eliminate + length(mwz_rows) + nfill * 2
       mark[mwz_rows] <- TRUE
       fix_max(ic)
       if (my_count != length(mc_idx[[ic]])) {
@@ -295,6 +312,7 @@
       }
     }
   }
+  if (rank_deficiency == 0L) tick <- tick + fake_search * 20 + fake_fill * 160 + fake_eliminate * 80
   # buildHandleRankDeficiency
   col_np <- integer(); row_np <- integer()
   rd <- rank_deficiency
@@ -311,12 +329,15 @@
       if (k <= row_rank_deficiency) push(row_np[k], 1)
     }
   }
+  fa$build_tick <- tick
   fa$permute <- permute
   fa$rank_deficiency <- rank_deficiency
   fa$col_with_no_pivot <- col_np
   fa$row_with_no_pivot <- row_np
   if (num_basic != num_row) return(fa)
   # buildFinish
+  tick <- tick + num_row * 80 + (sum(lengths(l_idx)) + sum(lengths(u_idx))) * 60
+  fa$build_tick <- tick
   fa$l_piv <- piv_row; fa$l_idx <- l_idx; fa$l_val <- l_val
   lookup <- integer(num_row); lookup[piv_row] <- seq_len(num_row)
   fa$l_lookup <- lookup
@@ -339,7 +360,7 @@
 }
 
 # HVector helpers
-.hs_hv <- function(array, index = which(array != 0)) list(array = array, index = index, count = length(index))
+.hs_hv <- function(array, index = which(array != 0)) list(array = array, index = index, count = length(index), tick = 0)
 
 .hs_hv_tight <- function(hv) {
   if (hv$count < 0L) {
@@ -385,9 +406,10 @@
 
 # the sparse solve over pivots `order` with columns (idx, val): each pivot
 # value is final when reached and is scattered into its column
-.hs_solve_sparse <- function(hv, order, piv, pv, idx, val) {
+.hs_solve_sparse <- function(hv, order, piv, pv, idx, val, m = Inf) {
   a <- hv$array
   out <- integer()
+  ft <- 0
   for (p in order) {
     r <- piv[p]
     if (r == 0L) next
@@ -399,17 +421,19 @@
       }
       out <- c(out, r)
       ci <- idx[[p]]
+      if (p > m) ft <- ft + length(ci)
       if (length(ci)) a[ci] <- a[ci] - x * val[[p]]
     } else a[r] <- 0
   }
-  list(array = a, index = out, count = length(out))
+  list(array = a, index = out, count = length(out), tick = hv$tick %||% 0, ft = ft)
 }
 
 # solveHyper: depth first search from the nonzeros for the pivots reached,
 # then the solve in topological order
-.hs_solve_hyper <- function(hv, lookup, piv, pv, idx, val) {
+.hs_solve_hyper <- function(hv, lookup, piv, pv, idx, val, m = Inf) {
   mark <- logical(length(piv))
   list_index <- integer()
+  count_pivot <- 0; count_entry <- 0
   for (r0 in hv$index) {
     it <- lookup[r0]
     if (mark[it]) next
@@ -423,6 +447,7 @@
           mark[child] <- TRUE
           stack <- c(stack, hi, hk)
           hi <- child; hk <- 1L
+          if (hi > m) { count_pivot <- count_pivot + 1; count_entry <- count_entry + length(idx[[hi]]) }
         }
       } else {
         list_index <- c(list_index, hi)
@@ -433,6 +458,7 @@
       }
     }
   }
+  hv$tick <- (hv$tick %||% 0) + count_pivot * 20 + count_entry * 10
   .hs_solve_sparse(hv, rev(list_index), piv, pv, idx, val)
 }
 
@@ -458,6 +484,9 @@
 # update
 .hs_ftran_u <- function(fa, hv, expected, pack) {
   a <- hv$array; index <- hv$index
+  npf <- length(fa$pf_piv); pfx <- sum(lengths(fa$pf_idx))
+  tick <- (hv$tick %||% 0) + npf * 20 + pfx * 5
+  if (pfx %/% (npf + 1) < 5) tick <- tick + pfx * 5
   for (p in seq_along(fa$pf_piv)) {
     r <- fa$pf_piv[p]
     v0 <- a[r]; v1 <- v0
@@ -468,35 +497,42 @@
       a[r] <- if (abs(v1) < .hs_tiny) .hs_zero else v1
     }
   }
-  hv <- .hs_hv_tight(list(array = a, index = index, count = length(index)))
+  hv <- .hs_hv_tight(list(array = a, index = index, count = length(index), tick = tick))
   if (pack) fa$pack_aq <- list(index = hv$index, value = hv$array[hv$index])
   m <- fa$num_row
-  if (.hs_use_sparse(hv, m, expected, 0.10))
-    .hs_solve_sparse(hv, rev(seq_along(fa$u_piv)), fa$u_piv, fa$u_pv, fa$u_idx, fa$u_val)
-  else .hs_solve_hyper(hv, fa$u_lookup, fa$u_piv, fa$u_pv, fa$u_idx, fa$u_val)
+  if (.hs_use_sparse(hv, m, expected, 0.10)) {
+    hv <- .hs_solve_sparse(hv, rev(seq_along(fa$u_piv)), fa$u_piv, fa$u_pv, fa$u_idx, fa$u_val, m)
+    hv$tick <- hv$tick + hv$ft * 15 + (length(fa$u_piv) - m) * 10
+    hv
+  } else .hs_solve_hyper(hv, fa$u_lookup, fa$u_piv, fa$u_pv, fa$u_idx, fa$u_val, m)
 }
 
 # btranU with btranFT after it; the packed vector is the row eta of the FT
 # update
 .hs_btran_u <- function(fa, hv, expected, pack) {
   m <- fa$num_row
-  hv <- if (.hs_use_sparse(hv, m, expected, 0.15))
-    .hs_solve_sparse(hv, seq_along(fa$u_piv), fa$u_piv, fa$u_pv, fa$ur_idx, fa$ur_val)
-  else .hs_solve_hyper(hv, fa$u_lookup, fa$u_piv, fa$u_pv, fa$ur_idx, fa$ur_val)
+  hv <- if (.hs_use_sparse(hv, m, expected, 0.15)) {
+    hv <- .hs_solve_sparse(hv, seq_along(fa$u_piv), fa$u_piv, fa$u_pv, fa$ur_idx, fa$ur_val, m)
+    hv$tick <- hv$tick + hv$ft * 15 + (length(fa$u_piv) - m) * 10
+    hv
+  } else .hs_solve_hyper(hv, fa$u_lookup, fa$u_piv, fa$u_pv, fa$ur_idx, fa$ur_val, m)
   hv <- .hs_hv_tight(hv)
   if (pack) fa$pack_ep <- list(index = hv$index, value = hv$array[hv$index])
   a <- hv$array; index <- hv$index
+  rt <- 0
   for (p in rev(seq_along(fa$pf_piv))) {
     x <- a[fa$pf_piv[p]]
     if (x != 0) {
       rows <- fa$pf_idx[[p]]
+      rt <- rt + length(rows)
       v0 <- a[rows]
       index <- c(index, rows[v0 == 0])
       v1 <- v0 - x * fa$pf_val[[p]]
       a[rows] <- ifelse(abs(v1) < .hs_tiny, .hs_zero, v1)
     }
   }
-  .hs_hv_tight(list(array = a, index = index, count = length(index)))
+  .hs_hv_tight(list(array = a, index = index, count = length(index),
+                    tick = hv$tick + rt * 15 + length(fa$pf_piv) * 10))
 }
 
 # HFactor::ftranCall and btranCall

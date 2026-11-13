@@ -103,14 +103,22 @@
 # HEkkDual::rebuild
 .hs_dual_rebuild <- function(ek, ds) {
   .hs_clear_taboo(ek)
-  if (.hs_rebuild_refactor(ek, ds$rebuild_reason)) .hs_reinvert(ek)
+  if (.hs_rebuild_refactor(ek, ds$rebuild_reason) && !.hs_reinvert(ek)) {
+    ds$solve_phase <- -5L
+    return(invisible())
+  }
   ds$rebuild_reason <- 0L
   .hs_compute_dual(ek)
+  if (isTRUE(ek$backtracking)) {
+    ds$solve_phase <- 0L
+    return(invisible())
+  }
   .hs_correct_dual(ek, ds)
   .hs_compute_primal(ek)
   .hs_rhs_create(ek)
   .hs_compute_dual_objective(ek)
   ek$has_fresh_rebuild <- TRUE
+  .hs_reset_clock(ek)
 }
 
 # HEkkDual::cleanup
@@ -143,6 +151,7 @@
     e <- numeric(ek$m); e[r] <- 1
     ds$row_ep <- .hs_btran(ek, e, "row_ep", pack = TRUE)
     ds$row_ep_index <- ek$last_index
+    ds$row_ep_tick <- ek$last_tick
     if (ds$edge_weight_mode == "dse") {
       updated <- ek$dual_edge_weight[r]
       computed <- .hs_dsum(ds$row_ep[ds$row_ep_index]^2)
@@ -360,6 +369,7 @@
   # updateFtran
   hv <- .hs_hv_collect(ek, list(array = numeric(ek$m), index = integer(), count = 0L), vin, 1)
   col_aq <- .hs_ftran(ek, hv, "col_aq", pack = TRUE)
+  col_aq_tick <- ek$last_tick
   alpha_col <- col_aq[r]
   hv <- list(array = numeric(ek$m), index = integer(), count = 0L)
   for (k in seq_along(ds$flips)) {
@@ -368,8 +378,14 @@
     hv <- .hs_hv_collect(ek, hv, v, ds$flip_change[k])
   }
   col_bfrt <- if (hv$count) .hs_ftran(ek, hv, "col_BFRT") else hv$array
-  dse <- if (ds$edge_weight_mode == "dse")
-    .hs_ftran(ek, list(array = ds$row_ep, index = ds$row_ep_index, count = length(ds$row_ep_index)), "row_DSE")
+  # the DSE FTRAN works in place on row_ep, whose clock it carries on
+  dse_tick <- ds$row_ep_tick
+  dse <- if (ds$edge_weight_mode == "dse") {
+    out <- .hs_ftran(ek, list(array = ds$row_ep, index = ds$row_ep_index, count = length(ds$row_ep_index),
+                              tick = ds$row_ep_tick), "row_DSE")
+    dse_tick <- ek$last_tick
+    out
+  }
   # updateVerify
   trouble <- abs(abs(alpha_col) - abs(ds$alpha_row)) / min(abs(alpha_col), abs(ds$alpha_row))
   if (trouble > 1e-7 && ek$update_count > 0L) {
@@ -421,11 +437,12 @@
   }
   ek$dual_edge_weight <- w
   .hs_rhs_update_list(ek, col_aq)
+  ek$total_tick <- (ek$total_tick %||% 0) + col_aq_tick + dse_tick
   # updatePivots
   value_in <- ek$workValue[vin] + theta_primal
   .hs_update_pivots(ek, vin, r, ds$move_out, col_aq)
   ek$iteration_count <- ek$iteration_count + 1L
-  if (ek$update_count >= ek$update_limit) ds$rebuild_reason <- 6L
+  ds$rebuild_reason <- .hs_update_hint(ek, ds$rebuild_reason)
   ds$free_list <- setdiff(ds$free_list, vin)
   .hs_rhs_update_pivots(ek, r, value_in)
   if (isTRUE(ek$new_devex_framework)) .hs_dual_init_devex(ek)
@@ -452,6 +469,7 @@
 .hs_dual_loop <- function(ek, ds, phase2) {
   repeat {
     .hs_dual_rebuild(ek, ds)
+    if (ds$solve_phase %in% c(0L, -5L)) return(invisible())
     if (.hs_bailout(ek)) break
     if (phase2 && ds$dualInfeasCount > 0L) break
     repeat {
@@ -503,6 +521,7 @@
   if (.hs_bailout(ek)) return(invisible())
   .hs_init_bound(ek, "dual", 1L)
   .hs_init_nonbasic(ek)
+  if (is.null(ek$bt)) .hs_put_backtracking(ek)
   .hs_dual_loop(ek, ds, FALSE)
   if (ds$solve_phase %in% c(0L, -5L, -6L)) return(invisible())
   if (ek$solve_bailout) return(invisible())
@@ -532,6 +551,7 @@
   if (.hs_bailout(ek)) return(invisible())
   tot <- ek$n + ek$m
   ds$free_list <- which(ek$nonbasicFlag == 1L & ek$workLower == -Inf & ek$workUpper == Inf)
+  if (is.null(ek$bt)) .hs_put_backtracking(ek)
   .hs_dual_loop(ek, ds, TRUE)
   if (ds$solve_phase %in% c(0L, -5L, -6L)) return(invisible())
   if (ek$solve_bailout) return(invisible())
@@ -561,6 +581,7 @@
   ek$model_status <- "Notset"
   ek$solve_bailout <- FALSE
   ek$exit_algorithm <- "dual"
+  ek$bt <- NULL; ek$backtracking <- FALSE
   ds$edge_weight_mode <- if (identical(ek$dual_edge_weight_strategy, "steepest")) "dse" else ek$dual_edge_weight_strategy
   # possiblyUseLiDualSteepestEdge
   nz <- ek$A != 0
@@ -602,6 +623,11 @@
       .hs_simplex_dual_infeasible(ek)
       ds$dualInfeasCount <- ek$num_dual_infeasibilities
       ds$solve_phase <- if (ds$dualInfeasCount > 0L) 1L else 2L
+      if (isTRUE(ek$backtracking)) {
+        .hs_init_bound(ek, "dual", ds$solve_phase)
+        .hs_init_nonbasic(ek)
+        ek$backtracking <- FALSE
+      }
     }
     if (ds$solve_phase == 1L) .hs_dual_phase1(ek, ds) else .hs_dual_phase2(ek, ds)
     if (ek$solve_bailout) return(.hs_return_from_solve(ek))

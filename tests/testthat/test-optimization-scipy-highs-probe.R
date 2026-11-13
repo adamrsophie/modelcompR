@@ -135,3 +135,42 @@ test_that("the HiGHS LP port reproduces SciPy bit for bit", {
     }
   }
 })
+
+# The probe layers: the simplex solver alone without presolve, scaling,
+# perturbation or dual steepest edge, then each of them in turn, then
+# linprog's highs-ds without and with presolve.
+.hs_probe_layers <- list(
+  bare = list(presolve = FALSE, scale = FALSE, perturb = 0, edge_weight = "dantzig"),
+  scale = list(presolve = FALSE, perturb = 0, edge_weight = "dantzig"),
+  perturb = list(presolve = FALSE, scale = FALSE, edge_weight = "dantzig"),
+  dse = list(presolve = FALSE, scale = FALSE, perturb = 0),
+  nopresolve = list(presolve = FALSE),
+  default = list())
+
+test_that("presolve splits a merged duplicate column as SciPy does", {
+  A <- matrix(c(0x1p+0, 0x1p+0, 0x1p+1, 0x1p+0, 0x1p+1, 0x1p+1, 0x1p+2, -0x1p+0), 2, 4, byrow = TRUE)
+  ref <- list(bare = c(0x1p+0, 0x1p+0, 0x1p-2, 0x0p+0),
+              default = c(0x1.333333333333p-2, 0x1p+0, 0x1.3333333333333p-1, 0x0p+0))
+  for (ly in names(.hs_probe_layers)) {
+    s <- .hs_highs_run(c(-0x1p+0, -0x1p+0, -0x1p+1, 0x1p+0), A, c(-Inf, -Inf), c(0x1.cp+1, 0x1.4p+2),
+                       c(0, 0, 0, 0), c(0x1p+0, 0x1p+0, 0x1.3333333333333p-1, Inf), .hs_probe_layers[[ly]])
+    expect_identical(s$status, "Optimal", info = ly)
+    expect_identical(as.integer(s$nit), 1L, info = ly)
+    expect_identical(s$col_value, if (ly == "default") ref$default else ref$bare, info = ly)
+  }
+})
+
+test_that("the synthetic clock reinverts where SciPy does on a long dual solve", {
+  skip_on_cran()
+  # lp_huge of tools/highs-probe.py: 80 rows and 120 columns, 89 to 205 dual
+  # simplex iterations; the clock asks for a reinversion in every layer, and
+  # without it no layer reproduces the bits of x
+  p <- readRDS(test_path("fixtures", "highs-lp-huge.rds"))
+  for (ly in names(.hs_probe_layers)) {
+    r <- p$ref[[ly]]
+    s <- .hs_highs_run(p$c, p$A_ub, rep(-Inf, length(p$b_ub)), p$b_ub, p$lb, p$ub, .hs_probe_layers[[ly]])
+    expect_identical(s$status, r$status, info = ly)
+    expect_identical(as.integer(s$nit), r$nit, info = ly)
+    expect_identical(s$col_value, r$x, info = ly)
+  }
+})
