@@ -90,6 +90,9 @@ test_that("GLEE24 and MM5GEE match GlobalDiffEq on a length one state", {
 test_that("global_error_estimate needs a GLEE solution", {
   sol <- solve(glee_prob(), Tsit5())
   expect_error(global_error_estimate(sol), "GLEE method")
+  # has_global_error_glee of tools/globaldiffeq-probe.jl
+  expect_true(has_global_error(GLEE24()))
+  expect_false(has_global_error(Tsit5()))
 })
 
 test_that("GlobalRichardson matches GlobalDiffEq", {

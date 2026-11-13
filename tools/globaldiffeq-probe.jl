@@ -125,6 +125,13 @@ for (name, alg) in (("DP5", DP5()), ("Vern7", Vern7()), ("BS3", BS3()), ("Rosenb
     tryp("dense_$(name)_T_right") do
         dsol(2.0, Val{1}; continuity = :right)
     end
+    # the solve of gee_alg_<name>: its statistics and the dense first
+    # derivative at the midpoint of every step (the companion integrates it)
+    tryp("dense5_$(name)") do
+        esol = solve(probc, alg; abstol = 1.0e-5, reltol = 1.0e-5)
+        (length(esol.t), esol.stats.naccept, esol.stats.nreject, esol.stats.nf,
+            reduce(vcat, [esol((esol.t[i] + esol.t[i + 1]) / 2, Val{1}) for i in 1:(length(esol.t) - 1)]))
+    end
 end
 # ImplicitEuler at the tolerance of the R test, with an explicit companion
 tryp("gee_alg_ImplicitEuler_tsit5companion_1e-3") do
@@ -136,6 +143,22 @@ tryp("gee_alg_ImplicitEuler_1e-3") do
 end
 tryp("gee_alg_ImplicitEuler_1e-3_uT") do
     solve(probc, ImplicitEuler(); abstol = 1.0e-3, reltol = 1.0e-3).u[end]
+end
+# the ImplicitEuler self companion of gee_alg_ImplicitEuler step by step:
+# the companion solve's statistics, its first times and how many of its
+# right hand side evaluations fall off the forward step nodes (R: 829
+# accepted steps, no rejects, 36 of 4144 evaluations off the nodes,
+# eps(T) = [3.4e-15, -6.6e-16])
+tryp("gee_ie_trace") do
+    fsol = solve(probc, ImplicitEuler(); abstol = 1.0e-5, reltol = 1.0e-5, dense = true)
+    rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+    evals = Float64[]
+    rec = (e, p, t) -> (push!(evals, t); rhs(e, p, t))
+    opts = GlobalErrorEstimation(ImplicitEuler()).options
+    csol = solve(ODEProblem{false}(rec, zeros(2), (0.0, 2.0)), ImplicitEuler();
+        abstol = opts.companion_abstol, reltol = opts.companion_reltol, tstops = fsol.t)
+    (length(fsol.t), fsol.t[2:5], csol.stats.naccept, csol.stats.nreject, csol.stats.nf,
+        csol.t[1:6], count(t -> !(t in fsol.t), evals), length(evals), csol.u[end])
 end
 # a length one state, y' = 2 y on [0, 1]
 tryp("gee_lin") do

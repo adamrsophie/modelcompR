@@ -103,13 +103,37 @@ test_that("costs at every saved time, solve_gradient and continuous costs match 
   expect_equal(unname(r$du0), c(1.7306865427947586, 0.037601753726542689), tolerance = 1e-8)
   expect_equal(unname(r$dp), c(2.0883122749910155, -0.16154104458073865, 0.37862039402266023, -0.095234128915909377),
                tolerance = 1e-8)
+  # with zero diffusion the adjoint has no noise term, so the gradient of a
+  # continuous cost does not depend on the noise path; Julia's does, as its
+  # accumulate_cost! also runs in the adjoint diffusion (contzero_a_* and
+  # contzero_b_* of the probe)
+  gzero <- function(u, p, t) c(0, 0)
+  grid2x <- NoiseGrid(sde_tg, cbind(2 * sde_w1(sde_tg), -sde_w2(sde_tg)))
+  for (sa in list(BacksolveAdjoint(), InterpolatingAdjoint())) {
+    ra <- adjoint_sensitivities(solve(SDEProblem(sde_f, gzero, sde_u0, c(0, 1), sde_p, noise = sde_grid2()),
+                                      EulerHeun(), dt = 0.05), EulerHeun(), dgdu_continuous = function(u, p, t) u,
+                                sensealg = sa)
+    rb <- adjoint_sensitivities(solve(SDEProblem(sde_f, gzero, sde_u0, c(0, 1), sde_p, noise = grid2x),
+                                      EulerHeun(), dt = 0.05), EulerHeun(), dgdu_continuous = function(u, p, t) u,
+                                sensealg = sa)
+    expect_equal(rb$du0, ra$du0, tolerance = 1e-12)
+    expect_equal(rb$dp, ra$dp, tolerance = 1e-12)
+  }
   # InterpolatingAdjoint solved with EM: Julia samples the cost at t = 0.5 with
-  # the stale state u(0.55) (du0 = (3.9647706834542507, -0.8995838768260501))
+  # the stale state u(0.55) (du0 = (3.9647706834542507, -0.8995838768260501));
+  # ReverseLossCallback reads the buffer of the last drift evaluation, which
+  # upstream already replaces by the forward solution for DAEs. The cost with
+  # the cotangent fixed at the forward states is the same cost (Julia's
+  # em_interpfix differs from em_interp)
   sol <- solve(prob, EM(), dt = 0.05)
   r <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = sde_dg, sensealg = InterpolatingAdjoint())
   expect_equal(unname(r$du0), c(4.0192523922688821, -0.88635376454790904), tolerance = 1e-8)
   expect_equal(unname(r$dp), c(3.1103999804475086, -0.52689197311727054, 0.73188148677913067, -0.15193298799636976),
                tolerance = 1e-8)
+  rfix <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = function(u, p, t, i) sol(t),
+                                sensealg = InterpolatingAdjoint())
+  expect_equal(rfix$du0, r$du0, tolerance = 1e-12)
+  expect_equal(rfix$dp, r$dp, tolerance = 1e-12)
 })
 
 test_that("RODEAdjointProblem matches Julia", {
@@ -132,6 +156,13 @@ test_that("RODEAdjointProblem matches Julia", {
   # 1.1432754857128713)); R samples u(0.5), the same scheme otherwise
   sde_check(sol, InterpolatingAdjoint(), c(1.71484463694468, 1.111062280276795),
             c(0.20291043396132113, -0.8502265178080268, 0.09432078427923676, 0.86151471863776), alg = RandomEM())
+  # the same cost with the cotangent fixed at the forward states (Julia's
+  # rode_interpfix of the probe differs from its rode_interp)
+  r <- adjoint_sensitivities(sol, RandomEM(), t = c(0.5, 1), dgdu_discrete = function(u, p, t, i) sol(t),
+                             sensealg = InterpolatingAdjoint())
+  expect_equal(unname(r$du0), c(1.71484463694468, 1.111062280276795), tolerance = 1e-8)
+  expect_equal(unname(r$dp), c(0.20291043396132113, -0.8502265178080268, 0.09432078427923676, 0.86151471863776),
+               tolerance = 1e-8)
   ap <- RODEAdjointProblem(sol, InterpolatingAdjoint(), t = c(0.5, 1), dgdu_discrete = sde_dg)
   expect_s3_class(ap, "RODEProblem")
   expect_identical(ap$tspan, c(0, 1))

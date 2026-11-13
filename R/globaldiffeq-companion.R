@@ -149,21 +149,29 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
 }
 
 # .bdf_interp: the derivative of the Lagrange polynomial through the
-# history values (OrdinaryDiffEqBDF bdf_interpolants.jl, Val{1})
+# history values. OrdinaryDiffEqBDF resamples that polynomial at fixed
+# Chebyshev nodes (_resample_at_chebyshev!, bdf_utils.jl) and differentiates
+# the Lagrange basis on them (_fbdf_interp, Val{1}, bdf_interpolants.jl).
+# It is the same polynomial, but the slope over a short early step is
+# bound by cancellation, so Julia's order of evaluation is kept.
 .gde_bdf_d <- function(theta, dt, y0, y1, k) {
-  th <- k$thetas
-  n <- length(th)
-  out <- 0
-  for (j in seq_len(n)) {
-    dl <- 0
-    for (m in seq_len(n)[-j]) {
-      term <- 1 / (th[j] - th[m])
-      for (l in seq_len(n)[-c(j, m)]) term <- term * (theta - th[l]) / (th[j] - th[l])
-      dl <- dl + term
+  n <- length(k$thetas)
+  nodes <- (1 + cospi((2 * seq_len(n) - 1) / (2 * n))) / 2
+  kc <- lapply(nodes, function(xi) .eval_lagrange(xi, k$thetas, k$values, n))
+  dbasis <- function(i) {
+    result <- 0
+    for (m in seq_len(n)) {
+      if (m == i) next
+      term <- 1 / (nodes[i] - nodes[m])
+      for (l in seq_len(n)) if (l != i && l != m) term <- term * ((theta - nodes[l]) / (nodes[i] - nodes[l]))
+      result <- result + term
     }
-    out <- out + dl * k$values[[j]]
+    result
   }
-  out / dt
+  invdt <- 1 / dt
+  out <- (dbasis(1L) * invdt) * kc[[1L]]
+  for (j in seq_len(n)[-1L]) out <- .fma(dbasis(j) * invdt, kc[[j]], out)
+  out
 }
 
 # OrdinaryDiffEqTsit5 @tsit5pre1
@@ -497,8 +505,32 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
     lr <- lr * scale
     if (la == 0 && lr == 0) stop("local tolerances underflowed during global error control", call. = FALSE)
   }
-  stop("failed to meet gtol=", format(gtol), " after ", options$maxiters, " iterations; last estimated ",
-       "global error was ", format(last), call. = FALSE)
+  stop("failed to meet gtol=", .gde_jl_float(gtol), " after ", options$maxiters, " iterations; last estimated ",
+       "global error was ", .gde_jl_float(last), call. = FALSE)
+}
+
+# Julia's string of a Float64: the shortest digits that read back, written
+# in scientific form below 1e-4 and from 1e16 ("1.0e-9", "0.0026798526949479")
+.gde_jl_float <- function(x) {
+  if (!is.finite(x)) return(if (is.na(x)) "NaN" else if (x > 0) "Inf" else "-Inf")
+  if (x == 0) return("0.0")
+  for (dg in 1:17) {
+    s <- formatC(abs(x), digits = dg - 1L, format = "e")
+    if (as.numeric(s) == abs(x)) break
+  }
+  d <- sub("0+$", "", gsub(".", "", sub("e.*", "", s), fixed = TRUE))
+  if (!nzchar(d)) d <- "0"
+  e <- as.integer(sub(".*e", "", s))
+  out <- if (e < -4L || e >= 16L) {
+    paste0(substr(d, 1L, 1L), ".", if (nchar(d) > 1L) substring(d, 2L) else "0", "e", e)
+  } else if (e < 0L) {
+    paste0("0.", strrep("0", -e - 1L), d)
+  } else {
+    if (nchar(d) < e + 1L) d <- paste0(d, strrep("0", e + 1L - nchar(d)))
+    frac <- substring(d, e + 2L)
+    paste0(substr(d, 1L, e + 1L), ".", if (nzchar(frac)) frac else "0")
+  }
+  if (x < 0) paste0("-", out) else out
 }
 
 # ---------------------------------------------------------------------------

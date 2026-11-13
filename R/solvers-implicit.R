@@ -468,12 +468,13 @@ Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
   c(12 / 25, -48 / 25, 36 / 25, -16 / 25, 3 / 25, 0),
   c(60 / 137, -300 / 137, 300 / 137, -200 / 137, 75 / 137, -12 / 137))
 
-# _eval_lagrange_oop: the interpolant through (thetas[j], values[[j]]) at xi.
+# _eval_lagrange_oop: the interpolant through (thetas[j], values[[j]]) at xi
+# (the basis as Julia forms it, L *= (xi - t_m) / (t_j - t_m))
 .eval_lagrange <- function(xi, thetas, values, n = length(thetas)) {
   out <- 0
   for (j in seq_len(n)) {
     L <- 1
-    for (m in seq_len(n)) if (m != j) L <- L * (xi - thetas[m]) / (thetas[j] - thetas[m])
+    for (m in seq_len(n)) if (m != j) L <- L * ((xi - thetas[m]) / (thetas[j] - thetas[m]))
     out <- out + L * values[[j]]
   }
   out

@@ -341,3 +341,35 @@ du0, dp = adjoint_sensitivities(sole, EM(); t = ts, dt = 0.05,
     sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()), dgdu_discrete = dg)
 pr("em_interp_du0", vec(du0))
 pr("em_interp_dp", vec(dp))
+
+# Two checks of the R deviations above, both upstream defects (the comments in
+# tests/testthat/test-sensitivity-sde.R quote the Julia values).
+# (1) With zero diffusion the adjoint SDE has no noise term, so the gradient of
+# a continuous cost cannot depend on the noise path. accumulate_cost! also runs
+# in the adjoint diffusion (backsolve_adjoint.jl, interpolating_adjoint.jl), so
+# Julia's contzero_a_* and contzero_b_* differ; R's agree.
+gzero!(du, u, p, t) = (du .= 0; nothing)
+grid2x() = NoiseGrid(tg, [[2 * w1(t), -w2(t)] for t in tg])
+for (gname, grid) in (("a", grid2), ("b", grid2x))
+    solz = solve(SDEProblem(f!, gzero!, u0, (0.0, 1.0), p, noise = grid()), EulerHeun(); dt = 0.05)
+    for (sname, sa) in sas
+        du0, dp = adjoint_sensitivities(solz, EulerHeun(); dt = 0.05, sensealg = sa,
+            dgdu_continuous = (out, u, p, t) -> (out .= u))
+        pr("contzero_$(gname)_$(sname)_du0", vec(du0))
+        pr("contzero_$(gname)_$(sname)_dp", vec(dp))
+    end
+end
+# (2) A discrete cost with the cotangent u and one with the forward state at t
+# are the same cost. ReverseLossCallback reads the buffer y of the last drift
+# evaluation (u(0.55) for EM and RandomEM), so Julia's em_interp and
+# em_interpfix (rode_interp and rode_interpfix) differ; R's agree.
+du0, dp = adjoint_sensitivities(sole, EM(); t = ts, dt = 0.05,
+    sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
+    dgdu_discrete = (out, u, p, t, i) -> (out .= sole(t)))
+pr("em_interpfix_du0", vec(du0))
+pr("em_interpfix_dp", vec(dp))
+du0, dp = adjoint_sensitivities(rsol, RandomEM(); t = ts, dt = 0.05,
+    sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
+    dgdu_discrete = (out, u, p, t, i) -> (out .= rsol(t)))
+pr("rode_interpfix_du0", vec(du0))
+pr("rode_interpfix_dp", vec(dp))

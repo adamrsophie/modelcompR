@@ -172,7 +172,7 @@
   tab <- .GLEE_TABS[[name]]
   .new_alg(name, tab$order, step = .glee_step(tab),
            init = function(ctx, t, u) list(fsal = ctx$f(u, ctx$p, t)),
-           solve_override = .glee_solve, glee = TRUE)
+           solve_override = .glee_solve, glee = TRUE, has_global_error = TRUE)
 }
 
 #' Methods with global error estimation
