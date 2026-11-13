@@ -752,10 +752,8 @@
     bad <- setdiff(names(o), known)
     if (length(bad)) warning("Unknown solver options: ", paste(bad, collapse = ", "), call. = FALSE)
     res <- do.call(.sp_df_sane, c(list(fun, x0), o[intersect(names(o), setdiff(known, "disp"))]))
-  } else if (method %in% c("broyden1", "broyden2", "anderson", "linearmixing", "diagbroyden", "excitingmixing")) {
-    res <- .sp_nonlin_solve(fun, x0, method, o)
   } else {
-    stop("ScipyRoot(method = '", method, "') is not yet ported to native R in modelcompR", call. = FALSE)
+    res <- .sp_nonlin_solve(fun, x0, method, o)
   }
   res$retcode <- if (isTRUE(res$success)) "Success" else "Failure"
   # the objective of the Julia wrapper: sum(abs2, fun)

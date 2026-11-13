@@ -43,21 +43,24 @@
   list(J = J * js, f = f * (rho[[2L]] / js), cost = 0.5 * sum(rho[[1L]]))
 }
 
+# J is a matrix or a function computing J v (a LinearOperator)
+.sp_lsq_mv <- function(J, s) if (is.function(J)) J(s) else as.numeric(J %*% s)
+
 .sp_lsq_eval_quad <- function(J, g, s, diag = NULL) {
-  Js <- as.numeric(J %*% s)
+  Js <- .sp_lsq_mv(J, s)
   q <- sum(Js * Js)
   if (!is.null(diag)) q <- q + sum(s * diag * s)
   0.5 * q + sum(s * g)
 }
 
 .sp_lsq_quad_1d <- function(J, g, s, diag = NULL, s0 = NULL) {
-  v <- as.numeric(J %*% s)
+  v <- .sp_lsq_mv(J, s)
   a <- sum(v * v)
   if (!is.null(diag)) a <- a + sum(s * diag * s)
   a <- a * 0.5
   b <- sum(g * s)
   if (is.null(s0)) return(list(a = a, b = b))
-  u <- as.numeric(J %*% s0)
+  u <- .sp_lsq_mv(J, s0)
   b <- b + sum(u * v)
   c <- 0.5 * sum(u * u) + sum(g * s0)
   if (!is.null(diag)) {
@@ -250,7 +253,8 @@
 
 # trf: trust region reflective (Branch, Coleman and Li 1999) with the
 # Coleman and Li scaling when there are bounds
-.sp_lsq_trf <- function(fun, jac, x0, f0, J0, lb, ub, ftol, xtol, gtol, max_nfev, x_scale, loss_function) {
+.sp_lsq_trf <- function(fun, jac, x0, f0, J0, lb, ub, ftol, xtol, gtol, max_nfev, x_scale, loss_function,
+                        tr_solver = "exact", tr_options = list()) {
   bounded <- !(all(lb == -Inf) && all(ub == Inf))
   x <- x0; f <- f0; f_true <- f
   nfev <- 1L; njev <- 1L
@@ -278,6 +282,18 @@
     Delta <- .sp_nrm(x0 * sc$inv)
   }
   if (Delta == 0) Delta <- 1
+  lsmr <- tr_solver == "lsmr"
+  if (lsmr) {
+    # the options of the trf driver; the rest goes to lsmr
+    reg_term <- 0
+    damp <- 0
+    if (!bounded) {
+      damp <- tr_options$damp %||% 0
+      tr_options$damp <- NULL
+    }
+    regularize <- tr_options$regularize %||% TRUE
+    tr_options$regularize <- NULL
+  }
   if (is.null(max_nfev)) max_nfev <- n * 100L
   alpha <- 0
   status <- NULL
@@ -295,27 +311,66 @@
       v[dv != 0] <- v[dv != 0] * sc$inv[dv != 0]
       d <- v^0.5 * sc$scale
       diag_h <- g * dv * sc$scale
-      J_h <- J * rep(d, each = m)
-      sv <- svd(rbind(J_h, diag(diag_h^0.5, n, n)))
-      uf <- as.numeric(crossprod(sv$u, c(f, numeric(n))))
-      theta <- max(0.995, 1 - g_norm)
     } else {
       d <- sc$scale
-      J_h <- J * rep(d, each = m)
-      sv <- svd(J_h)
-      uf <- as.numeric(crossprod(sv$u, f))
+      diag_h <- NULL
     }
     g_h <- d * g
+    if (!lsmr) {
+      J_h <- J * rep(d, each = m)
+      if (bounded) {
+        sv <- svd(rbind(J_h, diag(diag_h^0.5, n, n)))
+        uf <- as.numeric(crossprod(sv$u, c(f, numeric(n))))
+      } else {
+        sv <- svd(J_h)
+        uf <- as.numeric(crossprod(sv$u, f))
+      }
+    } else {
+      # the Gauss Newton step by lsmr and the two dimensional subspace
+      # spanned by it and the gradient (right_multiplied_operator)
+      J_h <- local({
+        Jc <- J; dc <- d
+        function(x) as.numeric(Jc %*% (x * dc))
+      })
+      J_hT <- local({
+        Jc <- J; dc <- d
+        function(y) dc * as.numeric(crossprod(Jc, y))
+      })
+      if (regularize) {
+        q <- .sp_lsq_quad_1d(J_h, g_h, -g_h, diag = diag_h)
+        ag_value <- .sp_lsq_min_quad_1d(q$a, q$b, 0, Delta / .sp_nrm(g_h))$y
+        reg_term <- -ag_value / Delta^2
+      }
+      if (bounded) {
+        dg <- (diag_h + reg_term)^0.5
+        gn_h <- do.call(.spk_lsmr, c(list(function(x) c(J_h(x), dg * x),
+                                          function(y) J_hT(y[seq_len(m)]) + dg * y[m + seq_len(n)], m + n, n,
+                                          c(f, numeric(n))), tr_options))$x
+      } else {
+        gn_h <- do.call(.spk_lsmr, c(list(J_h, J_hT, m, n, f, damp = (damp^2 + reg_term)^0.5), tr_options))$x
+      }
+      S <- qr.Q(qr(cbind(g_h, gn_h), tol = 0))
+      JS <- J %*% (S * d)
+      B_S <- crossprod(JS)
+      if (bounded) B_S <- B_S + crossprod(S * diag_h, S)
+      g_S <- as.numeric(crossprod(S, g_h))
+    }
+    if (bounded) theta <- max(0.995, 1 - g_norm)
     actual_reduction <- -1
     while (actual_reduction <= 0 && nfev < max_nfev) {
-      tr <- .sp_lsq_trust_region(n, m, uf, sv$d, sv$v, Delta, initial_alpha = alpha)
-      alpha <- tr$alpha
+      if (lsmr) {
+        p_h <- as.numeric(S %*% .spk_tr_2d(B_S, g_S, Delta)$p)
+      } else {
+        tr <- .sp_lsq_trust_region(n, m, uf, sv$d, sv$v, Delta, initial_alpha = alpha)
+        alpha <- tr$alpha
+        p_h <- tr$p
+      }
       if (bounded) {
-        ss <- .sp_lsq_select_step(x, J_h, diag_h, g_h, d * tr$p, tr$p, d, Delta, lb, ub, theta)
+        ss <- .sp_lsq_select_step(x, J_h, diag_h, g_h, d * p_h, p_h, d, Delta, lb, ub, theta)
         step <- ss$step; step_h <- ss$step_h; predicted_reduction <- ss$pred
         x_new <- .sp_lsq_strictly_feasible(x + step, lb, ub, rstep = 0)
       } else {
-        step_h <- tr$p
+        step_h <- p_h
         predicted_reduction <- -.sp_lsq_eval_quad(J_h, g_h, step_h)
         step <- d * step_h
         x_new <- x + step
@@ -376,7 +431,8 @@
 }
 
 # dogbox: Powell's dogleg in a rectangular trust region (Voglis and Lagaris)
-.sp_lsq_dogbox <- function(fun, jac, x0, f0, J0, lb, ub, ftol, xtol, gtol, max_nfev, x_scale, loss_function) {
+.sp_lsq_dogbox <- function(fun, jac, x0, f0, J0, lb, ub, ftol, xtol, gtol, max_nfev, x_scale, loss_function,
+                           tr_solver = "exact", tr_options = list()) {
   f <- f0; f_true <- f
   nfev <- 1L; njev <- 1L
   J <- J0
@@ -408,15 +464,35 @@
     x_free <- x[free_set]
     lb_free <- lb[free_set]; ub_free <- ub[free_set]
     scale_free <- sc$scale[free_set]
-    J_free <- J[, free_set, drop = FALSE]
-    newton_step <- .sp_lstsq(J_free, -f)
-    q <- .sp_lsq_quad_1d(J_free, g_free, -g_free)
+    if (tr_solver == "lsmr") {
+      # lsmr in scaled variables on the free columns (lsmr_operator)
+      Jop <- local({
+        Jc <- J
+        function(x) as.numeric(Jc %*% x)
+      })
+      scl <- sc$scale
+      act <- active_set
+      lop <- function(x) as.numeric(J %*% (x * scl))
+      lrop <- function(y) {
+        r <- scl * as.numeric(crossprod(J, y))
+        r[act] <- 0
+        r
+      }
+      newton_step <- -do.call(.spk_lsmr, c(list(lop, lrop, nrow(J), n, f), tr_options))$x[free_set]
+      newton_step <- newton_step * scale_free
+      q <- .sp_lsq_quad_1d(Jop, g, -g)
+    } else {
+      J_free <- J[, free_set, drop = FALSE]
+      newton_step <- .sp_lstsq(J_free, -f)
+      q <- .sp_lsq_quad_1d(J_free, g_free, -g_free)
+    }
     actual_reduction <- -1
     while (actual_reduction <= 0 && nfev < max_nfev) {
       ds <- .sp_lsq_dogleg_step(x_free, newton_step, g_free, q$a, q$b, Delta * scale_free, lb_free, ub_free)
       step <- numeric(n)
       step[free_set] <- ds$step
-      predicted_reduction <- -.sp_lsq_eval_quad(J_free, g_free, ds$step)
+      predicted_reduction <- if (tr_solver == "lsmr") -.sp_lsq_eval_quad(Jop, g, step) else
+        -.sp_lsq_eval_quad(J_free, g_free, ds$step)
       x_new <- pmin(pmax(x + step, lb), ub)
       f_new <- fun(x_new)
       nfev <- nfev + 1L
@@ -483,9 +559,15 @@
     stop("At least one of the tolerances must be higher than machine epsilon (2.22e-16).", call. = FALSE)
   if (method == "trf") x0 <- .sp_lsq_strictly_feasible(x0, lo, hi)
   tr_solver <- kw$tr_solver %||% "exact"
-  if (tr_solver != "exact")
-    stop("tr_solver = '", tr_solver, "' of ScipyLeastSquares is not yet ported to native R in modelcompR",
-         call. = FALSE)
+  if (!(tr_solver %in% c("exact", "lsmr"))) stop("`tr_solver` must be None, 'exact' or 'lsmr'.", call. = FALSE)
+  tr_options <- kw$tr_options %||% list()
+  if (method == "dogbox" && tr_solver == "lsmr" && "regularize" %in% names(tr_options)) {
+    warning("The keyword 'regularize' in `tr_options` is not relevant for 'dogbox' method.", call. = FALSE)
+    tr_options$regularize <- NULL
+  }
+  bad <- setdiff(names(tr_options), c("damp", "atol", "btol", "conlim", "maxiter", "show", "regularize"))
+  if (tr_solver == "lsmr" && length(bad))
+    stop("lsmr() got an unexpected keyword argument '", bad[1L], "'", call. = FALSE)
   vf <- .sp_vector_function(f, kw$diff_step, lo, hi)
   f0 <- vf$fun(x0)
   J0 <- vf$jac(x0)
@@ -506,7 +588,8 @@
   } else {
     lf <- .sp_lsq_loss(loss, kw$f_scale %||% 1)
     solver <- if (method == "trf") .sp_lsq_trf else .sp_lsq_dogbox
-    res <- solver(vf$fun, vf$jac, x0, f0, J0, lo, hi, ftol, xtol, gtol, max_nfev, x_scale, lf)
+    res <- solver(vf$fun, vf$jac, x0, f0, J0, lo, hi, ftol, xtol, gtol, max_nfev, x_scale, lf, tr_solver = tr_solver,
+                  tr_options = tr_options)
   }
   res$message <- .sp_lsq_messages[[as.character(res$status)]]
   res$success <- res$status > 0L

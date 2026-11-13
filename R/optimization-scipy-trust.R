@@ -250,6 +250,9 @@
       list(p = p, hits = hits)
     }
   } else if (type == "krylov") {
+    # TRLIBQuadraticSubproblem sizes its work arrays from the gradient, so
+    # every subproblem evaluates it on construction
+    m$jac()
     m$solve <- function(trust_radius) .sp_trlib_solve(m, trust_radius, trlib)
   }
   m
@@ -295,7 +298,8 @@
   x <- x0
   m <- mk(x)
   k <- 0L
-  while (m$jac_mag() >= gtol) {
+  # comparisons with NaN are false, as in Python
+  while (isTRUE(m$jac_mag() >= gtol)) {
     st <- tryCatch(m$solve(trust_radius), sp_linalg = function(e) NULL)
     if (is.null(st)) {
       warnflag <- 3L
@@ -307,22 +311,22 @@
     m_proposed <- mk(x_proposed)
     actual_reduction <- m$fun() - m_proposed$fun()
     predicted_reduction <- m$fun() - predicted_value
-    if (predicted_reduction <= 0) {
+    if (isTRUE(predicted_reduction <= 0)) {
       warnflag <- 2L
       break
     }
     rho <- actual_reduction / predicted_reduction
-    if (rho < 0.25) {
+    if (isTRUE(rho < 0.25)) {
       trust_radius <- trust_radius * 0.25
-    } else if (rho > 0.75 && st$hits) {
+    } else if (isTRUE(rho > 0.75) && st$hits) {
       trust_radius <- min(2 * trust_radius, max_trust_radius)
     }
-    if (rho > eta) {
+    if (isTRUE(rho > eta)) {
       x <- x_proposed
       m <- m_proposed
     }
     k <- k + 1L
-    if (m$jac_mag() < gtol) {
+    if (isTRUE(m$jac_mag() < gtol)) {
       warnflag <- 0L
       break
     }

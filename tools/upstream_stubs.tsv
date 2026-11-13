@@ -1,10 +1,3 @@
 name	reason
-ScipySLSQP	slsqp.c, nnls.c and their LAPACK routines
-ScipyTNC	tnc.c
-ScipyCOBYQA	the cobyqa package
-ScipyTrustConstr	_trustregion_constr
-ScipyTrustKrylov	trlib
-ScipyShgo	_shgo.py (needs SLSQP)
-ScipyDirect	DIRect.c and DIRsubrout.c
 BOBYQA	libprima bobyqa
 LINCOA	libprima lincoa

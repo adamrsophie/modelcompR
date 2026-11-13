@@ -1677,9 +1677,9 @@ OptimizationSciPy	ScipyBrent	ported
 OptimizationSciPy	ScipyBrute	ported
 OptimizationSciPy	ScipyCG	ported
 OptimizationSciPy	ScipyCOBYLA	ported
-OptimizationSciPy	ScipyCOBYQA	missing (constructor raises)
+OptimizationSciPy	ScipyCOBYQA	ported
 OptimizationSciPy	ScipyDifferentialEvolution	ported
-OptimizationSciPy	ScipyDirect	missing (constructor raises)
+OptimizationSciPy	ScipyDirect	ported
 OptimizationSciPy	ScipyDogleg	ported
 OptimizationSciPy	ScipyDualAnnealing	ported
 OptimizationSciPy	ScipyGolden	ported
@@ -1697,12 +1697,12 @@ OptimizationSciPy	ScipyNewtonCG	ported
 OptimizationSciPy	ScipyPowell	ported
 OptimizationSciPy	ScipyRoot	ported
 OptimizationSciPy	ScipyRootScalar	ported
-OptimizationSciPy	ScipySLSQP	missing (constructor raises)
-OptimizationSciPy	ScipyShgo	missing (constructor raises)
-OptimizationSciPy	ScipyTNC	missing (constructor raises)
-OptimizationSciPy	ScipyTrustConstr	missing (constructor raises)
+OptimizationSciPy	ScipySLSQP	ported
+OptimizationSciPy	ScipyShgo	ported
+OptimizationSciPy	ScipyTNC	ported
+OptimizationSciPy	ScipyTrustConstr	ported
 OptimizationSciPy	ScipyTrustExact	ported
-OptimizationSciPy	ScipyTrustKrylov	missing (constructor raises)
+OptimizationSciPy	ScipyTrustKrylov	ported
 OptimizationSciPy	ScipyTrustNCG	ported
 OptimizationSophia	Sophia	ported
 OptimizationSpeedMapping	SpeedMappingOpt	ported

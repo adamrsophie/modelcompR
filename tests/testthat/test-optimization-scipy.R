@@ -327,7 +327,6 @@ test_that("ScipyRoot and ScipyLeastSquaresLM follow MINPACK of SciPy", {
   expect_equal(unname(s$u), c(0.7252038049458914, 1.1102230246251565e-16), tolerance = 1e-9)
   expect_identical(s$original$nfev, 21L)
   expect_error(solve(p3, ScipyRoot(), xtol = 1e-3), "unexpected keyword argument 'xtol'")
-  expect_error(solve(p3, ScipyRoot("krylov")), "not yet ported")
   res3 <- function(x, p) c(10 * (x[2] - x[1] * x[1]), 1 - x[1], 0.5 * (x[1] * x[2] - 1))
   s <- solve(OptimizationProblem(res3, c(-1.2, 1), numeric()), ScipyLeastSquaresLM())
   chk(s, c(1, 1), 23L, 3L)
@@ -376,7 +375,6 @@ test_that("ScipyLeastSquares trf and dogbox follow SciPy", {
   s <- solve(OptimizationProblem(fit, c(1, 0.7, 0), numeric(), lb = c(0, 0.6, -1), ub = c(2, 2, 1)),
              ScipyLeastSquares(loss = "soft_l1"))
   expect_equal(unname(s$u), c(1.0217155317180437, 1.1621250193083985, -0.7612480455712755), tolerance = 1e-6)
-  expect_error(solve(pr, ScipyLeastSquares(), tr_solver = "lsmr"), "not yet ported")
   # df-sane
   for (ls in c("cruz", "cheng")) {
     s <- solve(ps, ScipyRoot("df-sane"), options = list(line_search = ls))
@@ -466,7 +464,6 @@ test_that("ScipyRoot follows the quasi Newton methods of SciPy", {
       c(0.9695261068487376, 0.30330930164218173, 0.28612863832394325), 85L, 1L)
   chk(solve(pr, ScipyRoot("broyden2"), options = list(jac_options = list(reduction_method = "simple", max_rank = 2))),
       c(0.969527297407631, 0.30330196780840407, 0.2861292977795033), 27L, 1L)
-  expect_error(solve(pr, ScipyRoot("krylov")), "not yet ported")
   expect_error(solve(pr, ScipyRoot("anderson"), options = list(jac_options = list(bogus = 1))), "unexpected keyword")
 })
 

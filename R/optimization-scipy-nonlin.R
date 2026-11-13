@@ -1,8 +1,9 @@
 # scipy.optimize.root with the quasi Newton methods of
 # scipy/optimize/_nonlin.py: nonlin_solve with the Jacobian approximations
-# BroydenFirst, BroydenSecond, Anderson, LinearMixing, DiagBroyden and
-# ExcitingMixing, the armijo and wolfe line searches and the termination
-# test of TerminationCondition.
+# BroydenFirst, BroydenSecond, Anderson, LinearMixing, DiagBroyden,
+# ExcitingMixing and KrylovJacobian (R/optimization-scipy-krylov.R), the
+# armijo and wolfe line searches and the termination test of
+# TerminationCondition.
 
 .nl_norm <- function(v) sqrt(sum(v * v))
 .nl_maxnorm <- function(v) max(abs(v))
@@ -232,8 +233,10 @@
   dx <- rep(Inf, length(x))
   Fx <- func(x)
   Fx_norm <- .nl_norm(Fx)
-  J <- .scipy_nl_jacobian(method, o$jac_options %||% list())
-  J$setup(x, Fx)
+  krylov <- method == "krylov"
+  J <- if (krylov) .spk_krylov_jacobian(o$jac_options %||% list()) else
+    .scipy_nl_jacobian(method, o$jac_options %||% list())
+  if (krylov) J$setup(x, Fx, func) else J$setup(x, Fx)
   maxiter <- o$maxiter %||% (if (!is.null(iter)) iter + 1L else 100L * (length(x) + 1L))
   gamma <- 0.9; eta_max <- 0.9999; eta_treshold <- 0.1; eta <- 1e-3
   iteration <- 0L
@@ -247,7 +250,8 @@
       as.integer(f_norm <= f_tol && f_norm / f_rtol <= f0_norm && tol_norm(dx) <= x_tol &&
                  tol_norm(dx) / x_rtol <= tol_norm(x))
     if (status) break
-    dx <- -J$solve(Fx)
+    # the forcing tolerance of the inexact (Krylov) Newton step
+    dx <- -(if (krylov) J$solve(Fx, tol = min(eta, eta * Fx_norm)) else J$solve(Fx))
     if (.nl_norm(dx) == 0)
       stop("Jacobian inversion yielded zero vector. This indicates a bug in the Jacobian approximation.",
            call. = FALSE)

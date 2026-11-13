@@ -74,12 +74,19 @@ print.ScipyOptimizer <- function(x, ...) {
 #' SciPy solves linear and mixed integer programs with the HiGHS library;
 #' here a dense two phase simplex method and a depth first branch and bound
 #' stand in for it, so solutions and marginals agree at a unique optimum
-#' while iteration and node counts differ. Not yet ported to native R (they
-#' raise an error): the minimize methods `"TNC"`, `"COBYQA"`, `"SLSQP"`,
-#' `"trust-constr"` and `"trust-krylov"` (and so `ScipyTNC()`,
-#' `ScipyCOBYQA()`, `ScipySLSQP()`, `ScipyTrustConstr()`,
-#' `ScipyTrustKrylov()`), `ScipyShgo()`, `ScipyDirect()`, the root method `"krylov"` and
-#' `tr_solver = "lsmr"` of least squares.
+#' while iteration and node counts differ. `ScipyCOBYQA()` solves its
+#' interpolation systems with R's LAPACK (SciPy uses Accelerate or
+#' OpenBLAS), so its points agree to rounding and a long run can take a
+#' slightly different path to the same solution; it evaluates the nonlinear
+#' constraints at the point of the user also when variables are fixed by the
+#' bounds or scaled (`scale = TRUE`), where SciPy 1.18.1 passes them the
+#' reduced point.
+#' `ScipyTrustConstr()` factorizes its augmented systems with a dense LU
+#' (SciPy uses SuperLU), so a last bit difference can change its path while
+#' the solution agrees. `ScipyShgo()` samples with the simplicial method only
+#' (the other methods triangulate with Qhull).
+#' `ScipyDirect()` drops the rectangles off the convex hull, as SciPy's
+#' DIRECT code does only with its log switched on.
 #'
 #' Common options of `solve()`: `maxiters`, `abstol` and `reltol`, mapped to
 #' the SciPy options as OptimizationSciPy.jl does; every other option is

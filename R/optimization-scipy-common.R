@@ -120,7 +120,9 @@
 
 # ScalarFunction: memoized objective, gradient and Hessian with SciPy's
 # evaluation counts. `grad` is a function or "2-point"/"3-point"; `hess` a
-# function, a Hessian update strategy (.sp_hessian_update) or NULL.
+# function, a Hessian update strategy (.sp_hessian_update), a finite
+# difference scheme of the gradient ("2-point", "3-point", "cs": the Hessian
+# is then the linear operator p -> H p, a function of p) or NULL.
 .sp_scalar_function <- function(fun, x0, grad, hess = NULL, rel_step = NULL, lb = -Inf, ub = Inf,
                                 epsilon = NULL) {
   sf <- new.env(parent = emptyenv())
@@ -131,6 +133,38 @@
   sf$lowest_x <- NULL; sf$lowest_f <- Inf
   fd <- is.character(grad)
   quasi <- inherits(hess, "SpHessianUpdate")
+  fdh <- is.character(hess) && length(hess) == 1L && hess %in% c("2-point", "3-point", "cs")
+  if (!is.null(hess) && !(is.function(hess) || quasi || fdh))
+    stop("`hess` must be either callable, HessianUpdateStrategy or one of ('2-point', '3-point', 'cs').",
+         call. = FALSE)
+  if (fd && fdh)
+    stop("Whenever the gradient is estimated via finite-differences, we require the Hessian to be estimated ",
+         "using one of the quasi-Newton strategies.", call. = FALSE)
+  # _linear_operator_difference of the gradient at x (g0 = grad(x)); every
+  # product evaluates the gradient (once, twice for "3-point")
+  fd_hess <- function(x, g0) {
+    h <- if (is.null(rel_step)) .sp_eps_for_method(hess) else rel_step
+    gr <- function(z) {
+      sf$ngev <- sf$ngev + 1L
+      grad(z)
+    }
+    function(p) {
+      if (all(p == 0)) return(numeric(length(g0)))
+      pn <- sqrt(sum(p * p))
+      if (hess == "2-point") {
+        dx <- h / pn
+        (as.numeric(gr(x + dx * p)) - g0) / dx
+      } else if (hess == "3-point") {
+        dx <- 2 * h / pn
+        g1 <- as.numeric(gr(x - (dx / 2) * p))
+        g2 <- as.numeric(gr(x + (dx / 2) * p))
+        (g2 - g1) / dx
+      } else {
+        dx <- h / pn
+        Im(gr(x + dx * p * 1i)) / dx
+      }
+    }
+  }
   wrapped_fun <- function(x) {
     fx <- fun(x)
     if (length(fx) != 1L) stop("The user-provided objective function must return a scalar value.", call. = FALSE)
@@ -168,9 +202,13 @@
       if (quasi) {
         update_grad()
         hess$update(sf$x - sf$x_prev, sf$g - sf$g_prev)
+      } else if (fdh) {
+        update_grad()
+        sf$H <- fd_hess(sf$x, sf$g)
       } else if (is.function(hess)) {
         sf$nhev <- sf$nhev + 1L
-        sf$H <- as.matrix(hess(sf$x))
+        H <- hess(sf$x)
+        sf$H <- if (is.function(H)) H else as.matrix(H)
       }
       sf$H_updated <- TRUE
     }
@@ -195,8 +233,12 @@
     sf$H <- hess
     sf$H_updated <- TRUE
     sf$x_prev <- NULL; sf$g_prev <- NULL
+  } else if (fdh) {
+    sf$H <- fd_hess(sf$x, sf$g)
+    sf$H_updated <- TRUE
   } else if (is.function(hess)) {
-    sf$H <- as.matrix(hess(sf$x))
+    H <- hess(sf$x)
+    sf$H <- if (is.function(H)) H else as.matrix(H)
     sf$nhev <- 1L
     sf$H_updated <- TRUE
   }
@@ -265,11 +307,33 @@
     if (st$approx_type == "hess") y_norm2 / ys else ys / y_norm2
   }
   # BFGS: _update_inverse_hessian and _update_hessian
+  # the BLAS calls of SciPy update the upper triangle only, rounded as the
+  # Accelerate kernels of the arm64 wheel: dsyr is fma(alpha x_i, x_j, A_ij)
+  # (exact for every size), dsyr2 two fused steps (closest candidate found)
+  syr <- function(alpha, x, A) {
+    ax <- alpha * x
+    for (j in seq_along(x)) {
+      i <- seq_len(j)
+      A[i, j] <- .spsq_fma(ax[i], x[j], A[i, j])
+    }
+    A
+  }
+  syr2 <- function(alpha, x, y, A) {
+    ax <- alpha * x
+    ay <- alpha * y
+    for (j in seq_along(x)) {
+      i <- seq_len(j)
+      A[i, j] <- .spsq_fma(y[i], ax[j], .spsq_fma(x[i], ay[j], A[i, j]))
+    }
+    A
+  }
   bfgs_inv <- function(ys, Hy, yHy, s) {
-    st$H <- st$H + (outer(s, s) * ((ys + yHy) / ys^2)) - (outer(Hy, s) + outer(s, Hy)) / ys
+    st$H <- syr2(-1.0 / ys, s, Hy, st$H)
+    st$H <- syr((ys + yHy) / ys^2, s, st$H)
   }
   bfgs_hess <- function(ys, Bs, sBs, y) {
-    st$B <- st$B + outer(y, y) / ys - outer(Bs, Bs) / sBs
+    st$B <- syr(1.0 / ys, y, st$B)
+    st$B <- syr(-1.0 / sBs, Bs, st$B)
   }
   update_bfgs <- function(delta_x, delta_grad) {
     if (st$approx_type == "hess") { w <- delta_x; z <- delta_grad } else { w <- delta_grad; z <- delta_x }
@@ -296,16 +360,21 @@
     z_minus_Mw <- z - Mw
     denominator <- sum(w * z_minus_Mw)
     if (abs(denominator) <= min_denominator * sqrt(sum(w * w)) * sqrt(sum(z_minus_Mw * z_minus_Mw))) return(invisible())
-    if (st$approx_type == "hess") st$B <- st$B + outer(z_minus_Mw, z_minus_Mw) / denominator
-    else st$H <- st$H + outer(z_minus_Mw, z_minus_Mw) / denominator
+    if (st$approx_type == "hess") st$B <- syr(1 / denominator, z_minus_Mw, st$B)
+    else st$H <- syr(1 / denominator, z_minus_Mw, st$H)
   }
   st$update <- function(delta_x, delta_grad) {
     if (all(delta_x == 0)) return(invisible())
-    if (all(delta_grad == 0)) return(invisible())
+    if (all(delta_grad == 0)) {
+      warning("delta_grad == 0.0. Check if the approximated function is linear. If the function is linear better ",
+              "results can be obtained by defining the Hessian as zero instead of using quasi-Newton approximations.",
+              call. = FALSE)
+      return(invisible())
+    }
     if (isTRUE(st$first_iteration)) {
       scale <- if (identical(init_scale, "auto")) auto_scale(delta_x, delta_grad) else init_scale
       if (is.matrix(scale)) {
-        if (st$approx_type == "hess") st$B <- scale else st$H <- solve(scale)
+        if (st$approx_type == "hess") st$B <- scale else st$H <- scale
       } else {
         if (st$approx_type == "hess") st$B <- st$B * scale else st$H <- st$H * scale
       }
@@ -313,8 +382,21 @@
     }
     if (kind == "BFGS") update_bfgs(delta_x, delta_grad) else update_sr1(delta_x, delta_grad)
   }
-  st$dot <- function(p) if (st$approx_type == "hess") st$B %*% p else st$H %*% p
-  st$get_matrix <- function() if (st$approx_type == "hess") st$B else st$H
+  # the symmetric matrix of the upper triangle (get_matrix)
+  st$get_matrix <- function() {
+    M <- if (st$approx_type == "hess") st$B else st$H
+    low <- lower.tri(M)
+    M[low] <- t(M)[low]
+    M
+  }
+  # dsymv: the rows summed in order with fused multiply adds (Accelerate
+  # does so up to three variables)
+  st$dot <- function(p) {
+    M <- st$get_matrix()
+    y <- numeric(length(p))
+    for (k in seq_along(p)) y <- .spsq_fma(M[, k], p[k], y)
+    y
+  }
   st$kind <- kind
   class(st) <- c("SpHessianUpdate", "environment")
   st
@@ -704,13 +786,10 @@
     lb <- rep_len(as.numeric(bounds$lb), length(x0)); ub <- rep_len(as.numeric(bounds$ub), length(x0))
     if (any(lb > ub)) stop("An upper bound is less than the corresponding lower bound.", call. = FALSE)
     bounds <- list(lb = lb, ub = ub)
-    if (meth %in% c("tnc", "slsqp", "l-bfgs-b") && all(lb == ub)) {
-      x <- lb
-      return(list(x = x, fun = fs(x), nit = 0L, nfev = 1L, njev = 0L, status = 0L, success = TRUE,
-                  message = "All independent variables were fixed by bounds."))
-    }
+    if (meth %in% c("tnc", "slsqp", "l-bfgs-b") && all(lb == ub)) return(.sp_equal_bounds_result(fs, lb, constraints))
   }
   args <- c(list(fs, x0), options)
+  if (meth %in% c("cobyla", "cobyqa", "trust-constr")) constraints <- .sp_new_constraints(constraints)
   kernel <- c("nelder-mead" = ".sp_neldermead", powell = ".sp_powell", cg = ".sp_cg", bfgs = ".sp_bfgs",
               "newton-cg" = ".sp_newtoncg", "l-bfgs-b" = ".sp_lbfgsb", tnc = ".sp_tnc", cobyla = ".sp_cobyla",
               cobyqa = ".sp_cobyqa", slsqp = ".sp_slsqp", "trust-constr" = ".sp_trust_constr",
@@ -739,13 +818,17 @@
 
 # a nonlinear constraint lb <= fun(x) <= ub (NonlinearConstraint)
 .sp_nonlinear_constraint <- function(fun, lb, ub, jac = "2-point", keep_feasible = FALSE,
-                                     finite_diff_rel_step = NULL) {
+                                     finite_diff_rel_step = NULL, hess = NULL) {
   list(type = "nonlinear", fun = fun, lb = as.numeric(lb), ub = as.numeric(ub), jac = jac,
-       keep_feasible = keep_feasible, finite_diff_rel_step = finite_diff_rel_step)
+       keep_feasible = keep_feasible, finite_diff_rel_step = finite_diff_rel_step, hess = hess)
 }
 
-# product of a Hessian (matrix or quasi Newton update) with a vector
-.sp_hdot <- function(H, p) if (inherits(H, "SpHessianUpdate")) as.numeric(H$dot(p)) else as.numeric(H %*% p)
+# product of a Hessian (matrix, quasi Newton update or linear operator) with a vector
+.sp_hdot <- function(H, p) {
+  if (inherits(H, "SpHessianUpdate")) return(as.numeric(H$dot(p)))
+  if (is.function(H)) return(as.numeric(H(p)))
+  as.numeric(H %*% p)
+}
 
 # the SciPy algorithms whose native port is still missing raise this error
 .scipy_need <- function(fname, label) {
