@@ -9,7 +9,8 @@
 # right-hand side, and the gradient of the scalar lambda' f with respect to
 # the unknowns and the parameters, all from .partials() and compiled with
 # .build_closure(). A problem built from a plain R function uses its
-# Jacobian `jac_fn` when given and central finite differences otherwise.
+# Jacobians `jac_fn` and `paramjac` when given and central finite
+# differences otherwise.
 
 # Central difference step: the cube root of the machine epsilon balances
 # truncation and rounding errors.
@@ -57,8 +58,11 @@
   ujac <- prob$f$jac
   out$jac <- if (is.function(ujac)) function(u, p, t) as.matrix(ujac(u, p, t)) else
     function(u, p, t) .sens_fd_jac(function(z) f(z, p, t), u)
+  # the parameter Jacobian `paramjac` of the problem function when given
+  upjac <- prob$f$paramjac
   out$pjac <- function(u, p, t) {
     if (!np) return(matrix(0, n, 0L))
+    if (is.function(upjac)) return(as.matrix(upjac(u, p, t)))
     J <- .sens_fd_jac(function(q) {
       qq <- p
       qq[] <- q

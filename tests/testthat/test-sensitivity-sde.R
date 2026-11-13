@@ -131,7 +131,7 @@ test_that("RODEAdjointProblem matches Julia", {
   # its last drift evaluation, u(0.55) for RandomEM (du0 = (1.6752235059118823,
   # 1.1432754857128713)); R samples u(0.5), the same scheme otherwise
   sde_check(sol, InterpolatingAdjoint(), c(1.71484463694468, 1.111062280276795),
-            c(0.2029104339613212, -0.850226517808027, 0.09432078427923676, 0.8615147186377601), alg = RandomEM())
+            c(0.20291043396132113, -0.8502265178080268, 0.09432078427923676, 0.86151471863776), alg = RandomEM())
   ap <- RODEAdjointProblem(sol, InterpolatingAdjoint(), t = c(0.5, 1), dgdu_discrete = sde_dg)
   expect_s3_class(ap, "RODEProblem")
   expect_identical(ap$tspan, c(0, 1))

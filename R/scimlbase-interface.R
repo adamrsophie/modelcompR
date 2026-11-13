@@ -652,7 +652,8 @@ requires_additive_noise <- function(alg) (alg$name %||% "") %in% c("SRA1", "SRA2
 isdenseplot <- function(sol) isTRUE(.sol_env(sol)$dense)
 #' @rdname function_wrappers
 #' @export
-has_global_error <- function(alg) FALSE
+# true for the algorithms that fill sol$global_error by SciMLBase's trait (GlobalAdjoint)
+has_global_error <- function(alg) isTRUE(alg$has_global_error)
 #' @rdname function_wrappers
 #' @export
 allowsconsjvp <- function(alg) FALSE

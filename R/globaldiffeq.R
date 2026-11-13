@@ -13,6 +13,9 @@
 # for eps), so the initial step, saving and dense output see the whole state,
 # while the error estimate of the step controller is the increment of eps
 # measured on y. The solution holds y; sol$global_error holds eps.
+#
+# GlobalErrorEstimation (the companion equation estimators) is in
+# R/globaldiffeq-companion.R, GlobalAdjoint in R/globaldiffeq-adjoint.R.
 
 # Tableaus in the y-eps form, the Float64 values of the exact rationals of
 # GlobalDiffEq (tools/globaldiffeq-probe.jl prints them with repr).
@@ -169,7 +172,7 @@
   tab <- .GLEE_TABS[[name]]
   .new_alg(name, tab$order, step = .glee_step(tab),
            init = function(ctx, t, u) list(fsal = ctx$f(u, ctx$p, t)),
-           solve_override = .glee_solve, glee = TRUE, has_global_error = TRUE)
+           solve_override = .glee_solve, glee = TRUE)
 }
 
 #' Methods with global error estimation
@@ -223,19 +226,35 @@ MM5GEE <- function() .glee_alg("MM5GEE")
 #' solution computed with a GLEE method ([GLEE23()], [GLEE24()],
 #' [GLEE35()], [MM5GEE()]): a list matching `sol$u`, whose element `i` is
 #' the estimated global error of `sol$u[[i]]` at `sol$t[i]`;
-#' `global_error_estimate(sol, i)` returns its `i`th element.
+#' `global_error_estimate(sol, i)` returns its `i`th element. For a
+#' [GlobalAdjoint()] solution it returns `sol$global_error`, the estimated
+#' error 2-norms.
 #'
-#' @param sol A solution of a GLEE method.
+#' `global_error_estimate(prob, alg)` with a [GlobalErrorEstimation()]
+#' algorithm solves `prob` and returns the estimated 2-norm of its global
+#' error at the final time.
+#'
+#' @param x A solution of a GLEE method, or an `ODEProblem`.
 #' @param i Index of a saved time.
-#' @param ... Unused.
-#' @return A list of vectors, or one vector.
+#' @param alg A [GlobalErrorEstimation()] algorithm.
+#' @param ... Unused for solutions; options of the forward solve for
+#'   problems.
+#' @param abstol,reltol Tolerances of the forward solve.
+#' @param companion_abstol,companion_reltol Tolerances of the companion
+#'   solve (by default those of `alg`).
+#' @return A list of vectors, one vector, or the estimated error norm.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
 #' sol <- solve(prob, GLEE35(), reltol = 1e-6)
 #' global_error_estimate(sol, 2)
+#' global_error_estimate(prob, GlobalErrorEstimation(Tsit5()), abstol = 1e-5, reltol = 1e-5)
 #' @export
-global_error_estimate <- function(sol, i = NULL, ...) {
-  ge <- if (inherits(sol, "SciMLSolution")) .sol_env(sol)$global_error
+global_error_estimate <- function(x, ...) UseMethod("global_error_estimate")
+
+#' @rdname global_error_estimate
+#' @export
+global_error_estimate.default <- function(x, i = NULL, ...) {
+  ge <- if (inherits(x, "SciMLSolution")) .sol_env(x)$global_error
   if (is.null(ge)) stop("global_error_estimate expects a solution produced by a GLEE method", call. = FALSE)
   if (is.null(i)) ge else ge[[i]]
 }
