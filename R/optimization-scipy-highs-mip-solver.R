@@ -679,7 +679,7 @@
   md$uplocks <- integer(); md$downlocks <- integer()
   md$integer_cols <- integer(); md$implint_cols <- integer()
   md$integral_cols <- integer(); md$continuous_cols <- integer()
-  md$symmetries <- NULL; md$globalOrbits <- NULL
+  md$symmetries <- .hmip_new_HighsSymmetries(); md$globalOrbits <- NULL
   md$feastol <- 0; md$epsilon <- 0; md$heuristic_effort <- 0; md$dispfreq <- 0
   md$analyticCenter <- numeric(); md$firstlpsol <- numeric(); md$rootlpsol <- numeric()
   md$firstlpsolobj <- -Inf
@@ -1188,7 +1188,7 @@
   if (self$upper_limit == Inf) self$analyticCenterComputed <- FALSE
   self$analyticCenterStatus <- "Notset"
   self$analyticCenter <- numeric()
-  self$symmetries <- NULL
+  .hmip_HighsSymmetries_clear(self$symmetries)
   invisible()
 }
 
