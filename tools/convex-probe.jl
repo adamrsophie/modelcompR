@@ -124,6 +124,61 @@ function Clarabel.combined_ds_shift!(cones::Clarabel.CompositeCone{T}, shift::Ve
     HOOK[:shift] = copy(shift)
     return nothing
 end
+# Each KKT solve of the last iteration: the right hand side, the static
+# regularizer, the KKT values (unregularized, as the refinement uses them),
+# the LDL factor D^-1, the solution before refinement and, per refinement
+# iteration, the error norm and the candidate solution. The bodies are those
+# of kktsolver_solve! and _iterative_refinement of Clarabel 0.11.1.
+const KKTLOG = Any[]
+function Clarabel.kktsolver_solve!(kktsolver::Clarabel.DirectLDLKKTSolver{T}, lhsx::Clarabel.Option{AbstractVector{T}},
+        lhsz::Clarabel.Option{AbstractVector{T}}) where {T}
+    (x, b) = (kktsolver.x, kktsolver.b)
+    KKT = kktsolver.KKT
+    rec = Dict{Symbol,Any}(:b => copy(b), :eps => kktsolver.diagonal_regularizer, :KKT => copy(nonzeros(KKT)),
+        :Dinv => copy(kktsolver.ldlsolver.factors.workspace.Dinv), :norms => Float64[], :cands => Vector{Float64}[])
+    Clarabel.solve!(kktsolver.ldlsolver, KKT, x, b)
+    rec[:x0] = copy(x)
+    is_success = if kktsolver.settings.iterative_refinement_enable
+        traced_refinement!(kktsolver, kktsolver.ldlsolver, rec)
+    else
+        all(isfinite, x)
+    end
+    is_success && Clarabel.kktsolver_getlhs!(kktsolver, lhsx, lhsz)
+    rec[:xout] = copy(kktsolver.x)
+    push!(KKTLOG, rec)
+    return is_success
+end
+function traced_refinement!(kktsolver, ldlsolver, rec)
+    (x, b) = (kktsolver.x, kktsolver.b)
+    (e, dx) = (kktsolver.work1, kktsolver.work2)
+    settings = kktsolver.settings
+    KKTsym = kktsolver.KKTsym
+    KKT = kktsolver.KKT
+    normb = norm(b, Inf)
+    norme = Clarabel._get_refine_error!(e, b, KKTsym, x)
+    push!(rec[:norms], norme)
+    isfinite(norme) || return false
+    for i = 1:settings.iterative_refinement_max_iter
+        norme <= settings.iterative_refinement_abstol + settings.iterative_refinement_reltol * normb && break
+        lastnorme = norme
+        Clarabel.solve!(ldlsolver, KKT, dx, e)
+        @. dx += x
+        push!(rec[:cands], copy(dx))
+        norme = Clarabel._get_refine_error!(e, b, KKTsym, dx)
+        push!(rec[:norms], norme)
+        isfinite(norme) || return false
+        improved_ratio = lastnorme / norme
+        if improved_ratio < settings.iterative_refinement_stop_ratio
+            if improved_ratio > one(T)
+                (x, dx) = (dx, x)
+            end
+            break
+        end
+        (x, dx) = (dx, x)
+    end
+    (kktsolver.x, kktsolver.work2) = (x, dx)
+    return true
+end
 isfile(TRACE_PATH) && rm(TRACE_PATH)
 function with_max_iter(alg, k)
     c = alg.optimizer_constructor
@@ -138,6 +193,7 @@ function trace(name, prob, alg, iters)
         for k in 0:iters
             try
                 empty!(HOOK)
+                empty!(KKTLOG)
                 cache = SciMLBase.init(build(prob), with_max_iter(alg, k))
                 # the solver state is read even if the wrapper rejects an early exit
                 try
@@ -170,6 +226,12 @@ function trace(name, prob, alg, iters)
                         hasproperty(K, :H_dual) || continue
                         println(io, join([name, "CONE" * tag, hv(K.H_dual), hv(K.Hs),
                             hv(K.grad), hv(K.z)], "\t"))
+                    end
+                    # the last two KKT solves are the affine and the combined step
+                    for (tag, rec) in zip(("KKTA", "KKTC"), KKTLOG[max(1, end - 1):end])
+                        println(io, join([name, tag * string(k), hv(rec[:b]), hx(rec[:eps]), hv(rec[:KKT]),
+                            hv(rec[:Dinv]), hv(rec[:x0]), hv(rec[:norms]), join(hv.(rec[:cands]), ";"),
+                            hv(rec[:xout])], "\t"))
                     end
                     haskey(HOOK, :shift) && println(io, join([name, "AFF" * string(k), hx(HOOK[:alpha]),
                         hx(HOOK[:sigmamu]), hv(HOOK[:step_z]), hv(HOOK[:step_s]), hv(HOOK[:shift])], "\t"))

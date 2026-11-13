@@ -37,6 +37,52 @@ assign(".cl_get_step_length", function(S, steptype, scaling) {
   a
 }, ns)
 
+# each KKT solve, as the KKTA (affine) and KKTC (combined) lines of the
+# probe: right hand side, static regularizer, KKT values, D^-1, the solution
+# before refinement, the refinement error norms and candidates, the result.
+# The body repeats .cl_kktsolver_solve.
+unlockBinding(".cl_kktsolver_solve", ns)
+assign(".cl_kktsolver_solve", function(ks) {
+  b <- ks$b
+  rec <- list(b = b, eps = ks$diagonal_regularizer %||% 0, KKT = ks$KKT$nzval, Dinv = ks$ldl$Dinv)
+  x <- ns$.qdldl_solve(ks$ldl, b)
+  rec$x0 <- x
+  norms <- numeric(); cands <- numeric()
+  st <- ks$settings
+  ok <- TRUE
+  if (st$iterative_refinement_enable) {
+    refine_err <- function(xi) ns$.cl_symv(ks$KKT, xi, b, -1)
+    normb <- ns$.cl_norminf(b)
+    e <- refine_err(x)
+    norme <- ns$.cl_norminf(e); norms <- c(norms, norme)
+    if (!is.finite(norme)) ok <- FALSE else {
+      for (i in seq_len(st$iterative_refinement_max_iter)) {
+        if (norme <= st$iterative_refinement_abstol + st$iterative_refinement_reltol * normb) break
+        lastnorme <- norme
+        dx <- ns$.qdldl_solve(ks$ldl, e)
+        dx <- dx + x
+        cands <- c(cands, dx)
+        e <- refine_err(dx)
+        norme <- ns$.cl_norminf(e); norms <- c(norms, norme)
+        if (!is.finite(norme)) {
+          ok <- FALSE
+          break
+        }
+        ratio <- lastnorme / norme
+        if (ratio < st$iterative_refinement_stop_ratio) {
+          if (ratio > 1) x <- dx
+          break
+        }
+        x <- dx
+      }
+    }
+  } else ok <- all(is.finite(x))
+  ks$x <- x
+  rec$norms <- norms; rec$cands <- cands; rec$xout <- x
+  hook$kkt <- c(hook$kkt, list(rec))
+  ok
+}, ns)
+
 with_max_iter <- function(alg, k) {
   oc <- alg$optimizer_constructor
   st <- if (is.function(oc)) oc()$settings else oc$settings
@@ -45,6 +91,7 @@ with_max_iter <- function(alg, k) {
 }
 r_iterate <- function(prob, alg, k) {
   hook$aff <- NULL
+  hook$kkt <- NULL
   cache <- init(prob, with_max_iter(alg, k))
   suppressWarnings(solve_integrator(cache))
   S <- cache$model$solver
@@ -59,7 +106,7 @@ r_iterate <- function(prob, alg, k) {
        state = lapply(S$cones$cones, function(K) switch(K$type,
          SecondOrder = list(w = K$w, lambda = K$lambda, eta = K$eta),
          PSDTriangle = list(lambda = K$lambda, R = as.numeric(K$R), Rinv = as.numeric(K$Rinv)), NULL)),
-       aff = hook$aff)
+       aff = hook$aff, kkt = tail(hook$kkt, 2L))
 }
 deep <- function(nm, tag, got, want) {
   d <- mapply(function(a, b) rel(a, num(b)), got, want)
@@ -104,6 +151,14 @@ for (nm in cases) {
       kj <- as.integer(strsplit(sub("^(SOC|PSD)", "", r[[2]]), ":", fixed = TRUE)[[1]])
       st <- r_iterate(prob, alg, kj[1])$state[[kj[2]]]
       deep(nm, r[[2]], st, r[2 + seq_along(st)])
+      next
+    }
+    if (grepl("^KKT[AC]", r[[2]])) {
+      kk <- r_iterate(prob, alg, as.integer(sub("^KKT[AC]", "", r[[2]])))$kkt
+      rec <- kk[[if (startsWith(r[[2]], "KKTA")) 1L else 2L]]
+      want <- r[3:10]
+      want[7] <- gsub(";", ",", want[7], fixed = TRUE)
+      deep(nm, r[[2]], rec, want)
       next
     }
     if (startsWith(r[[2]], "AFF")) {
