@@ -1,9 +1,10 @@
 # scipy.optimize.linprog and scipy.optimize.milp as OptimizationSciPy.jl
-# calls them. SciPy solves both with the HiGHS library (C++); here a dense
-# two phase simplex method with Bland's rule solves the linear programs and
-# a depth first branch and bound solves the mixed integer programs. At a
-# unique optimum the solutions, the objective and the marginals agree with
-# HiGHS; iteration and node counts differ.
+# calls them. The HiGHS methods run the native port of the HiGHS LP
+# presolve, postsolve and simplex solver (R/optimization-scipy-highs-*.R);
+# "highs-ipm" uses the same dual simplex method in place of IPX. milp branches and bounds
+# depth first over node LPs of that solver, without the presolve, cuts and
+# heuristics of the HiGHS MIP solver, so node counts differ. The legacy
+# methods use the dense two phase simplex method with Bland's rule below.
 
 # min c'z subject to A z = b, z >= 0. Returns z, the duals y (the derivative
 # of the optimum with respect to b), the status of linprog (0 optimal,
@@ -132,6 +133,40 @@
   v
 }
 
+# the result of linprog from a solve of .hs_lp_solve, as _linprog_highs
+# assembles it from _highs_wrapper
+.sp_highs_result <- function(sol, n, nub, b_ub, b_eq, lo, hi) {
+  code <- c(Optimal = 7L, Infeasible = 8L, UnboundedOrInfeasible = 9L, Unbounded = 10L,
+            IterationLimit = 14L, SolveError = 4L, Unknown = 15L)[[sol$status]]
+  text <- c(Optimal = "Optimal", Infeasible = "Infeasible", UnboundedOrInfeasible = "Primal infeasible or unbounded",
+            Unbounded = "Unbounded", IterationLimit = "Iteration limit reached", SolveError = "Solve error",
+            Unknown = "Unknown")[[sol$status]]
+  status <- c(Optimal = 0L, Infeasible = 2L, UnboundedOrInfeasible = 4L, Unbounded = 3L,
+              IterationLimit = 1L, SolveError = 4L, Unknown = 4L)[[sol$status]]
+  lead <- c(Optimal = "Optimization terminated successfully. ", Infeasible = "The problem is infeasible. ",
+            UnboundedOrInfeasible = "The problem is unbounded or infeasible. ", Unbounded = "The problem is unbounded. ",
+            IterationLimit = "Iteration limit reached. ", SolveError = "", Unknown = "The HiGHS status code was not recognized. ")[[sol$status]]
+  if (status == 0L) {
+    msg <- paste0(lead, "(HiGHS Status 7: Optimal)")
+  } else {
+    pstat <- if (sol$status %in% c("Infeasible", "UnboundedOrInfeasible")) "None"
+             else if (isTRUE(sol$primal_feasible)) "Feasible" else "Infeasible"
+    msg <- paste0(lead, "(HiGHS Status ", code, ": model_status is ", text, "; primal_status is ", pstat, ")")
+  }
+  res <- list(status = status, message = msg, success = status == 0L, nit = sol$nit)
+  if (status != 0L) return(c(list(x = rep(NaN, n), fun = NaN), res))
+  x <- sol$col_value
+  rhs <- c(b_ub, b_eq)
+  slack_all <- rhs - sol$row_value
+  ml <- ifelse(sol$col_status == "lower", sol$col_dual, 0)
+  mu <- ifelse(sol$col_status == "upper", sol$col_dual, 0)
+  iu <- seq_len(nub); ie <- nub + seq_along(b_eq)
+  c(list(x = x, fun = sol$objective, slack = slack_all[iu], con = slack_all[ie]), res,
+    list(ineqlin = list(residual = slack_all[iu], marginals = sol$row_dual[iu]),
+         eqlin = list(residual = slack_all[ie], marginals = sol$row_dual[ie]),
+         lower = list(residual = x - lo, marginals = ml), upper = list(residual = hi - x, marginals = mu)))
+}
+
 # ScipyLinprog: the cost vector is the objective at u0; bounds default to
 # linprog's x >= 0 when the problem has none
 .scipy_run_linprog <- function(alg, f, x0, lb, ub, opts, kw) {
@@ -145,9 +180,19 @@
   if (is.null(kw$A_ub) != is.null(kw$b_ub)) stop("Both A_ub and b_ub must be provided together", call. = FALSE)
   if (is.null(kw$A_eq) != is.null(kw$b_eq)) stop("Both A_eq and b_eq must be provided together", call. = FALSE)
   maxiter <- if (is.null(opts$maxiters)) Inf else as.integer(opts$maxiters)
+  if (startsWith(alg$method, "highs")) {
+    A_ub <- matrix(as.numeric(kw$A_ub %||% numeric()), ncol = n)
+    A_eq <- matrix(as.numeric(kw$A_eq %||% numeric()), ncol = n)
+    b_ub <- as.numeric(kw$b_ub %||% numeric()); b_eq <- as.numeric(kw$b_eq %||% numeric())
+    sol <- .hs_highs_run(cvec, rbind(A_ub, A_eq), c(rep(-Inf, length(b_ub)), b_eq), c(b_ub, b_eq), lo, hi,
+                        list(iteration_limit = maxiter, presolve = kw$presolve, ptol = kw$primal_feasibility_tolerance,
+                             dtol = kw$dual_feasibility_tolerance,
+                             edge_weight = switch(kw$simplex_dual_edge_weight_strategy %||% "",
+                                                  dantzig = "dantzig", devex = "devex", steepest = "steepest", "dse")))
+    return(.sp_highs_result(sol, n, length(b_ub), b_ub, b_eq, lo, hi))
+  }
   res <- .sp_linprog(cvec, kw$A_ub, kw$b_ub, kw$A_eq, kw$b_eq, lo, hi, maxiter)
-  msgs <- if (startsWith(alg$method, "highs")) .sp_highs_messages else .sp_legacy_lp_messages
-  res$message <- msgs[[as.character(res$status)]]
+  res$message <- .sp_legacy_lp_messages[[as.character(res$status)]]
   res$success <- res$status == 0L
   if (!res$success) {
     res$x <- rep(NaN, n)
@@ -166,16 +211,10 @@
   given <- c(!is.null(kw$A), !is.null(kw$lb_con), !is.null(kw$ub_con))
   if (any(given) && !all(given))
     stop("A, lb_con, and ub_con must all be provided for linear constraints", call. = FALSE)
-  A_ub <- A_eq <- matrix(0, 0, n)
-  b_ub <- b_eq <- numeric()
+  A <- matrix(0, 0, n); lc <- uc <- numeric()
   if (all(given)) {
     A <- matrix(as.numeric(kw$A), ncol = n)
     lc <- rep_len(as.numeric(kw$lb_con), nrow(A)); uc <- rep_len(as.numeric(kw$ub_con), nrow(A))
-    for (i in seq_len(nrow(A))) {
-      if (lc[i] == uc[i]) { A_eq <- rbind(A_eq, A[i, ]); b_eq <- c(b_eq, uc[i]); next }
-      if (is.finite(uc[i])) { A_ub <- rbind(A_ub, A[i, ]); b_ub <- c(b_ub, uc[i]) }
-      if (is.finite(lc[i])) { A_ub <- rbind(A_ub, -A[i, ]); b_ub <- c(b_ub, -lc[i]) }
-    }
   }
   best <- NULL
   nodes <- 0L
@@ -187,9 +226,12 @@
     nodes <- nodes + 1L
     semi <- nd$typ >= 2L
     rlo <- ifelse(semi, pmin(0, nd$lo), nd$lo)
-    r <- .sp_linprog(cvec, A_ub, b_ub, A_eq, b_eq, rlo, nd$hi)
-    if (r$status == 3L) { status <- if (any(typ != 0L)) 4L else 3L; best <- NULL; break }
-    if (r$status != 0L) next
+    sol <- .hs_lp_solve(cvec, A, lc, uc, rlo, nd$hi)
+    if (sol$status %in% c("Unbounded", "UnboundedOrInfeasible")) {
+      status <- if (any(typ != 0L)) 4L else 3L; best <- NULL; break
+    }
+    if (sol$status != "Optimal") next
+    r <- list(x = sol$col_value, fun = sol$objective)
     if (!is.null(best) && r$fun >= best$fun - 1e-9 * max(1, abs(best$fun))) next
     x <- r$x
     frac <- nd$typ %in% c(1L, 3L) & abs(x - round(x)) > 1e-6
