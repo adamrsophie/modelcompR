@@ -84,22 +84,13 @@
   list(dT = (ctx$f(u, ctx$p, t + h) - f0) / h, nf = 1L)
 }
 
-# Factorization of W; NULL when W is singular (issuccess_W false).
-.factorize <- function(W) {
-  W[!is.finite(W)] <- NaN
-  if (anyNA(W)) return(NULL)
-  q <- qr(W)
-  if (q$rank < ncol(W)) {
-    # the rank test of LINPACK (tol 1e-7) also rejects the nonsingular but
-    # badly scaled W of index-2 DAEs; like the LU of Julia, fail only on an
-    # exactly singular factor
-    q <- qr(W, LAPACK = TRUE)
-    if (any(diag(q$qr) == 0)) return(NULL)
-  }
-  q
-}
+# Factorization of W; NULL when W is not finite or singular (issuccess_W
+# false). The LU of Julia (default_factorize, R/solvers-rosenbrock.R): on
+# the badly conditioned W of a stiff DAE a QR solve differs from it far
+# beyond rounding.
+.factorize <- function(W) .rosen_lu(W)
 
-.wsolve <- function(Wf, b) as.numeric(qr.coef(Wf, b))
+.wsolve <- function(Wf, b) .rosen_lusolve(Wf, b)
 
 .mass_mul <- function(M, x) if (is.null(M)) x else as.numeric(M %*% x)
 

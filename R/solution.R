@@ -217,7 +217,12 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   out <- matrix(NA_real_, length(tq), n)
   colnames(out) <- colnames(env$U)
   if (is.null(steps) || !length(steps)) {
-    # linear interpolation between saved points
+    # linear interpolation between saved points; a solve that stopped at its
+    # first point holds that state
+    if (length(env$t) == 1L) {
+      out[] <- rep(env$U[1L, ], each = length(tq))
+      return(out)
+    }
     for (j in seq_len(n)) out[, j] <- stats::approx(env$t, env$U[, j], xout = tq, rule = 2, ties = "ordered")$y
     return(out)
   }

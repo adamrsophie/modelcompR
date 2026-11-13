@@ -291,6 +291,8 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
   if (inherits(sys, "AbstractSciMLOperator")) sys <- .operator_odefunction(sys)
   if (is.function(sys) || inherits(sys, "ODEFunction")) {
     f <- if (inherits(sys, "ODEFunction")) sys else ODEFunction(sys, mass_matrix = mass_matrix)
+    # a mass matrix given here applies to an ODEFunction too
+    if (!is.null(mass_matrix)) f$mass_matrix <- mass_matrix
     if (is.null(u0)) u0 <- op
     # ODEProblem(f, u0, tspan, p) as in SciMLBase: an unnamed fourth argument is p
     if (is.null(p) && length(dots) && (is.null(names(dots)) || !nzchar(names(dots)[1L]))) {

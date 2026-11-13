@@ -32,9 +32,13 @@
   cache$nl <- .new_nlsolver()
   cache$spec <- spec
   cache$fsal_val <- ctx$f(u, ctx$p, t)
-  # integrator.reeval_fsal: the driver evaluates `fsal` again after a step
-  # limiter and .sdirk_on_event after an event; the active binding records it
+  # integrator.reeval_fsal: .sdirk_on_event evaluates `fsal` again after an
+  # event (the active binding records it); after a step limiter the driver
+  # sets reeval_fsal and the next step evaluates it (reset_fsal! of
+  # update_fsal!, which the last step never reaches)
   cache$fsal_ext <- FALSE
+  cache$defer_fsal <- TRUE
+  cache$reeval_fsal <- FALSE
   makeActiveBinding("fsal", function(v) {
     if (missing(v)) return(cache$fsal_val)
     cache$fsal_val <- v
@@ -94,15 +98,16 @@
   is_imex <- tab$split && inherits(ctx$fobj, "SplitFunction")
   cnt <- list(nf = 0L, nf2 = 0L, njacs = 0L, nsolve = 0L, nw = 0L)
   eig <- NULL
-  # update_fsal! of the accepted step before: a method restricted to
-  # diagonal mass matrices evaluates f again when it is not adaptive, unless
-  # an event or a step limiter already did
-  reeval <- isTRUE(ctx$derivative_discontinuity) || cache$fsal_ext
-  if (cache$reset_pending && !cache$fsal_ext) {
+  # update_fsal! of the accepted step before: f is evaluated again after a
+  # step limiter and, for a method restricted to diagonal mass matrices, when
+  # it is not adaptive, unless an event already did
+  reeval <- isTRUE(ctx$derivative_discontinuity) || cache$fsal_ext || cache$reeval_fsal
+  if ((cache$reset_pending || cache$reeval_fsal) && !cache$fsal_ext) {
     cache$fsal_val <- ctx$f(u, p, t)
     cnt$nf <- 1L
   }
   cache$reset_pending <- FALSE
+  cache$reeval_fsal <- FALSE
   cache$fsal_ext <- FALSE
   fsalfirst <- cache$fsal_val
   # the nonlinear solver sees f1 of an IMEX split and the whole f otherwise;
@@ -117,7 +122,8 @@
   first <- TRUE
   fail <- function() {
     cache$last_stepfail <- TRUE
-    c(cnt, list(fail = TRUE, u = u, cache = cache, eigen_est = eig))
+    # force_stepfail: _loopfooter! does not count it in nreject
+    c(cnt, list(fail = TRUE, nreject = 0L, u = u, cache = cache, eigen_est = eig))
   }
   stage <- function(z, tmp, ci) {
     r <- .nlsolve(nl, cx, t, dt, z, tmp, gam, 1, .fma(ci, dt, t), u, method = "dirk",
