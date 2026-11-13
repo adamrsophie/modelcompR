@@ -419,6 +419,9 @@ BranchAndBound <- function(relaxation = NULL, max_nodes = 1000L, int_tol = 1e-6,
     nodes <- nodes + 1L
     sub <- a
     sub$int <- rep(FALSE, n)
+    # the objective of `a` is already in the minimizing sense (solve wrapped
+    # it); the relaxation must not flip it again
+    sub$sense <- MinSense
     sub$lb <- node$lb; sub$ub <- node$ub
     sub$u0 <- stats::setNames(node$x, names(a$u0))
     sol <- tryCatch(do.call(solve, c(list(sub, relax), opts)), error = function(e) NULL)

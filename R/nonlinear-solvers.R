@@ -40,13 +40,18 @@ print.SteadyStateAlgorithm <- function(x, ...) print.NonlinearAlgorithm(x, ...)
 #' * `NewtonRaphson()` is Newton's method; `linesearch = "BackTracking"`
 #'   adds a backtracking line search on the residual norm.
 #'   `SimpleNewtonRaphson()` is the same iteration without options.
-#' * `TrustRegion()` is a dogleg trust region method. `radius_update_scheme`
-#'   selects how the radius changes, with the constants of NonlinearSolve's
-#'   `RadiusUpdateSchemes`: `"Simple"` (the default here), `"NLsolve"`,
-#'   `"Fan"` and `"Bastin"`. `nlsolve_update_rule = TRUE` is
-#'   `radius_update_scheme = "NLsolve"`. NonlinearSolve's own default solves
-#'   the subproblem with More's method, which is not ported; the dogleg
-#'   subproblem is its `TrustRegionDogleg()`.
+#' * `TrustRegion()` is the trust region method of NonlinearSolve, a
+#'   [GeneralizedFirstOrderAlgorithm()] with a [GenericTrustRegionScheme()].
+#'   `subproblem` solves the trust region subproblem: `TrustRegionSubproblem$More`
+#'   (the default, More's nearly exact step of MINPACK's `lmpar`, see
+#'   [MoreTrustRegionDescent()]), `TrustRegionSubproblem$Dogleg` (the dogleg
+#'   path) or a descent. `radius_update_scheme` selects how the radius
+#'   changes, one of `RadiusUpdateSchemes` (`"Simple"`, `"NLsolve"`,
+#'   `"NocedalWright"`, `"Hei"`, `"Yuan"`, `"More"`, `"Bastin"`, `"Fan"`);
+#'   it defaults to `"More"` with More's subproblem and to `"Simple"`
+#'   otherwise. `SimpleTrustRegion()` is the dogleg method of
+#'   SimpleNonlinearSolve, where `nlsolve_update_rule = TRUE` selects the
+#'   radius update of NLsolve.
 #' * `LevenbergMarquardt()` is the damped least squares method, and
 #'   `GaussNewton()` the undamped one; both also solve
 #'   `NonlinearLeastSquaresProblem`s.
@@ -79,9 +84,19 @@ print.SteadyStateAlgorithm <- function(x, ...) print.NonlinearAlgorithm(x, ...)
 #' @param linesearch `NULL` or `"BackTracking"`.
 #' @param nlsolve_update_rule Use the trust region radius update of NLsolve.
 #' @param max_trust_radius,initial_trust_radius Trust region radii; chosen
-#'   from the initial residual when `NULL`.
-#' @param radius_update_scheme `"Simple"`, `"NLsolve"`, `"Fan"` or
-#'   `"Bastin"`.
+#'   from the initial residual and the scheme when `NULL` or 0.
+#' @param radius_update_scheme One of `RadiusUpdateSchemes`; `NULL` picks
+#'   the default of the subproblem.
+#' @param subproblem `TrustRegionSubproblem$More`,
+#'   `TrustRegionSubproblem$Dogleg` or a descent such as
+#'   `MoreTrustRegionDescent(scaling = TrustRegionScaling$Auto)`.
+#' @param step_threshold,shrink_threshold,expand_threshold,shrink_factor,expand_factor
+#'   Settings of the [GenericTrustRegionScheme()]; 0 selects the scheme's
+#'   own value.
+#' @param max_shrink_times Largest number of consecutive radius shrinks.
+#' @param concrete_jac,linsolve,autodiff,vjp_autodiff,jvp_autodiff,jacobian_reuse
+#'   Options of the Julia signature; Jacobians come from the problem or from
+#'   finite differences.
 #' @param damping_initial Initial damping of Levenberg Marquardt.
 #' @param max_resets Largest number of Jacobian resets of the quasi Newton
 #'   methods before giving up.
@@ -115,19 +130,45 @@ NewtonRaphson <- function(linesearch = NULL) .nl_alg("NewtonRaphson", linesearch
 SimpleNewtonRaphson <- function() .nl_alg("SimpleNewtonRaphson", linesearch = NULL)
 #' @rdname nonlinear_algorithms
 #' @export
-TrustRegion <- function(nlsolve_update_rule = FALSE, max_trust_radius = NULL, initial_trust_radius = NULL,
-                        radius_update_scheme = NULL) {
-  scheme <- radius_update_scheme %||% if (isTRUE(nlsolve_update_rule)) "NLsolve" else "Simple"
-  scheme <- match.arg(scheme, c("Simple", "NLsolve", "Fan", "Bastin"))
-  .nl_alg("TrustRegion", radius_update_scheme = scheme, nlsolve_update_rule = scheme == "NLsolve",
-          max_trust_radius = max_trust_radius, initial_trust_radius = initial_trust_radius)
+TrustRegion <- function(concrete_jac = NULL, linsolve = NULL, radius_update_scheme = NULL,
+                        subproblem = TrustRegionSubproblem$More, max_trust_radius = 0, initial_trust_radius = 0,
+                        step_threshold = 1 / 10000, shrink_threshold = 1 / 4, expand_threshold = 3 / 4,
+                        shrink_factor = 1 / 4, expand_factor = 2, max_shrink_times = 32L, autodiff = NULL,
+                        vjp_autodiff = NULL, jvp_autodiff = NULL, jacobian_reuse = NULL) {
+  # NonlinearSolveFirstOrder trust_region.jl: the subproblem picks the
+  # descent and the default radius update
+  if (inherits(subproblem, "AbstractDescentDirection")) {
+    descent <- subproblem
+    default_scheme <- if (inherits(subproblem, "MoreTrustRegionDescent")) "More" else "Simple"
+  } else if (identical(subproblem, TrustRegionSubproblem$More)) {
+    descent <- MoreTrustRegionDescent(linsolve = linsolve)
+    default_scheme <- "More"
+  } else if (identical(subproblem, TrustRegionSubproblem$Dogleg)) {
+    descent <- Dogleg(linsolve = linsolve)
+    default_scheme <- "Simple"
+  } else {
+    stop("Unknown `subproblem = ", format(subproblem), "`. Expected a `TrustRegionSubproblem` or an ",
+         "`AbstractDescentDirection`.", call. = FALSE)
+  }
+  scheme <- radius_update_scheme %||% default_scheme
+  scheme <- match.arg(scheme, unlist(RadiusUpdateSchemes, use.names = FALSE))
+  tr <- GenericTrustRegionScheme(method = scheme, max_trust_radius = max_trust_radius,
+                                 initial_trust_radius = initial_trust_radius, step_threshold = step_threshold,
+                                 shrink_threshold = shrink_threshold, expand_threshold = expand_threshold,
+                                 shrink_factor = shrink_factor, expand_factor = expand_factor)
+  a <- GeneralizedFirstOrderAlgorithm(descent = descent, trustregion = tr, max_shrink_times = max_shrink_times,
+                                      autodiff = autodiff, jvp_autodiff = jvp_autodiff, vjp_autodiff = vjp_autodiff,
+                                      concrete_jac = concrete_jac, jacobian_reuse = jacobian_reuse,
+                                      name = "TrustRegion")
+  a$radius_update_scheme <- scheme
+  a
 }
 #' @rdname nonlinear_algorithms
 #' @export
 SimpleTrustRegion <- function(nlsolve_update_rule = FALSE, max_trust_radius = NULL, initial_trust_radius = NULL) {
-  alg <- TrustRegion(nlsolve_update_rule, max_trust_radius, initial_trust_radius)
-  alg$name <- "SimpleTrustRegion"
-  alg
+  .nl_alg("SimpleTrustRegion", radius_update_scheme = if (isTRUE(nlsolve_update_rule)) "NLsolve" else "Simple",
+          nlsolve_update_rule = isTRUE(nlsolve_update_rule), max_trust_radius = max_trust_radius,
+          initial_trust_radius = initial_trust_radius)
 }
 #' @rdname nonlinear_algorithms
 #' @export
@@ -707,7 +748,7 @@ FastShortcutNLLSPolyalg <- function() {
     NewtonRaphson = , SimpleNewtonRaphson = , GaussNewton =
       .nl_newton(F, J, x0, abstol, maxiters, lb, ub, linesearch = identical(alg$linesearch, "BackTracking"),
                  post = post, ls = ls),
-    TrustRegion = , SimpleTrustRegion =
+    SimpleTrustRegion =
       .nl_trust_region(F, J, x0, abstol, maxiters, lb, ub,
                        scheme = alg$radius_update_scheme %||% (if (isTRUE(alg$nlsolve_update_rule)) "NLsolve" else "Simple"),
                        max_radius = alg$max_trust_radius, initial_radius = alg$initial_trust_radius,
@@ -719,6 +760,18 @@ FastShortcutNLLSPolyalg <- function() {
                               post = post, ls = ls),
     if (!is.null(alg$run)) alg$run(F, J, x0, opts, lb, ub, ls)
     else stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE))
+}
+
+# _default_bounded_alg of NonlinearSolve (src/default.jl and
+# NonlinearSolveFirstOrder solve.jl)
+.nl_default_bounded_alg <- function(opts)
+  SobolMultistart(FastShortcutBoundedPolyalg(must_support_postcondition = !is.null(opts$postcondition)))
+
+# NonlinearSolveBase's solve: an algorithm without native bounds runs on the
+# transformed unbounded problem (bounds_transform.jl)
+.nl_solve_bounds <- function(alg, fns, a, opts, ls) {
+  if (.nlbt_needed(alg, a$lb, a$ub)) return(.nlbt_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls))
+  .nl_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls = ls)
 }
 
 .nl_problem_fns <- function(prob) {
@@ -760,11 +813,12 @@ FastShortcutNLLSPolyalg <- function() {
 #' @name solve_nonlinear
 #' @export
 solve.NonlinearProblem <- function(a, b, ...) {
-  alg <- if (missing(b) || is.null(b)) .nl_default_alg(a$u0, a$f$jac) else b
-  if (!inherits(alg, "NonlinearAlgorithm")) stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE)
   opts <- .nl_opts(a, list(...))
+  alg <- if (!missing(b) && !is.null(b)) b else if (!is.null(a$lb) || !is.null(a$ub))
+    .nl_default_bounded_alg(opts) else .nl_default_alg(a$u0, a$f$jac)
+  if (!inherits(alg, "NonlinearAlgorithm")) stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE)
   fns <- .nl_problem_fns(a)
-  res <- .nl_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls = FALSE)
+  res <- .nl_solve_bounds(alg, fns, a, opts, ls = FALSE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
                    stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
                    extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))
@@ -773,11 +827,12 @@ solve.NonlinearProblem <- function(a, b, ...) {
 #' @rdname solve_nonlinear
 #' @export
 solve.NonlinearLeastSquaresProblem <- function(a, b, ...) {
-  alg <- if (missing(b) || is.null(b)) FastShortcutNLLSPolyalg() else b
-  if (!inherits(alg, "NonlinearAlgorithm")) stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE)
   opts <- .nl_opts(a, list(...))
+  alg <- if (!missing(b) && !is.null(b)) b else if (!is.null(a$lb) || !is.null(a$ub))
+    .nl_default_bounded_alg(opts) else FastShortcutNLLSPolyalg()
+  if (!inherits(alg, "NonlinearAlgorithm")) stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE)
   fns <- .nl_problem_fns(a)
-  res <- .nl_run(alg, fns$F, fns$J, a$u0, opts, a$lb, a$ub, ls = TRUE)
+  res <- .nl_solve_bounds(alg, fns, a, opts, ls = TRUE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
                    stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
                    extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))

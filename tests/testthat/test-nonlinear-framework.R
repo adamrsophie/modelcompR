@@ -69,3 +69,24 @@ test_that("more bracketing algorithms", {
   for (alg in list(Alefeld(), ModAB(), Ridder(), Muller()))
     expect_equal(solve(prob, alg, abstol = 1e-12)$u, 2^(1 / 3), tolerance = 1e-9, info = alg$name)
 })
+
+test_that("TrustRegion takes the defaults of NonlinearSolveFirstOrder", {
+  tr <- TrustRegion()
+  expect_s3_class(tr$descent, "MoreTrustRegionDescent")
+  expect_identical(tr$trustregion$method, "More")
+  expect_equal(tr$trustregion$step_threshold, 1e-4)
+  expect_equal(c(tr$trustregion$shrink_threshold, tr$trustregion$expand_threshold, tr$trustregion$shrink_factor,
+                 tr$trustregion$expand_factor), c(1 / 4, 3 / 4, 1 / 4, 2))
+  td <- TrustRegion(subproblem = TrustRegionSubproblem$Dogleg)
+  expect_s3_class(td$descent, "Dogleg")
+  expect_identical(td$trustregion$method, "Simple")
+  expect_identical(TrustRegionDogleg()$trustregion$method, "Simple")
+  expect_identical(TrustRegion(subproblem = MoreTrustRegionDescent(scaling = TrustRegionScaling$Auto))$descent$scaling,
+                   "Auto")
+  expect_identical(TrustRegion(radius_update_scheme = "Fan")$trustregion$method, "Fan")
+  expect_error(TrustRegion(subproblem = "Cauchy"), "Unknown `subproblem")
+  expect_error(TrustRegionDogleg(subproblem = TrustRegionSubproblem$More), "fixes `subproblem")
+  sol <- solve(nl_prob(), TrustRegion())
+  expect_identical(sol$retcode, "Success")
+  expect_equal(as.numeric(sol$u), c(1, 1), tolerance = 1e-10)
+})

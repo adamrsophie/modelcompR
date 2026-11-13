@@ -20,10 +20,22 @@ NewtonRaphson(linesearch = NULL)
 SimpleNewtonRaphson()
 
 TrustRegion(
-  nlsolve_update_rule = FALSE,
-  max_trust_radius = NULL,
-  initial_trust_radius = NULL,
-  radius_update_scheme = NULL
+  concrete_jac = NULL,
+  linsolve = NULL,
+  radius_update_scheme = NULL,
+  subproblem = TrustRegionSubproblem$More,
+  max_trust_radius = 0,
+  initial_trust_radius = 0,
+  step_threshold = 1/10000,
+  shrink_threshold = 1/4,
+  expand_threshold = 3/4,
+  shrink_factor = 1/4,
+  expand_factor = 2,
+  max_shrink_times = 32L,
+  autodiff = NULL,
+  vjp_autodiff = NULL,
+  jvp_autodiff = NULL,
+  jacobian_reuse = NULL
 )
 
 SimpleTrustRegion(
@@ -61,13 +73,25 @@ FastShortcutNLLSPolyalg()
 \arguments{
 \item{linesearch}{\code{NULL} or \code{"BackTracking"}.}
 
-\item{nlsolve_update_rule}{Use the trust region radius update of NLsolve.}
+\item{concrete_jac, linsolve, autodiff, vjp_autodiff, jvp_autodiff, jacobian_reuse}{Options of the Julia signature; Jacobians come from the problem or from
+finite differences.}
+
+\item{radius_update_scheme}{One of \code{RadiusUpdateSchemes}; \code{NULL} picks
+the default of the subproblem.}
+
+\item{subproblem}{\code{TrustRegionSubproblem$More},
+\code{TrustRegionSubproblem$Dogleg} or a descent such as
+\code{MoreTrustRegionDescent(scaling = TrustRegionScaling$Auto)}.}
 
 \item{max_trust_radius, initial_trust_radius}{Trust region radii; chosen
-from the initial residual when \code{NULL}.}
+from the initial residual and the scheme when \code{NULL} or 0.}
 
-\item{radius_update_scheme}{\code{"Simple"}, \code{"NLsolve"}, \code{"Fan"} or
-\code{"Bastin"}.}
+\item{step_threshold, shrink_threshold, expand_threshold, shrink_factor, expand_factor}{Settings of the \code{\link[=GenericTrustRegionScheme]{GenericTrustRegionScheme()}}; 0 selects the scheme's
+own value.}
+
+\item{max_shrink_times}{Largest number of consecutive radius shrinks.}
+
+\item{nlsolve_update_rule}{Use the trust region radius update of NLsolve.}
 
 \item{damping_initial}{Initial damping of Levenberg Marquardt.}
 
@@ -103,13 +127,18 @@ NonlinearSolve.jl.
 \item \code{NewtonRaphson()} is Newton's method; \code{linesearch = "BackTracking"}
 adds a backtracking line search on the residual norm.
 \code{SimpleNewtonRaphson()} is the same iteration without options.
-\item \code{TrustRegion()} is a dogleg trust region method. \code{radius_update_scheme}
-selects how the radius changes, with the constants of NonlinearSolve's
-\code{RadiusUpdateSchemes}: \code{"Simple"} (the default here), \code{"NLsolve"},
-\code{"Fan"} and \code{"Bastin"}. \code{nlsolve_update_rule = TRUE} is
-\code{radius_update_scheme = "NLsolve"}. NonlinearSolve's own default solves
-the subproblem with More's method, which is not ported; the dogleg
-subproblem is its \code{TrustRegionDogleg()}.
+\item \code{TrustRegion()} is the trust region method of NonlinearSolve, a
+\code{\link[=GeneralizedFirstOrderAlgorithm]{GeneralizedFirstOrderAlgorithm()}} with a \code{\link[=GenericTrustRegionScheme]{GenericTrustRegionScheme()}}.
+\code{subproblem} solves the trust region subproblem: \code{TrustRegionSubproblem$More}
+(the default, More's nearly exact step of MINPACK's \code{lmpar}, see
+\code{\link[=MoreTrustRegionDescent]{MoreTrustRegionDescent()}}), \code{TrustRegionSubproblem$Dogleg} (the dogleg
+path) or a descent. \code{radius_update_scheme} selects how the radius
+changes, one of \code{RadiusUpdateSchemes} (\code{"Simple"}, \code{"NLsolve"},
+\code{"NocedalWright"}, \code{"Hei"}, \code{"Yuan"}, \code{"More"}, \code{"Bastin"}, \code{"Fan"});
+it defaults to \code{"More"} with More's subproblem and to \code{"Simple"}
+otherwise. \code{SimpleTrustRegion()} is the dogleg method of
+SimpleNonlinearSolve, where \code{nlsolve_update_rule = TRUE} selects the
+radius update of NLsolve.
 \item \code{LevenbergMarquardt()} is the damped least squares method, and
 \code{GaussNewton()} the undamped one; both also solve
 \code{NonlinearLeastSquaresProblem}s.

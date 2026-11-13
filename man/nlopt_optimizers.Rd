@@ -29,30 +29,49 @@ its number.}
 The interface of OptimizationNLopt.jl: \code{Algorithm(name)} is an NLopt
 algorithm identifier such as \code{"LD_LBFGS"} (also given by its number in
 the NLopt enumeration, from 0), \code{NLopt} holds a constructor for each
-identifier (\code{NLopt$LN_COBYLA()}), and \code{Opt(algorithm, n)} is an optimizer
-for \code{n} unknowns whose settings (\code{xtol_rel}, \code{xtol_abs}, \code{ftol_rel},
-\code{ftol_abs}, \code{maxeval}, \code{maxtime}, \code{stopval}, \code{initial_step},
-\code{local_optimizer}, \code{lower_bounds}, \code{upper_bounds}) are fields set with
-\verb{$<-}. An algorithm or an \code{Opt} is passed to \code{\link[=solve]{solve()}}.
+identifier (\code{NLopt$LN_COBYLA()}) and NLopt's \code{srand(seed)} and
+\code{srand_time()}, and \code{Opt(algorithm, n)} is an optimizer for \code{n} unknowns
+whose settings (\code{xtol_rel}, \code{xtol_abs}, \code{ftol_rel}, \code{ftol_abs},
+\code{maxeval}, \code{maxtime}, \code{stopval}, \code{initial_step}, \code{local_optimizer},
+\code{lower_bounds}, \code{upper_bounds}, \code{population}, \code{vector_storage} and the
+algorithm parameters \code{params}) are fields set with \verb{$<-}. An algorithm
+or an \code{Opt} is passed to \code{\link[=solve]{solve()}}.
 }
 \details{
-The NLopt library is not available to modelcompR, so each algorithm runs a
-native kernel of the package that implements the same method:
-\code{LN_NELDERMEAD} the Nelder Mead simplex, \code{LN_COBYLA} COBYLA (PRIMA),
-\code{LD_LBFGS} and \code{LD_LBFGS_NOCEDAL} limited memory BFGS (L-BFGS-B). Results
-agree with NLopt at the solution, not step by step. The other identifiers
-raise an error on \code{\link[=solve]{solve()}} until their kernels are ported.
+The algorithms are native R ports of the C code of NLopt 2.11.0, so they
+take the steps of NLopt: \code{LN_NELDERMEAD} (the Nelder Mead simplex with
+bounds), \code{LN_SBPLX} (Rowan's subplex), \code{GN_CRS2_LM} (controlled random
+search), \code{GN_ESCH} (an evolutionary strategy), \code{GN_ISRES} (stochastic
+ranking evolution), \code{LD_MMA} and \code{LD_CCSAQ} (conservative convex
+separable approximations), the augmented Lagrangian family (\code{AUGLAG},
+\code{AUGLAG_EQ}, \code{LN_AUGLAG}, \code{LN_AUGLAG_EQ}, \code{LD_AUGLAG}, \code{LD_AUGLAG_EQ}) and
+the multi level single linkage family (\code{G_MLSL}, \code{G_MLSL_LDS}, \code{GN_MLSL},
+\code{GD_MLSL}, \code{GN_MLSL_LDS}, \code{GD_MLSL_LDS}). \code{LD_LBFGS_NOCEDAL} has no
+implementation in NLopt and returns \code{INVALID_ARGS} (a \code{Failure}).
+\code{LN_COBYLA} and \code{LD_LBFGS} run stand in kernels of the package (COBYLA
+of PRIMA, L-BFGS-B) whose steps differ from NLopt, and the other
+identifiers raise an error on \code{\link[=solve]{solve()}} until their ports land. The
+stochastic algorithms draw from NLopt's Mersenne Twister, seeded by
+\code{NLopt$srand(seed)} (from the clock otherwise).
 
 The constraints \verb{lcons <= cons(u) <= ucons} become NLopt's equality
 constraints \code{cons(u) - lcons = 0} (when \code{lcons == ucons}) and inequality
-constraints \code{cons(u) - ucons <= 0} and \code{lcons - cons(u) <= 0}. \code{maxiters}
-sets \code{maxeval}, \code{abstol} sets \code{ftol_abs} and \code{reltol} sets \code{ftol_rel}.
+constraints \code{cons(u) - ucons <= 0} and \code{lcons - cons(u) <= 0}, with the
+tolerance \code{cons_tol} (default \code{1e-6}). \code{maxiters} sets \code{maxeval},
+\code{maxtime} sets \code{maxtime}, \code{abstol} sets \code{ftol_abs} and \code{reltol} sets
+\code{ftol_rel}; \code{local_method}, \code{local_maxiters}, \code{local_maxtime} and
+\code{local_options} configure the local optimizer of the AUGLAG and MLSL
+algorithms, and any other option of \code{\link[=solve]{solve()}} becomes an algorithm
+parameter (NLopt's \code{nlopt_set_param}). The \code{stopval} of an \code{Opt} stops
+the search at the first point at least that good, and \code{maxtime} after
+that many seconds (return codes \code{STOPVAL_REACHED}, a \code{Success}, and
+\code{MAXTIME_REACHED}, \code{MaxTime}).
 }
 \examples{
 prob <- OptimizationProblem(function(u, p) (u[1] - 1) * (u[1] - 1) + 2 * (u[2] + 1) * (u[2] + 1),
                             c(0, 0), numeric())
 solve(prob, NLopt$LN_NELDERMEAD(), maxiters = 400)$u
-opt <- Opt("LN_COBYLA", 2)
+opt <- Opt("LN_SBPLX", 2)
 opt$xtol_rel <- 1e-8
 solve(prob, opt)$u
 }

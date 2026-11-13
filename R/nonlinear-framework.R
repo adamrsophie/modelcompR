@@ -144,17 +144,27 @@ GeneralizedFirstOrderAlgorithm <- function(descent = NewtonDescent(), linesearch
 
 #' @rdname composable_nonlinear
 #' @export
-TrustRegionDogleg <- function(radius_update_scheme = RadiusUpdateSchemes$Simple, ...)
-  GeneralizedFirstOrderAlgorithm(descent = Dogleg(), trustregion = GenericTrustRegionScheme(radius_update_scheme, ...),
-                                 name = "TrustRegionDogleg")
+TrustRegionDogleg <- function(subproblem = TrustRegionSubproblem$Dogleg, ...) {
+  # [TrustRegion()] with the dogleg subproblem (trust_region.jl)
+  if (!(identical(subproblem, TrustRegionSubproblem$Dogleg) || inherits(subproblem, "Dogleg")))
+    stop("`TrustRegionDogleg` fixes `subproblem = TrustRegionSubproblem.Dogleg`; use `TrustRegion(; subproblem)` ",
+         "to select a different subproblem.", call. = FALSE)
+  TrustRegion(subproblem = subproblem, ...)
+}
 
 #' @rdname composable_nonlinear
-#' @param radius_update_scheme Radius update scheme.
+#' @param subproblem The trust region subproblem: a member of
+#'   `TrustRegionSubproblem` or a descent.
 #' @export
-TrustRegionRobust <- function(radius_update_scheme = RadiusUpdateSchemes$More, ...)
-  GeneralizedFirstOrderAlgorithm(descent = MoreTrustRegionDescent(scaling = TrustRegionScaling$Auto),
-                                 trustregion = GenericTrustRegionScheme(radius_update_scheme, ...),
-                                 name = "TrustRegionRobust")
+TrustRegionRobust <- function(subproblem = MoreTrustRegionDescent(), ...) {
+  # [TrustRegion()] with More's subproblem; its robust sparse linear solver
+  # (a column pivoted sparse QR of the augmented system) only changes sparse
+  # Jacobians, and the dense path is MINPACK's lmpar either way
+  if (!inherits(subproblem, "MoreTrustRegionDescent"))
+    stop("`TrustRegionRobust` fixes `subproblem`'s `linsolve` to `RobustTrustRegionLinsolve()`; use ",
+         "`TrustRegion(; subproblem)` to select a different subproblem solver.", call. = FALSE)
+  TrustRegion(subproblem = subproblem, ...)
+}
 
 #' @rdname composable_nonlinear
 #' @export
@@ -359,8 +369,13 @@ PseudoTransient <- function(alpha_initial = 1e-3, linesearch = NULL, mass_matrix
       r <- .nlf_tr_update(st, F, J, x, fx, Jx, du, d)
       st <- r$st
       if (r$accepted) { x <- .nl_project(r$x, lb, ub); fx <- if (identical(x, r$x)) r$fx else F(x) }
-      else if (st$shrink_counter > alg$max_shrink_times) return(.nlf_finish(tc, x, fx, "ShrinkThresholdExceeded", it))
-      else next
+      else {
+        # a rejected step still reaches the termination check (solve.jl
+        # step!), with the state unchanged; it overrides a shrink stop
+        if (.term_check(tc, fx, x, xprev)) return(.nlf_finish(tc, x, fx, "Terminated", it))
+        if (st$shrink_counter > alg$max_shrink_times) return(.nlf_finish(tc, x, fx, "ShrinkThresholdExceeded", it))
+        next
+      }
     } else {
       a <- 1
       if (!is.null(alg$linesearch)) {

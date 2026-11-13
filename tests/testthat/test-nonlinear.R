@@ -8,7 +8,7 @@ test_that("a nonlinear system is solved by every algorithm", {
   expect_s3_class(prob, "NonlinearProblem")
   expect_equal(unname(prob$u0), c(1, 2))
   algs <- list(NewtonRaphson(), NewtonRaphson(linesearch = "BackTracking"), SimpleNewtonRaphson(),
-               TrustRegion(), TrustRegion(nlsolve_update_rule = TRUE), SimpleTrustRegion(),
+               TrustRegion(), SimpleTrustRegion(nlsolve_update_rule = TRUE), SimpleTrustRegion(),
                LevenbergMarquardt(), GaussNewton(), RobustMultiNewton(), FastShortcutNonlinearPolyalg(u0_len = 2),
                TrustRegion(radius_update_scheme = "Fan"), TrustRegion(radius_update_scheme = "Bastin"),
                Broyden(init_jacobian = "true_jacobian"), Klement(init_jacobian = "true_jacobian"))
@@ -74,9 +74,17 @@ test_that("bounds from metadata keep the iterates in the box", {
 test_that("least squares problems report stationary points", {
   # (x - 1, x + 1, y - 3): the minimizer is x = 0, y = 3 with residual (-1, 1, 0)
   prob <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] - 1, u[1] + 1, u[2] - 3), c(5, 5))
-  for (alg in list(GaussNewton(), LevenbergMarquardt(), TrustRegion(), FastShortcutNLLSPolyalg())) {
+  for (alg in list(GaussNewton(), LevenbergMarquardt(), FastShortcutNLLSPolyalg())) {
     sol <- solve(prob, alg)
     expect_equal(sol$retcode, "Success", info = alg$name)
+    expect_equal(sol$u, c(0, 3), tolerance = 1e-7, info = alg$name)
+    expect_equal(sol$resid, c(-1, 1, 0), tolerance = 1e-7)
+  }
+  # TrustRegion (More's subproblem) stops when the rejected steps leave the
+  # state unchanged: a stalled success at the stationary point
+  for (alg in list(TrustRegion(), TrustRegionDogleg())) {
+    sol <- solve(prob, alg)
+    expect_true(successful_retcode(sol$retcode), info = alg$name)
     expect_equal(sol$u, c(0, 3), tolerance = 1e-7, info = alg$name)
     expect_equal(sol$resid, c(-1, 1, 0), tolerance = 1e-7)
   }
@@ -250,11 +258,24 @@ test_that("bound constrained least squares stops at the constrained minimizer", 
   # the boundary are (0.5, 0) and (0, 0.6)
   p1 <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] - 2 * u[2] - 1, u[1] - u[2]), c(0, 0),
                                      lb = c(0, 0), ub = c(Inf, Inf))
-  for (alg in list(GaussNewton(), LevenbergMarquardt(), TrustRegion(), FastShortcutNLLSPolyalg())) {
+  # an algorithm without native bounds runs on the unbounded problem of
+  # bounds_transform.jl; julia tools/trustregion-probe.jl (blsq_*): from the
+  # corner u0 = (0, 0) the start is nudged by eps^(3/4), where the map is
+  # flat, so only TrustRegion leaves it
+  # with the exact Jacobian of the probe (finite differences are useless on
+  # the flat map at the corner)
+  p1j <- NonlinearLeastSquaresProblem(NonlinearFunction(function(u, p) c(u[1] - 2 * u[2] - 1, u[1] - u[2]),
+                                                        jac = function(u, p) matrix(c(1, 1, -2, -1), 2)),
+                                      c(0, 0), lb = c(0, 0), ub = c(Inf, Inf))
+  sol <- solve(p1j, TrustRegion())
+  expect_identical(sol$retcode, "StalledSuccess")
+  expect_equal(sol$u, c(0.49999999999999994, 2.567789719906645e-27), tolerance = 1e-9)
+  for (alg in list(GaussNewton(), LevenbergMarquardt(), SimpleTrustRegion(), FastShortcutNLLSPolyalg())) {
     sol <- solve(p1, alg)
-    expect_equal(sol$retcode, "Success", info = alg$name)
-    expect_equal(sol$u, c(0.5, 0), tolerance = 1e-6, info = alg$name)
+    expect_true(all(abs(sol$u) < 1e-10), info = alg$name)
   }
+  # the default of a bounded problem is SobolMultistart(FastShortcutBoundedPolyalg())
+  expect_equal(solve(p1)$u, c(0.5, 0), tolerance = 1e-6)
   p2 <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] + 2 * u[2] - 1, u[2] - 1), c(0, 0),
                                      lb = c(0, -Inf), ub = c(Inf, Inf))
   expect_equal(solve(p2)$u, c(0, 0.6), tolerance = 1e-6)
@@ -332,20 +353,20 @@ test_that("Broyden and Klement solve problems where Newton stalls", {
 test_that("polyalgorithms have the order of NonlinearSolve", {
   algs <- function(a) vapply(a$algs, function(b) paste(b$name, b$radius_update_scheme %||% b$linesearch %||% ""), "")
   expect_equal(algs(FastShortcutNonlinearPolyalg()),
-               c("Broyden ", "Klement ", "NewtonRaphson ", "TrustRegion Simple", "TrustRegion Fan",
+               c("Broyden ", "Klement ", "NewtonRaphson ", "TrustRegion More", "TrustRegion Fan",
                  "LevenbergMarquardt "))
   expect_equal(FastShortcutNonlinearPolyalg()$start_index, 1L)
   expect_equal(FastShortcutNonlinearPolyalg(u0_len = 10)$start_index, 3L)
   expect_equal(FastShortcutNonlinearPolyalg(u0_len = 30)$start_index, 1L)
   expect_equal(algs(FastShortcutNonlinearPolyalg(must_use_jacobian = TRUE)),
-               c("NewtonRaphson ", "TrustRegion Simple", "TrustRegion Fan", "LevenbergMarquardt "))
+               c("NewtonRaphson ", "TrustRegion More", "TrustRegion Fan", "LevenbergMarquardt "))
   expect_equal(algs(RobustMultiNewton()),
-               c("TrustRegion Simple", "TrustRegion Bastin", "NewtonRaphson ", "NewtonRaphson BackTracking",
+               c("TrustRegion More", "TrustRegion Bastin", "NewtonRaphson ", "NewtonRaphson BackTracking",
                  "TrustRegion NLsolve", "TrustRegion Fan"))
   expect_equal(algs(FastShortcutNLLSPolyalg()),
-               c("GaussNewton ", "LevenbergMarquardt ", "TrustRegion Simple", "GaussNewton BackTracking",
+               c("GaussNewton ", "LevenbergMarquardt ", "TrustRegion More", "GaussNewton BackTracking",
                  "TrustRegion Fan", "LevenbergMarquardt "))
-  expect_equal(TrustRegion(nlsolve_update_rule = TRUE)$radius_update_scheme, "NLsolve")
+  expect_equal(SimpleTrustRegion(nlsolve_update_rule = TRUE)$radius_update_scheme, "NLsolve")
   expect_error(Broyden(init_jacobian = "true_jacobian", update_rule = "diagonal"), "Unknown combination")
   # Powell's badly scaled Rosenbrock start with every radius update
   prob <- NonlinearProblem(function(u, p) c(10 * (u[2] - u[1]^2), 1 - u[1]), c(-1.2, 1))

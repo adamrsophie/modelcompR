@@ -184,6 +184,13 @@ test_that("raw problems and compiled optimization systems work", {
   expect_true(ip$int)
   expect_equal(unname(solve(ip)$u), 1)
   expect_error(solve(ip, LBFGSB()), "BranchAndBound")
+  # maximizing an integer unknown: the relaxation keeps the minimizing sense
+  xm <- Variable("opbbmax_x", integer = TRUE, bounds = list(0, 4))
+  mp <- OptimizationProblem(complete(System(list(), costs = list(xm), name = "opbbmax")), list(xm ~ 0),
+                            sense = MaxSense)
+  ms <- solve(mp, BranchAndBound())
+  expect_equal(unname(ms$u), 4)
+  expect_equal(ms$objective, 4)
 })
 
 test_that("symbolic bounds follow the parameters and function objects carry their system", {

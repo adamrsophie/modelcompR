@@ -87,9 +87,9 @@ GeneralizedFirstOrderAlgorithm(
   name = "GeneralizedFirstOrderAlgorithm"
 )
 
-TrustRegionDogleg(radius_update_scheme = RadiusUpdateSchemes$Simple, ...)
+TrustRegionDogleg(subproblem = TrustRegionSubproblem$Dogleg, ...)
 
-TrustRegionRobust(radius_update_scheme = RadiusUpdateSchemes$More, ...)
+TrustRegionRobust(subproblem = MoreTrustRegionDescent(), ...)
 
 PseudoTransient(
   alpha_initial = 0.001,
@@ -177,7 +177,8 @@ from finite differences.}
 
 \item{name}{Name of the composed algorithm.}
 
-\item{radius_update_scheme}{Radius update scheme.}
+\item{subproblem}{The trust region subproblem: a member of
+\code{TrustRegionSubproblem} or a descent.}
 
 \item{...}{Options.}
 
