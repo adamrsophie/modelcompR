@@ -113,7 +113,7 @@ test_that("dynamic optimization respects bounds on observed variables", {
   expect_true(inherits(prob, AbstractDynamicOptProblem))
   sol <- solve(prob)
   expect_s3_class(sol, "DynamicOptSolution")
-  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(sol$sol$retcode, "Default")
   expect_equal(tail(sol$sol[z], 1), 0.5, tolerance = 1e-5)
   expect_true(max(sol$sol[power]) <= 1 + 1e-5)
   expect_equal(sol$model$objective, -0.5, tolerance = 1e-5)
@@ -127,7 +127,7 @@ test_that("dynamic optimization respects bounds on observed variables", {
     bp <- be[[1L]](lim, list(z ~ 0, w ~ 0), c(0, 1), dt = 0.1)
     expect_true(inherits(bp, AbstractDynamicOptProblem))
     bs <- solve(bp, be[[2L]]("ipopt"))
-    expect_identical(bs$sol$retcode, "Success")
+    expect_identical(bs$sol$retcode, "Default")
     expect_identical(bs$model$method, be[[3L]])
     expect_equal(tail(bs$sol[z], 1), 0.5, tolerance = 1e-5)
   }
@@ -147,7 +147,7 @@ test_that("free final time: the double integrator reaches rest in time 2", {
   block <- mtkcompile(block, inputs = list(u))
   prob <- suppressWarnings(DynamicOptProblem(block, list(x ~ 1, v ~ 0, u ~ 0, tf ~ 1), list(0, tf), steps = 11))
   sol <- solve(prob)
-  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(sol$sol$retcode, "Default")
   expect_equal(sol$model$final_time, 2, tolerance = 2e-2)
   expect_equal(tail(sol$sol$t, 1), sol$model$final_time)
   expect_equal(tail(sol$sol[x], 1), 0, tolerance = 1e-5)
@@ -173,7 +173,7 @@ test_that("algebraic states without initial values stay free", {
   dae <- mtkcompile(System(list(D(x) ~ z, 0 ~ z^2 - x - 1), t, name = "dae"))
   prob <- DynamicOptProblem(dae, list(x ~ 0), c(0, 1), dt = 0.1, guesses = list(z ~ 1))
   sol <- solve(prob)
-  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(sol$sol$retcode, "Default")
   # x' = sqrt(x + 1), x(0) = 0 gives x(1) = (3/2)^2 - 1
   expect_equal(tail(sol$sol[x], 1), 1.25, tolerance = 5e-3)
 })
@@ -309,7 +309,7 @@ test_that("collocation schemes, integral costs and the collocation polynomial", 
   errs <- list(trapezoidal = 3e-3, hermite_simpson = 1e-6, RadauIIA5 = 1e-8, "LagrangeLegendre(2)" = 1e-6)
   for (sch in names(errs)) {
     s <- solve(prob, sch)
-    expect_identical(s$sol$retcode, "Success")
+    expect_identical(s$sol$retcode, "Default")
     expect_equal(s$model$method, sch)
     expect_lt(abs(s$model$objective - tanh(1)), errs[[sch]])
     # between the nodes the states follow the collocation polynomial
@@ -341,6 +341,54 @@ test_that("collocation schemes, integral costs and the collocation polynomial", 
                  0.6823178760961531, 0.6541701782915279, 0.632564182269818, 0.6172838280708064,
                  0.6081763121525028, 0.605150559355724), tolerance = 1e-9)
   expect_identical(length(js$model$z), 22L)
+  # implicit tableaus: JuMP adds the stage derivatives K (free at the last
+  # node too), CasADi only on the steps; InfiniteOpt adds the derivative
+  # variables at every support and integrates the cost by the trapezoidal
+  # rule over all supports. julia tools/ipopt-resto-probe.jl (Ipopt
+  # 3.14.19): the free variables (x(0) is fixed), equalities, iterations,
+  # objective and the states at the nodes
+  tabs <- list(list("backward_euler", 32L, 20L, 0.71499799333216107,
+                    c(1, 0.867000401360674, 0.8091706060401394, 0.7594325167798005, 0.7172887526870726,
+                      0.6823178761210441, 0.6541701783160673, 0.6325641822941027, 0.6172838280949389,
+                      0.6081763121765895, 0.605150559379875)),
+               list(list(A = rbind(c(0.25, -0.25), c(0.25, 5 / 12)), b = c(0.25, 0.75), c = c(0, 2 / 3)), 43L, 30L,
+                    0.71499799333216107,
+                    c(1, 0.8670004014195365, 0.8091706060964615, 0.7594325168338132, 0.7172887527390414,
+                      0.6823178761712617, 0.6541701783648484, 0.6325641823417787, 0.6172838281418538,
+                      0.6081763122230969, 0.6051505594263347)),
+               list("RadauIIA5", 54L, 40L, 0.71499799333216085,
+                    c(1, 0.8670004015310333, 0.8091706062025418, 0.7594325169349724, 0.717288752835844,
+                      0.6823178762643262, 0.6541701784548348, 0.6325641824293795, 0.617283828227785,
+                      0.608176312308092, 0.6051505595111382)))
+  for (tb in tabs) {
+    js <- solve(jp, JuMPCollocation("ipopt", tb[[1L]]))
+    expect_identical(js$sol$retcode, "Default")
+    expect_identical(js$model$iterations, 3L)
+    expect_identical(length(js$model$z) - 1L, tb[[2L]])
+    expect_identical(length(js$model$multipliers$equality), tb[[3L]])
+    expect_equal(js$model$objective, tb[[4L]], tolerance = 1e-12)
+    expect_equal(unname(unlist(js$sol$u)), tb[[5L]], tolerance = 1e-9)
+  }
+  cs <- solve(CasADiDynamicOptProblem(sys, list(x ~ 1, u ~ 0), c(0, 1), dt = 0.1), CasADiCollocation("ipopt"))
+  expect_equal(cs$model$objective, 0.71499799333216085, tolerance = 1e-12)
+  ip <- InfiniteOptDynamicOptProblem(sys, list(x ~ 1, u ~ 0), c(0, 1), dt = 0.1)
+  is <- solve(ip, InfiniteOptCollocation("ipopt", "Backward"))
+  expect_identical(is$model$iterations, 1L)
+  expect_identical(length(is$model$z) - 1L, 32L)
+  expect_identical(length(is$model$multipliers$equality), 21L)
+  expect_equal(is$model$objective, 0.76226593057200254, tolerance = 1e-9)
+  expect_equal(unname(unlist(is$sol$u)),
+               c(1, 0.9287734069427998, 0.8668345479550275, 0.8135640344468056, 0.7684291612830516,
+                 0.7309785797321282, 0.700837783978526, 0.6777053660647092, 0.6613500018115395,
+                 0.6516081375764851, 0.645156571857906), tolerance = 1e-9)
+  is <- solve(ip, InfiniteOptCollocation("ipopt", "OrthogonalCollocation(3)"))
+  expect_identical(length(is$model$z) - 1L, 62L)
+  expect_identical(length(is$model$multipliers$equality), 41L)
+  expect_equal(is$model$objective, 0.6191490749537345, tolerance = 1e-9)
+  expect_equal(unname(unlist(is$sol$u)),
+               c(1, 0.8834502291613356, 0.7845971052785251, 0.7014604728475077, 0.6323749979483105,
+                 0.5759568094598302, 0.5310757783373129, 0.4968328796707264, 0.4725421840568683,
+                 0.45771711754918076, 0.45206000639967636), tolerance = 1e-9)
   expect_error(solve(prob, "nonsense"), "unknown collocation method")
   # Radau IIA with three stages is the default tableau of ModelingToolkit
   sc <- .dopt_scheme("RadauIIA5")
@@ -360,7 +408,7 @@ test_that("free final time with an integral cost reaches tf = 10", {
                             costs = list(-Integral(xf - uf, list(t, 0, tf)), -EvalAt(tf)(xf))), inputs = list(uf))
   fp <- suppressWarnings(JuMPDynamicOptProblem(fsys, list(xf ~ 17.5, uf ~ 0, tf ~ 8), list(0, tf), steps = 51))
   fs <- solve(fp, JuMPCollocation("ipopt", "hermite_simpson"))
-  expect_identical(fs$sol$retcode, "Success")
+  expect_identical(fs$sol$retcode, "Default")
   expect_equal(fs$model$final_time, 10, tolerance = 1e-3)
   # the tolerance of ModelingToolkit's test; the input is held over each step
   expect_lt(abs(fs$model$objective + 92.75), 0.25)
@@ -408,7 +456,7 @@ test_that("the rocket of the dynamic optimization tutorial", {
   # the tutorial uses dt = 0.001; ModelingToolkit's test asks for h(te) > 1.012
   jprob <- suppressWarnings(JuMPDynamicOptProblem(rocket, op, c(0, te), dt = 0.005))
   jsol <- solve(jprob, JuMPCollocation("ipopt"))
-  expect_identical(jsol$sol$retcode, "Success")
+  expect_identical(jsol$sol$retcode, "Default")
   expect_identical(jsol$model$method, "RadauIIA5")
   expect_gt(tail(jsol$sol[h], 1), 1.012)
   expect_equal(tail(jsol$sol[m], 1), 0.6, tolerance = 1e-6)
@@ -449,7 +497,7 @@ test_that("the cart pole swings up", {
   prob <- suppressWarnings(JuMPDynamicOptProblem(cartpole, op, c(0, tf), dt = 0.25,
                                                  initial_trajectory = list(th ~ pi * t / 5)))
   sol <- solve(prob, JuMPCollocation("ipopt", "hermite_simpson"))
-  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(sol$sol$retcode, "Default")
   # the states are x, theta and their lowered derivatives
   final <- tail(sol$sol$u, 1)[[1L]]
   expect_equal(unname(final[c("cp_th(t)", "cp_x(t)")]), c(pi, 0), tolerance = 1e-7)
@@ -463,7 +511,7 @@ test_that("the cart pole swings up", {
   skip_on_cran()
   prob <- suppressWarnings(JuMPDynamicOptProblem(cartpole, op, c(0, tf), dt = 0.25))
   sol <- solve(prob, JuMPCollocation("ipopt", "RK4"))
-  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(sol$sol$retcode, "Default")
   expect_identical(length(sol$model$z), 105L)
   expect_identical(length(sol$model$multipliers$equality), 84L)
   expect_identical(sol$model$iterations, 60L)
@@ -483,7 +531,9 @@ test_that("collocation derivatives are exact for every kind of term", {
                                               EvalAt(0.5)(x) * EvalAt(1)(y) ~ 0.3)),
                     inputs = list(u))
   prob <- suppressWarnings(DynamicOptProblem(sys, list(x ~ 1, y ~ 0, u ~ 0.2), c(0, 1), dt = 0.5))
-  for (sch in list(.dopt_scheme("hermite_simpson"), JuMPCollocation()$scheme, .dopt_scheme("LagrangeLegendre(2)"))) {
+  for (sch in list(.dopt_scheme("hermite_simpson"), JuMPCollocation()$scheme, .dopt_scheme("LagrangeLegendre(2)"),
+                   CasADiCollocation()$scheme, InfiniteOptCollocation("ipopt", "OrthogonalCollocation(3)")$scheme,
+                   InfiniteOptCollocation("ipopt", "Backward")$scheme)) {
     ctx <- .dopt_grid(.subset2(prob, "ctx"), sch)
     nz <- ctx$nz
     z <- ctx$z0 + sin(seq_len(nz)) / 5

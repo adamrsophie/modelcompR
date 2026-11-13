@@ -109,7 +109,14 @@ given to \code{solve()} the inputs are free at every collocation point.
 With an explicit tableau (such as \code{"RK4"}), JuMP and CasADi create no
 stage variables: each step is one equality per state, from the stages
 evaluated at the state and input of the step's start, and integral costs
-use the trapezoidal rule on the nodes. The JuMP and InfiniteOpt backends
+use the trapezoidal rule on the nodes. With an implicit tableau (such as
+the default) they have derivative stage variables K, one per stage and
+state, with the equations \verb{K_i = f(x_k + dt sum_j A_ij K_j)} and the
+update \verb{x_\{k+1\} = x_k + dt sum_i b_i K_i}; JuMP declares K at every node
+(those of the last node are free), CasADi once per step. Their integral
+costs also use the trapezoidal rule on the nodes. A successful solve has
+the retcode \code{Default} (the retcode of \code{build_solution}), a failed one
+\code{ConvergenceFailure}. The JuMP and InfiniteOpt backends
 fix the initial states (bounds with equal values, which the interior
 point method removes from the variables), and CasADi adds them as
 equality constraints.

@@ -6,11 +6,14 @@
 # search, the soft restoration `restore!` and the robust restoration
 # `robust!`, the barrier updates MonotoneUpdate, QualityFunctionUpdate and
 # LOQOUpdate, the inertia correctors InertiaBased, InertiaFree and
-# InertiaIgnore, Richardson's iterative refinement and the compact limited
-# memory BFGS approximation of the Hessian. The KKT system is the
-# augmented system of SparseKKTSystem, factorized densely; its inertia
-# comes from the Bunch-Kaufman factorization (.nlp_inertia), as MUMPS
-# reports it.
+# InertiaIgnore, Richardson's iterative refinement, the compact limited
+# memory BFGS approximation of the Hessian and the dense BFGS and
+# DampedBFGS approximations. The KKT system is the augmented system of
+# SparseKKTSystem (which DenseKKTSystem and DenseCondensedKKTSystem solve
+# equivalently) or the condensed system of SparseCondensedKKTSystem,
+# factorized densely with its inertia from the Bunch-Kaufman
+# factorization (.nlp_inertia), as MUMPS reports it, or by CHOLMOD
+# (Matrix::Cholesky) for CHOLMODSolver.
 
 # MadNLPOptions (src/IPM/options.jl) without the primary options.
 .madnlp_ipm_defaults <- function() {
@@ -118,31 +121,19 @@
   o$max_iter <- as.integer(opts$maxiters %||% 3000L)
   o$max_wall_time <- as.numeric(opts$maxtime %||% 1e6)
   o$ls_opt <- ls_opt
-  f <- function(x) as.numeric(fn$f(x, p))[1L]
-  grad <- if (is.function(fn$grad)) function(x) as.numeric(fn$grad(x, p)) else
-    function(x) as.numeric(.ipm_fd_jac(function(z) f(z), x, f(x)))
-  hess <- if (is.function(fn$hess)) function(x) as.matrix(fn$hess(x, p)) else function(x) {
-    H <- .ipm_fd_jac(grad, x)
-    (H + t(H)) / 2
-  }
   m <- length(a$lcons %||% numeric())
-  cons <- if (m) function(x) as.numeric(fn$cons(x, p)) else function(x) numeric()
-  cjac <- if (m && is.function(fn$cons_j)) function(x) matrix(fn$cons_j(x, p), m, n) else
-    function(x) matrix(.ipm_fd_jac(cons, x), m, n)
-  chess <- if (m && is.function(fn$cons_h)) function(x) lapply(fn$cons_h(x, p), as.matrix) else function(x) {
-    J <- function(z) as.numeric(cjac(z))
-    D <- .ipm_fd_jac(J, x)
-    lapply(seq_len(m), function(i) {
-      Hi <- D[i + m * (seq_len(n) - 1L), , drop = FALSE]
-      (Hi + t(Hi)) / 2
-    })
-  }
+  dv <- .ipm_derivatives(fn, p, x0, m)
+  f <- dv$f
+  grad <- dv$grad
+  cons <- dv$cons
+  cjac <- dv$cjac
   # the Hessian of the Lagrangian obj_weight f + y' c (hess_coord! of
-  # OptimizationNLPModels)
-  lag_hess <- function(x, w, y) {
-    H <- w * hess(x)
+  # OptimizationNLPModels): lag_h in its matrix form (a weighted sum of the
+  # constraint Hessians when obj_weight is 0), or hess and cons_h
+  lag_hess <- if (!is.null(dv$lag)) function(x, w, y) dv$lag(x, w, y, weighted_zero = TRUE) else function(x, w, y) {
+    H <- w * dv$hess(x)
     if (m && any(y != 0)) {
-      Hc <- chess(x)
+      Hc <- dv$chess(x)
       for (i in seq_len(m)) H <- H + y[i] * Hc[[i]]
     }
     H
@@ -173,7 +164,7 @@
   known_kkt <- c("SparseKKTSystem", "SparseUnreducedKKTSystem", "ScaledSparseKKTSystem",
                  "SparseCondensedKKTSystem", "DenseKKTSystem", "DenseCondensedKKTSystem")
   if (!kkt_system %in% known_kkt) stop("unknown MadNLP KKT system ", kkt_system, call. = FALSE)
-  known_ls <- c("MumpsSolver", "LapackCPUSolver", "UmfpackSolver", "LDLSolver")
+  known_ls <- c("MumpsSolver", "LapackCPUSolver", "UmfpackSolver", "LDLSolver", "CHOLMODSolver")
   if (!linear_solver %in% known_ls)
     stop("the MadNLP linear solver ", linear_solver, " is not available; use one of ",
          paste(known_ls, collapse = ", "), call. = FALSE)
@@ -188,9 +179,12 @@
   if (hess_approx %in% c("BFGS", "DampedBFGS") && !dense_kkt)
     stop("[options] BFGS and DampedBFGS quasi-Newton approximations\n",
          "require a dense KKT system (DenseKKTSystem or DenseCondensedKKTSystem).", call. = FALSE)
-  if (hess_approx != "ExactHessian" && hess_approx != "CompactLBFGS")
-    stop("MadNLP's ", hess_approx, " approximation is not ported; use ExactHessian or CompactLBFGS",
-         call. = FALSE)
+  if (hess_approx == "CompactLBFGS" && condensed)
+    stop("Quasi-Newton approximation of the Hessian is not supported by the KKT formulation ",
+         "SparseCondensedKKTSystem. Please use SparseKKTSystem instead.", call. = FALSE)
+  dense_bfgs <- hess_approx %in% c("BFGS", "DampedBFGS")
+  cholmod <- linear_solver == "CHOLMODSolver"
+  cholmod_ldl <- cholmod && identical(sub("^MadNLP\\.", "", o$ls_opt$cholmod_algorithm %||% "CHOLESKY"), "LDL")
   fixed_treatment <- sub("^MadNLP\\.", "", o$fixed_variable_treatment %||%
                            if (condensed) "RelaxBound" else "MakeParameter")
   eq_treatment <- sub("^MadNLP\\.", "", o$equality_treatment %||%
@@ -224,6 +218,9 @@
   }
   ns <- length(ind_ineq)
   N <- n + ns
+  if (condensed && ns != m)
+    stop("SparseCondensedKKTSystem requires all the constraints to be inequalities ",
+         "(equality_treatment = RelaxEquality)", call. = FALSE)
   lvar <- lvar0[free]; uvar <- uvar0[free]
   xl <- c(lvar, lcon[ind_ineq]); xu <- c(uvar, ucon[ind_ineq])
   ind_llb <- which(lvar != -Inf & uvar == Inf)
@@ -295,6 +292,10 @@
 
   # the compact limited memory BFGS approximation (src/quasi_newton.jl)
   qn <- if (hess_approx == "CompactLBFGS") .madnlp_lbfgs_new(n, o$quasi_newton_options) else NULL
+  # the dense BFGS and DampedBFGS approximations (src/quasi_newton.jl):
+  # the matrix Bk, which is the Hessian block of the dense KKT system
+  bq <- if (dense_bfgs) list(B = matrix(0, n, n), inst = FALSE, damped = hess_approx == "DampedBFGS",
+                             last_x = numeric(n), last_g = numeric(n)) else NULL
 
   # solver state
   x <- numeric(N); zl <- numeric(N); zu <- numeric(N)
@@ -312,6 +313,7 @@
   filter <- matrix(numeric(), 0L, 2L)
   RR <- NULL
   fac <- NULL
+  dbuf <- numeric(m)
 
   x_lr <- function(v = x) v[ind_lb]
   x_ur <- function(v = x) v[ind_ub]
@@ -435,6 +437,8 @@
     H <<- matrix(0, N, N)
     l_lower <<- numeric(nlb); u_lower <<- numeric(nub); l_diag <<- rep(1, nlb); u_diag <<- rep(1, nub)
     if (!is.null(qn)) qn$Bk <<- 0
+    # initialize! fills kkt.hess, which holds Bk for BFGS and DampedBFGS
+    if (!is.null(bq)) bq$B <<- matrix(0, n, n)
   }
   # the Hessian block of the factorized matrix (the diagonal xi I of the
   # compact LBFGS) and of the KKT system (xi I - U U' + V V')
@@ -455,19 +459,64 @@
   # C^-1 b for the factorized matrix; a singular matrix leaves b (MUMPS)
   csolve <- function(b) {
     if (is.null(fac)) factorize()
-    if (fac$sing) b else tryCatch(.nlp_kkt_apply(fac$lu, b), error = function(e) b)
+    if (fac$sing) return(b)
+    if (cholmod) return(as.numeric(Matrix::solve(fac$lu, b, system = "A")))
+    tryCatch(.nlp_kkt_apply(fac$lu, b), error = function(e) b)
+  }
+  # the condensed matrix of SparseCondensedKKTSystem (build_kkt!): the lower
+  # triangle of H + Sigma_x + J' diag(Sigma_s / (1 - Sigma_d Sigma_s)) J,
+  # accumulated as _build_condensed_aug_coord! does, then made symmetric
+  condensed_matrix <- function() {
+    ii <- seq_len(n)
+    Ss <- pr_diag[slk]
+    dbuf <<- Ss / (1 - du_diag * Ss)
+    A <- matrix(0, n, n)
+    lo <- lower.tri(A, diag = TRUE)
+    A[lo] <- A[lo] + hess_C()[ii, ii, drop = FALSE][lo]
+    diag(A) <- diag(A) + pr_diag[ii]
+    for (i in seq_len(m)) {
+      ji <- J[i, ii]
+      # the entry (r, c), r >= c, adds diag_buffer[i] * J[i, c] * J[i, r]
+      A[lo] <- A[lo] + t(outer(dbuf[i] * ji, ji))[lo]
+    }
+    up <- upper.tri(A)
+    A[up] <- t(A)[up]
+    A
+  }
+  # factorize! of CHOLMODSolver: Cholesky (inertia (n, 0, 0), or (0, n, 0)
+  # when it fails) or LDL' (inertia from the signs of D)
+  cholmod_factor <- function(K) {
+    dim <- nrow(K)
+    S <- methods::as(methods::as(K, "symmetricMatrix"), "CsparseMatrix")
+    f <- tryCatch(suppressWarnings(if (cholmod_ldl) Matrix::Cholesky(S, LDL = TRUE, super = FALSE, perm = TRUE)
+                                   else Matrix::Cholesky(S, LDL = FALSE, super = NA, perm = TRUE)),
+                  error = function(e) NULL)
+    if (is.null(f)) return(list(pos = 0L, zero = dim, neg = 0L, sing = TRUE, lu = NULL))
+    if (!cholmod_ldl) return(list(pos = dim, zero = 0L, neg = 0L, sing = FALSE, lu = f))
+    dd <- Matrix::diag(f)
+    if (!all(is.finite(dd))) return(list(pos = 0L, zero = dim, neg = 0L, sing = TRUE, lu = NULL))
+    list(pos = sum(dd > 0), zero = sum(dd == 0), neg = sum(dd < 0), sing = FALSE, lu = f)
   }
   # factorize_wrapper!: the matrix, its inertia (as MUMPS reports it) and
   # the factors
   factorize <- function() {
-    dim <- N + m
-    K <- matrix(0, dim, dim)
-    K[iP, iP] <- hess_C()
-    diag(K)[iP] <- diag(K)[iP] + pr_diag
-    if (m) {
-      K[iY, iP] <- J
-      K[iP, iY] <- t(J)
-      diag(K)[iY] <- du_diag
+    if (condensed) {
+      K <- condensed_matrix()
+      dim <- n
+    } else {
+      dim <- N + m
+      K <- matrix(0, dim, dim)
+      K[iP, iP] <- hess_C()
+      diag(K)[iP] <- diag(K)[iP] + pr_diag
+      if (m) {
+        K[iY, iP] <- J
+        K[iP, iY] <- t(J)
+        diag(K)[iY] <- du_diag
+      }
+    }
+    if (cholmod) {
+      fac <<- cholmod_factor(K)
+      return(invisible())
     }
     tr <- .ipm_triplets(K)
     inr <- .nlp_inertia(tr$i, tr$j, tr$v, dim)
@@ -483,7 +532,22 @@
     if (nlb) w[ind_lb] <- w[ind_lb] - w[iL] / l_diag
     if (nub) w[ind_ub] <- w[ind_ub] - w[iU] / u_diag
     pd <- c(iP, iY)
-    w[pd] <- csolve(w[pd])
+    if (condensed) {
+      # solve_kkt! of SparseCondensedKKTSystem
+      ii <- seq_len(n)
+      Ss <- pr_diag[slk]
+      buf <- dbuf * (w[iY] + w[slk] / Ss)
+      wx <- w[ii]
+      for (i in seq_len(m)) wx <- wx + J[i, ii] * buf[i]
+      wx <- csolve(wx)
+      buf2 <- as.numeric(J[, ii, drop = FALSE] %*% wx)
+      wz <- -buf + dbuf * buf2
+      w[ii] <- wx
+      w[slk] <- (w[slk] + wz) / Ss
+      w[iY] <- wz
+    } else {
+      w[pd] <- csolve(w[pd])
+    }
     k <- if (is.null(qn)) 0L else ncol(qn$U)
     if (k) {
       # the Sherman-Morrison-Woodbury correction of the low rank part
@@ -547,7 +611,8 @@
     pr_diag <<- pr_diag + dw
     du_diag <<- du_diag - dc
   }
-  inertia_correct <- function() fac$zero == 0 && fac$pos == N
+  # is_inertia_correct: the condensed matrix is n by n and must be definite
+  inertia_correct <- function() fac$zero == 0 && fac$pos == (if (condensed) n else N)
   regularize_dual <- function() condensed || fac$zero != 0
   next_del_w <- function(n_trial) {
     if (n_trial == 0L) {
@@ -746,6 +811,26 @@
   # eval_lag_hess_wrapper!: the exact Hessian or the update of the
   # quasi-Newton approximation
   eval_lag_hess <- function(resto = FALSE) {
+    if (!is.null(bq)) {
+      if (cnt$grad >= 2L) {
+        sk <- x[seq_len(n)] - bq$last_x
+        yk <- fgrad[seq_len(n)] - bq$last_g
+        if (m > 0) {
+          jacl <<- as.numeric(crossprod(J, y))
+          yk <- yk + jacl[seq_len(n)]
+          Jold <- pb$jac(out_x(c(bq$last_x, numeric(ns))))[, free, drop = FALSE] * con_scale
+          yk <- yk - as.numeric(crossprod(Jold, y))
+        }
+        bq <<- .madnlp_bfgs_update(bq, sk, yk)
+      } else {
+        bq$B <<- .madnlp_bfgs_init(bq$B, fgrad[seq_len(n)], obj_val)
+      }
+      bq$last_x <<- x[seq_len(n)]
+      bq$last_g <<- fgrad[seq_len(n)]
+      H <<- matrix(0, N, N)
+      H[seq_len(n), seq_len(n)] <<- bq$B
+      return(invisible())
+    }
     if (is.null(qn)) {
       H <<- eval_hess(x, y, if (resto) 0 else 1)
       return(invisible())
@@ -1270,6 +1355,52 @@
   rho0 <- if (ng < sqrt(.Machine$double.eps)) 1 else if (f0 == 0) 1 / ng else abs(f0) / ng
   qn$Bk <- 2 * rho0 * qn$init_value
   qn
+}
+
+# init! of BFGS and DampedBFGS: the diagonal 2 rho0 of the Gilbert and
+# Lemarechal rule (the other entries of Bk are kept).
+.madnlp_bfgs_init <- function(B, g0, f0) {
+  ng <- sum(g0 * g0)
+  rho0 <- if (ng < sqrt(.Machine$double.eps)) 1 else if (f0 == 0) 1 / ng else abs(f0) / ng
+  diag(B) <- 2 * rho0
+  B
+}
+
+# syr! on the lower triangle: B + alpha v v', the entry (i, j) adding
+# v[i] * (alpha * v[j]); the upper triangle mirrors it.
+.madnlp_syr <- function(B, alpha, v) {
+  lo <- lower.tri(B, diag = TRUE)
+  B[lo] <- B[lo] + outer(v, alpha * v)[lo]
+  up <- upper.tri(B)
+  B[up] <- t(B)[up]
+  B
+}
+
+# update! of BFGS (skipped when s'y < 1e-8) and of DampedBFGS (Procedure
+# 18.2 of Nocedal and Wright), with the initial scaling y's / s's of the
+# diagonal at the first update.
+.madnlp_bfgs_update <- function(bq, sk, yk) {
+  yksk <- sum(sk * yk)
+  if (!bq$damped && yksk < 1e-8) return(bq)
+  if (!bq$inst) {
+    diag(bq$B) <- yksk / sum(sk * sk)
+    bq$inst <- TRUE
+  }
+  bsk <- as.numeric(bq$B %*% sk)
+  if (bq$damped) {
+    sBs <- sum(sk * bsk)
+    theta <- if (yksk < 0.2 * sBs) 0.8 * sBs / (sBs - yksk) else 1
+    rk <- theta * yk + (1 - theta) * bsk
+    alpha1 <- 1 / sBs
+    alpha2 <- 1 / sum(rk * sk)
+    v2 <- rk
+  } else {
+    alpha1 <- 1 / sum(sk * bsk)
+    alpha2 <- 1 / yksk
+    v2 <- yk
+  }
+  bq$B <- .madnlp_syr(.madnlp_syr(bq$B, -alpha1, bsk), alpha2, v2)
+  bq
 }
 
 .madnlp_lbfgs_update <- function(qn, sk, yk) {

@@ -63,10 +63,11 @@ interpolated linearly.
 }
 \details{
 The Jacobians of the implicit solvers come from the problem's symbolic
-Jacobian (from a \code{System}, or \code{jac_fn}) or from finite differences; there
-is no automatic differentiation in R. \code{AutoForwardDiff()} therefore uses
-the exact Jacobian when the problem has one and central differences
-otherwise, \code{AutoFiniteDiff(fdtype)} finite differences of the given type,
+Jacobian (from a \code{System}, or \code{jac_fn}) or from differentiation.
+\code{AutoForwardDiff()} uses the exact Jacobian when the problem has one,
+else dual numbers as ForwardDiff does (central differences when the
+function cannot run on them), \code{AutoFiniteDiff(fdtype)} finite
+differences of the given type,
 and \code{AutoSparse(ad)} the method of \code{ad} (Jacobians are dense in R).
 \code{Sequential()}, \code{BaseThreads()} and \code{PolyesterThreads()} are the threading
 options of the Runge-Kutta stages; R evaluates the stages in turn.

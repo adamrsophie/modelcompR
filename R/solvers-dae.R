@@ -140,6 +140,16 @@ DefaultInit <- function() structure(list(), class = c("DefaultInit", "DAEInitial
     J <- as.matrix(ctx$jac(du, u, ctx$p, 0, t))
     return(list(J = J, Jdu = as.matrix(ctx$jac(du, u, ctx$p, 1, t)) - J, nf = 0L))
   }
+  # AutoForwardDiff differentiates the residual with dual numbers
+  # (ForwardDiff.jacobian of the residual in u and in du), or with finite
+  # differences when it cannot run on duals
+  ad <- ctx$autodiff
+  if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
+  if (inherits(ad, "AutoForwardDiff") && !inherits(ad, "AutoFiniteDiff")) {
+    ju <- .ad_try_jacobian(function(x) ctx$f(du, x, ctx$p, t), u)
+    jd <- if (!is.null(ju)) .ad_try_jacobian(function(x) ctx$f(x, u, ctx$p, t), du)
+    if (!is.null(jd)) return(list(J = ju$jacobian, Jdu = jd$jacobian, nf = ju$chunks + jd$chunks))
+  }
   F0 <- ctx$f(du, u, ctx$p, t)
   J <- .jac_fd(function(x) ctx$f(du, x, ctx$p, t), u, F0)
   Jdu <- .jac_fd(function(x) ctx$f(x, u, ctx$p, t), du, F0)
@@ -365,9 +375,10 @@ print.DAESolution <- function(x, ...) {
 #' @param qmax,qsteady_min,qsteady_max Largest step growth factor and the
 #'   range of factors that keep the step size.
 #' @param autodiff How Jacobians are computed when the problem has no
-#'   symbolic Jacobian: `AutoForwardDiff()` (central differences, as R has no
-#'   dual numbers), `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see
-#'   [AutoForwardDiff()]. The default uses forward differences.
+#'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
+#'   central differences when the function cannot run on them),
+#'   `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see [AutoForwardDiff()].
+#'   The default uses forward differences.
 #' @return An algorithm object.
 #' @examples
 #' f <- function(du, u, p, t) c(du[1] + p * u[1], u[2] - u[1]^2)

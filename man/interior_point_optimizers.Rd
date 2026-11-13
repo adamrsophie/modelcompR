@@ -60,10 +60,19 @@ filter line search with its soft and robust restoration phases.
 \code{barrier} is \code{"MonotoneUpdate"}, \code{"QualityFunctionUpdate"} or
 \code{"LOQOUpdate"}, or a list with \code{type} and that update's fields (for
 example \code{list(type = "MonotoneUpdate", mu_init = 0.5)}).
-\code{hessian_approximation} is \code{"ExactHessian"} or \code{"CompactLBFGS"}.
-\code{linear_solver} is \code{"MumpsSolver"} (the default), \code{"LapackCPUSolver"},
-\code{"LDLSolver"} or \code{"UmfpackSolver"} (which selects the InertiaFree
-correction). All of them factorize the KKT system densely.
+\code{hessian_approximation} is \code{"ExactHessian"}, \code{"CompactLBFGS"}, or
+\code{"BFGS"} or \code{"DampedBFGS"} (which need a dense KKT system).
+\code{kkt_system} is \code{"SparseKKTSystem"} (the default),
+\code{"SparseCondensedKKTSystem"} (the slacks and the inequality duals
+condensed out of a definite system; equalities are relaxed into
+inequalities), \code{"DenseKKTSystem"} or \code{"DenseCondensedKKTSystem"} (with
+\code{"LapackCPUSolver"}). \code{linear_solver} is \code{"MumpsSolver"} (the default),
+\code{"LapackCPUSolver"}, \code{"LDLSolver"}, \code{"UmfpackSolver"} (which selects the
+InertiaFree correction) or \code{"CHOLMODSolver"} (CHOLMOD through the
+Matrix package, Cholesky or, with \code{cholmod_algorithm = "LDL"} in
+\code{additional_options}, LDL'; it needs the condensed KKT system, as the
+Cholesky factorization of the indefinite augmented system fails). The
+others factorize the KKT system densely.
 \code{additional_options} sets MadNLP's options (for example
 \code{inertia_correction_method}, \code{fixed_variable_treatment}, \code{bound_push},
 \code{kappa_d}) and the Richardson refinement options; MadNLP ignores the

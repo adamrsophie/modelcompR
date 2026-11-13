@@ -26,7 +26,10 @@
 # Legendre and any tableau are available. Integral (Lagrange) costs use the
 # quadrature weights b of the scheme, and the solution between nodes is the
 # collocation polynomial. An explicit tableau of the JuMP and CasADi
-# backends has no stage variables, as in MTK's add_solve_constraints!. The nonlinear program is solved by the interior
+# backends has no stage variables, as in MTK's add_solve_constraints!, and
+# an implicit one has derivative stage variables K in place of stage states;
+# both integrate costs by the trapezoidal rule on the nodes. The nonlinear
+# program is solved by the interior
 # point method of R/dynamic-opt-nlp.R with exact first derivatives from
 # symbolic Jacobians and second derivatives by differences of them.
 
@@ -187,7 +190,14 @@ AbstractCollocation <- "AbstractCollocation"
 #' With an explicit tableau (such as `"RK4"`), JuMP and CasADi create no
 #' stage variables: each step is one equality per state, from the stages
 #' evaluated at the state and input of the step's start, and integral costs
-#' use the trapezoidal rule on the nodes. The JuMP and InfiniteOpt backends
+#' use the trapezoidal rule on the nodes. With an implicit tableau (such as
+#' the default) they have derivative stage variables K, one per stage and
+#' state, with the equations `K_i = f(x_k + dt sum_j A_ij K_j)` and the
+#' update `x_{k+1} = x_k + dt sum_i b_i K_i`; JuMP declares K at every node
+#' (those of the last node are free), CasADi once per step. Their integral
+#' costs also use the trapezoidal rule on the nodes. A successful solve has
+#' the retcode `Default` (the retcode of `build_solution`), a failed one
+#' `ConvergenceFailure`. The JuMP and InfiniteOpt backends
 #' fix the initial states (bounds with equal values, which the interior
 #' point method removes from the variables), and CasADi adds them as
 #' equality constraints.
@@ -258,6 +268,15 @@ PyomoDynamicOptProblem <- function(sys, op, tspan, dt = NULL, steps = NULL, gues
   # equality constraints
   A <- scheme$A
   scheme$explicit <- scheme$hold && all(A[upper.tri(A, diag = TRUE)] == 0)
+  # an implicit tableau has derivative stage variables K: JuMP declares them
+  # as infinite variables on every support (those of the last support appear
+  # in no constraint), CasADi once per step
+  scheme$kstage <- scheme$hold && !scheme$explicit
+  scheme$k_last <- backend == "JuMP"
+  # InfiniteOpt transcribes the derivatives of the states as variables at
+  # every support, with (D x - T f) / nominal = 0 there and the relations of
+  # its derivative method between D x and x
+  scheme$dvar <- backend == "InfiniteOpt"
   scheme$fix_u0 <- backend %in% c("JuMP", "InfiniteOpt")
   structure(list(backend = backend, solver = solver, scheme = scheme),
             class = c(paste0(backend, "Collocation"), AbstractCollocation))
@@ -728,7 +747,10 @@ print.DynamicOptProblem <- function(x, ...) {
   # state and input at the start of the step (one equality per step and
   # state), so the nodes are the only points
   explicit <- isTRUE(scheme$explicit) && !anyNA(ctx$diff_state)
-  start <- if (explicit) rep(TRUE, s) else cc == 0 & apply(A == 0, 1L, all)
+  # an implicit tableau of JuMP or CasADi: derivative stage variables K
+  # (MTK's add_solve_constraints!), so the nodes are again the only points
+  kstage <- isTRUE(scheme$kstage) && !anyNA(ctx$diff_state)
+  start <- if (explicit || kstage) rep(TRUE, s) else cc == 0 & apply(A == 0, 1L, all)
   endst <- abs(cc - 1) < 1e-12 & apply(abs(sweep(A, 2L, b)) < 1e-12, 1L, all) & !start
   interior <- !(start | endst)
   ni <- sum(interior)
@@ -760,7 +782,7 @@ print.DynamicOptProblem <- function(x, ...) {
   # inputs held over a step (the JuMP and CasADi transcriptions): the inputs
   # of the interior stages equal the input at the start of the interval, and
   # the stage at the end of an interval is evaluated with that input
-  hold <- isTRUE(scheme$hold) && m > 0L && !explicit
+  hold <- isTRUE(scheme$hold) && m > 0L && !explicit && !kstage
   if (hold) {
     ties <- list()
     for (i in which(interior)) for (kk in seq_len(N - 1L))
@@ -768,21 +790,52 @@ print.DynamicOptProblem <- function(x, ...) {
   }
   ctx$hold <- hold
   ctx$explicit <- explicit
+  ctx$kstage <- kstage
   ctx$stage_end <- endst
-  ctx$ties <- if (m && !explicit) ties else list()
+  dvar <- isTRUE(scheme$dvar) && !explicit && !kstage
+  ctx$dvar <- dvar
+  ctx$ties <- if (m && !explicit && !kstage && !dvar) ties else list()
   ctx$scheme <- scheme
   ctx$Npts <- Np; ctx$node_pt <- node_pt; ctx$spt <- spt; ctx$ptau <- ptau; ctx$dtau <- dtau
   ctx$stage_interior <- interior
-  ctx$nz <- Np * (n + m) + k + as.integer(ctx$free)
-  ctx$var_key <- c(rep(seq_len(Np), n), rep(seq_len(Np), m), rep(Inf, k + as.integer(ctx$free)))
-  ctx$lower <- c(rep(ctx$bx[, 1L], each = Np), rep(ctx$bw[, 1L], each = Np), ctx$bP[, 1L], ctx$bT[1L])
-  ctx$upper <- c(rep(ctx$bx[, 2L], each = Np), rep(ctx$bw[, 2L], each = Np), ctx$bP[, 2L], ctx$bT[2L])
+  # the stage variables K[kk, i, j] of nK nodes follow the duration, node by
+  # node and stage by stage; they start at 0 (no start value) and are free
+  nK <- if (kstage) (if (isTRUE(scheme$k_last)) N else N - 1L) else 0L
+  ctx$nK <- nK
+  ctx$iT <- Np * (n + m) + k + 1L
+  ctx$kbase <- Np * (n + m) + k + as.integer(ctx$free)
+  # the derivative variables of InfiniteOpt: D[p, q] for point p and the
+  # q-th differential state, column by column
+  ctx$drows <- which(!is.na(ctx$diff_state))
+  nD <- if (dvar) Np * length(ctx$drows) else 0L
+  nx <- nK * s * n + nD
+  ctx$nz <- ctx$kbase + nx
+  ctx$var_key <- c(rep(seq_len(Np), n), rep(seq_len(Np), m), rep(Inf, k + as.integer(ctx$free)),
+                   rep(node_pt[seq_len(nK)], each = s * n), rep(seq_len(Np), length.out = nD))
+  ctx$lower <- c(rep(ctx$bx[, 1L], each = Np), rep(ctx$bw[, 1L], each = Np), ctx$bP[, 1L], ctx$bT[1L],
+                 rep(-Inf, nx))
+  ctx$upper <- c(rep(ctx$bx[, 2L], each = Np), rep(ctx$bw[, 2L], each = Np), ctx$bP[, 2L], ctx$bT[2L],
+                 rep(Inf, nx))
+  if (dvar) {
+    # the relations of the derivative method on each finite element
+    # (derivative_expr_data of InfiniteOpt): sum_k C[k, j] D(q_k) - x(q_j) +
+    # x(lb) = 0 for the points q after the element's start lb, with
+    # C = M1t \ M2t from the support offsets (Backward: C = dt)
+    sc_t <- if (ctx$free) 1 else ctx$Tfix
+    ep <- order(cc)[!start[order(cc)]]
+    off <- cc[ep] * dtau * sc_t
+    nq <- length(off)
+    M1t <- outer(seq_len(nq), seq_len(nq), function(kq, j) kq * off[j]^(kq - 1L))
+    M2t <- outer(seq_len(nq), seq_len(nq), function(kq, j) off[j]^kq)
+    ctx$dv_pts <- ep
+    ctx$dv_C <- solve(M1t, M2t)
+  }
   spread <- function(M) {
     if (!ncol(M)) return(numeric())
     as.numeric(vapply(seq_len(ncol(M)), function(j) stats::approx(ctx$tau, M[, j], xout = ptau, rule = 2)$y,
                       numeric(Np)))
   }
-  z0 <- c(spread(ctx$X0), spread(ctx$W0), ctx$P0, ctx$T0)
+  z0 <- c(spread(ctx$X0), spread(ctx$W0), ctx$P0, ctx$T0, numeric(nx))
   # fixed initial states are bounds with equal values, which Ipopt turns
   # into parameters (fixed_variable_treatment = make_parameter)
   ctx$u0_fixed <- isTRUE(scheme$fix_u0)
@@ -825,7 +878,15 @@ print.DynamicOptProblem <- function(x, ...) {
       stop("the bounds of an integral must be times of the collocation grid; adjust dt", call. = FALSE)
     ks <- seq_len(ctx$N - 1L)
     ks <- ks[ks >= kl[1L] & ks < kh[1L]]
-    if (isTRUE(ctx$explicit)) {
+    if (isTRUE(ctx$dvar)) {
+      # InfiniteOpt's UniTrapezoid on all supports in the span, internal
+      # collocation points included (_trapezoid_coeff)
+      ord <- order(ctx$ptau)
+      pts <- ord[ctx$ptau[ord] >= span[1L] - 1e-9 & ctx$ptau[ord] <= span[2L] + 1e-9]
+      tq <- ctx$ptau[pts]
+      L <- length(tq)
+      wq <- c((tq[2L] - tq[1L]) / 2, if (L > 2L) (tq[3:L] - tq[1:(L - 2L)]) / 2, (tq[L] - tq[L - 1L]) / 2)
+    } else if (isTRUE(ctx$explicit) || isTRUE(ctx$kstage)) {
       # the trapezoidal rule on the supports (InfiniteOpt's default measure
       # and the lowered_integral of CasADi)
       pts <- c(ctx$node_pt[ks], ctx$node_pt[ks + 1L])
@@ -849,7 +910,7 @@ print.DynamicOptProblem <- function(x, ...) {
 .dopt_point_cols <- function(ctx, pt) {
   Np <- ctx$Npts
   c((seq_len(ctx$n) - 1L) * Np + pt, Np * ctx$n + (seq_len(ctx$m) - 1L) * Np + pt,
-    Np * (ctx$n + ctx$m) + seq_len(ctx$k), if (ctx$free) ctx$nz)
+    Np * (ctx$n + ctx$m) + seq_len(ctx$k), if (ctx$free) ctx$iT)
 }
 
 # The gradient over (states, inputs, parameters, t, T) of a function at a
@@ -872,7 +933,7 @@ print.DynamicOptProblem <- function(x, ...) {
   gfun <- function(v) grad(v[seq_len(n)], v[n + seq_len(m)], v[n + m + seq_len(k)], if (ctx$free) v[d] else Tv)
   H <- .dopt_fd_hess(gfun, v)
   cols <- c((seq_len(n) - 1L) * Np + pt, Np * n + (seq_len(m) - 1L) * Np + ptu,
-            Np * (n + m) + seq_len(k), if (ctx$free) ctx$nz)
+            Np * (n + m) + seq_len(k), if (ctx$free) ctx$iT)
   nzh <- which(H != 0, arr.ind = TRUE)
   list(i = cols[nzh[, 1L]], j = cols[nzh[, 2L]], v = H[nzh])
 }
@@ -936,7 +997,7 @@ print.DynamicOptProblem <- function(x, ...) {
       lz <- .dopt_local_to_z(ctx, pt, gr)
       cols <- lz$cols; vals <- lz$vals
     } else {
-      cols <- c(Np * (n + m) + seq_len(k), if (ctx$free) ctx$nz)
+      cols <- c(Np * (n + m) + seq_len(k), if (ctx$free) ctx$iT)
       vals <- c(gr[n + m + seq_len(k)], if (ctx$free) gr[nmk + 2L])
     }
     for (s in seq_len(ns)) {
@@ -1000,7 +1061,7 @@ print.DynamicOptProblem <- function(x, ...) {
     maps <- c(if (it$path) c(lapply(seq_len(n), function(j) list(cols = (j - 1L) * Np + pt, vals = 1)),
                              lapply(seq_len(m), function(q) list(cols = Np * n + (q - 1L) * Np + pt, vals = 1))),
               lapply(seq_len(k), function(l) list(cols = Np * (n + m) + l, vals = 1)),
-              if (free) list(list(cols = ctx$nz, vals = 1)), spec_maps, ex$Igrad)
+              if (free) list(list(cols = ctx$iT, vals = 1)), spec_maps, ex$Igrad)
     nzh <- which(Ha != 0, arr.ind = TRUE)
     for (e in seq_len(nrow(nzh))) {
       ma <- maps[[nzh[e, 1L]]]; mb <- maps[[nzh[e, 2L]]]
@@ -1045,7 +1106,7 @@ print.DynamicOptProblem <- function(x, ...) {
   X <- matrix(z[seq_len(Np * n)], Np, n)
   W <- matrix(z[Np * n + seq_len(Np * m)], Np, m)
   P <- z[Np * (n + m) + seq_len(k)]
-  Tv <- if (ctx$free) z[nz] else ctx$Tfix
+  Tv <- if (ctx$free) z[ctx$iT] else ctx$Tfix
   tt <- ctx$t0 + ctx$ptau * Tv
   FF <- matrix(0, Np, n)
   for (i in seq_len(Np)) FF[i, ] <- ctx$fF(X[i, ], W[i, ], P, tt[i], Tv)
@@ -1079,7 +1140,7 @@ print.DynamicOptProblem <- function(x, ...) {
       else if (q <= n + m) cols <- Np * n + (q - n - 1L) * Np + upts
       else if (q <= n + m + k) cols <- rep(Np * (n + m) + q - n - m, length(pts))
       else if (ctx$free) {
-        cols <- rep(nz, length(pts))
+        cols <- rep(ctx$iT, length(pts))
         if (q == n + m + k + 1L) vals <- vals * ctx$ptau[pts]
       } else next
       add(rows, cols, vals)
@@ -1109,7 +1170,83 @@ print.DynamicOptProblem <- function(x, ...) {
       row <- row + n
     }
   }
-  for (r in if (isTRUE(ctx$explicit)) integer() else which(!is.na(ctx$diff_state))) {
+  kst <- list()
+  Kv <- NULL
+  if (isTRUE(ctx$kstage)) {
+    # MTK's add_solve_constraints! for an implicit tableau: per step, the
+    # stage equations K_i - T f(U_k + dt sum_l A_il K_l, V_k, P, t_k + c_i dt)
+    # (one row per state) and U_k + dt sum_i alpha_i K_i - U_{k+1}
+    s <- length(b)
+    Kv <- array(z[ctx$kbase + seq_len(ctx$nK * s * n)], c(n, s, ctx$nK))
+    for (kk in seq_len(N - 1L)) {
+      Kk <- Kv[, , kk, drop = FALSE]
+      dim(Kk) <- c(n, s)
+      st <- .dopt_kstage_step(ctx, kk, X[nk[kk], ], W[nk[kk], ], P, Tv, Kk, level)
+      for (i in seq_len(s)) {
+        rows <- row + seq_len(n)
+        cE <- c(cE, Kk[, i] - st$val[, i])
+        keyE <- c(keyE, rep(nk1[kk], n))
+        if (level >= 1L) {
+          D <- -st$D[[i]]
+          own <- cbind(seq_len(n), st$np + (i - 1L) * n + seq_len(n))
+          D[own] <- D[own] + 1
+          add(rep(rows, length(st$cols)), rep(st$cols, each = n), as.numeric(D))
+        }
+        kst[[length(kst) + 1L]] <- list(rows = rows, kk = kk, i = i)
+        row <- row + n
+      }
+      rows <- row + seq_len(n)
+      cE <- c(cE, X[nk[kk], ] + .dopt_support_dt(ctx) * as.numeric(Kk %*% b) - X[nk1[kk], ])
+      keyE <- c(keyE, rep(nk1[kk], n))
+      if (level >= 1L) {
+        add(rows, (seq_len(n) - 1L) * Np + nk[kk], rep(1, n))
+        add(rows, (seq_len(n) - 1L) * Np + nk1[kk], rep(-1, n))
+        for (i in seq_len(s))
+          add(rows, ctx$kbase + ((kk - 1L) * s + i - 1L) * n + seq_len(n), rep(.dopt_support_dt(ctx) * b[i], n))
+      }
+      row <- row + n
+    }
+  }
+  dvr <- list()
+  if (isTRUE(ctx$dvar)) {
+    # InfiniteOpt: (D x - T f) / nominal at every support, then the
+    # relations of the derivative method on every element
+    Tsc <- if (ctx$free) Tv else 1
+    dcol <- function(q, pts) ctx$kbase + (q - 1L) * Np + pts
+    for (q in seq_along(ctx$drows)) {
+      r <- ctx$drows[q]; j <- ctx$diff_state[r]; sc <- ctx$scale[j]
+      Dq <- z[dcol(q, seq_len(Np))]
+      rows <- row + seq_len(Np)
+      cE <- c(cE, (Dq - Tsc * FF[, r]) / sc)
+      keyE <- c(keyE, seq_len(Np))
+      if (level >= 1L) {
+        add(rows, dcol(q, seq_len(Np)), rep(1 / sc, Np))
+        add_node_jac(rows, seq_len(Np), r, -Tsc / sc)
+        if (ctx$free) add(rows, rep(ctx$iT, Np), -FF[, r] / sc)
+      }
+      dvr[[length(dvr) + 1L]] <- list(rows = rows, r = r, sc = sc)
+      row <- row + Np
+    }
+    ep <- ctx$dv_pts; C <- ctx$dv_C
+    for (kk in seq_len(N - 1L)) {
+      qp <- spt[kk, ep]
+      for (q in seq_along(ctx$drows)) {
+        j <- ctx$diff_state[ctx$drows[q]]
+        Dq <- z[dcol(q, qp)]
+        for (e in seq_along(ep)) {
+          row <- row + 1L
+          cE <- c(cE, sum(C[, e] * Dq) - X[qp[e], j] + X[nk[kk], j])
+          keyE <- c(keyE, qp[e])
+          if (level >= 1L) {
+            add(rep(row, length(qp)), dcol(q, qp), C[, e])
+            add(c(row, row), (j - 1L) * Np + c(qp[e], nk[kk]), c(-1, 1))
+          }
+        }
+      }
+    }
+  }
+  for (r in if (isTRUE(ctx$explicit) || isTRUE(ctx$kstage) || isTRUE(ctx$dvar)) integer()
+       else which(!is.na(ctx$diff_state))) {
     j <- ctx$diff_state[r]
     sc <- ctx$scale[j]
     eqs <- c(lapply(which(ctx$stage_interior), function(i) list(target = spt[, i], coef = A[i, ])),
@@ -1131,7 +1268,7 @@ print.DynamicOptProblem <- function(x, ...) {
           if (held[l]) add_node_jac(rows, hx, r, -Tv * e$coef[l] / sc, upts = hu, JA = JH, idx = seq_len(N - 1L))
           else add_node_jac(rows, spt[, l], r, -Tv * e$coef[l] / sc)
         }
-        if (ctx$free) add(rows, rep(nz, N - 1L), -fsum / sc)
+        if (ctx$free) add(rows, rep(ctx$iT, N - 1L), -fsum / sc)
       }
       dyn[[length(dyn) + 1L]] <- list(rows = rows, r = r, coef = e$coef / sc)
       row <- row + N - 1L
@@ -1185,7 +1322,8 @@ print.DynamicOptProblem <- function(x, ...) {
     exI[[length(exI) + 1L]] <- ex
   }
   cf <- .dopt_expr(ctx$cost, ctx, X, W, P, Tv, tt, level)
-  out <- list(f = cf$v, cE = cE, cI = cI, keyE = keyE, keyI = keyI, X = X, W = W, P = P, T = Tv, t = tt, FF = FF)
+  out <- list(f = cf$v, cE = cE, cI = cI, keyE = keyE, keyI = keyI, X = X, W = W, P = P, T = Tv, t = tt, FF = FF,
+              K = Kv)
   if (level < 1L) return(out)
   out$gf <- .nlp_accum(cf$J$j, cf$J$v, nz)
   out$JE <- JE; out$JI <- JI
@@ -1210,6 +1348,10 @@ print.DynamicOptProblem <- function(x, ...) {
     }
   }
   for (a in alg) al[, a$r] <- al[, a$r] + lamE[a$rows]
+  for (d in dvr) {
+    if (ctx$free) be[, d$r] <- be[, d$r] - lamE[d$rows] / d$sc
+    else al[, d$r] <- al[, d$r] - lamE[d$rows] / d$sc
+  }
   H <- list()
   nmk <- n + m + k
   for (pt in seq_len(Np)) {
@@ -1247,6 +1389,13 @@ print.DynamicOptProblem <- function(x, ...) {
     H[[length(H) + 1L]] <- .dopt_point_hess(ctx, nk[kk], X, W, P, Tv, function(x, u, Pp, Tt) {
       as.numeric(crossprod(.dopt_explicit_step(ctx, kk, x, u, Pp, Tt, 1L)$D, lr))
     })
+  }
+  for (e in kst) {
+    lr <- lamE[e$rows]
+    if (all(lr == 0)) next
+    Kk <- Kv[, , e$kk, drop = FALSE]
+    dim(Kk) <- dim(Kv)[1:2]
+    H[[length(H) + 1L]] <- .dopt_kstage_hess(ctx, e$kk, e$i, lr, X, W, P, Tv, Kk)
   }
   H <- c(H, .dopt_expr_hess(ctx$cost, cf, obj, ctx, X, W, P, Tv, tt))
   for (q in seq_along(ctx$eqc)) {
@@ -1300,6 +1449,68 @@ print.DynamicOptProblem <- function(x, ...) {
     }
   }
   list(val = val, D = D)
+}
+
+# The stages of an implicit tableau with derivative stage variables Kk (n x
+# s) at step kk: val[, i] = T f(U_k + dt sum_l A_il K_l, V_k, P, t_k + c_i dt)
+# and, for level >= 1, its Jacobian D[[i]] over the columns `cols` (the
+# point variables of node kk, then the np + seq_len(s * n) stage variables
+# of the step).
+.dopt_kstage_step <- function(ctx, kk, x, u, P, Tv, Kk, level = 1L) {
+  n <- ctx$n; m <- ctx$m; k <- ctx$k
+  A <- ctx$scheme$A; cc <- ctx$scheme$c
+  s <- length(cc)
+  h <- ctx$dtau
+  # K is in the units of the supports (the times, or [0, 1] scaled by the
+  # free duration): K = Ts f with dt the support spacing
+  Tsc <- if (ctx$free) Tv else 1
+  hs <- .dopt_support_dt(ctx)
+  rj <- match(seq_len(n), ctx$diff_state)
+  cols <- c(.dopt_point_cols(ctx, ctx$node_pt[kk]), ctx$kbase + (kk - 1L) * s * n + seq_len(s * n))
+  np <- n + m + k + as.integer(ctx$free)
+  val <- matrix(0, n, s)
+  D <- vector("list", s)
+  for (i in seq_len(s)) {
+    Y <- x + as.numeric(Kk %*% A[i, ]) * hs
+    ti <- ctx$tau[kk] + cc[i] * h
+    tp <- ctx$t0 + ti * Tv
+    Fv <- ctx$fF(Y, u, P, tp, Tv)[rj]
+    val[, i] <- Tsc * Fv
+    if (level >= 1L) {
+      J <- ctx$fJ(Y, u, P, tp, Tv)[rj, , drop = FALSE]
+      Jx <- Tsc * J[, seq_len(n), drop = FALSE]
+      Di <- matrix(0, n, np + s * n)
+      Di[, seq_len(n)] <- Jx
+      if (m + k) Di[, n + seq_len(m + k)] <- Tsc * J[, n + seq_len(m + k)]
+      if (ctx$free) Di[, np] <- Fv + Tv * (J[, n + m + k + 1L] * ti + J[, n + m + k + 2L])
+      for (l in which(A[i, ] != 0)) Di[, np + (l - 1L) * n + seq_len(n)] <- Jx * (hs * A[i, l])
+      D[[i]] <- Di
+    }
+  }
+  list(val = val, D = D, cols = cols, np = np)
+}
+
+# The spacing of the supports of the time parameter (InfiniteOpt and CasADi
+# work in the problem's time, or on [0, 1] for a free final time).
+.dopt_support_dt <- function(ctx) ctx$dtau * (if (ctx$free) 1 else ctx$Tfix)
+
+# Hessian triplets of -sum_j lr_j K-stage value (stage i of step kk) by
+# forward differences of its gradient.
+.dopt_kstage_hess <- function(ctx, kk, i, lr, X, W, P, Tv, Kk) {
+  n <- ctx$n; m <- ctx$m; k <- ctx$k
+  s <- ncol(Kk)
+  pt <- ctx$node_pt[kk]
+  v <- c(X[pt, ], W[pt, ], P, if (ctx$free) Tv, as.numeric(Kk))
+  np <- n + m + k + as.integer(ctx$free)
+  gfun <- function(v) {
+    st <- .dopt_kstage_step(ctx, kk, v[seq_len(n)], v[n + seq_len(m)], v[n + m + seq_len(k)],
+                            if (ctx$free) v[np] else Tv, matrix(v[np + seq_len(s * n)], n, s), 1L)
+    -as.numeric(crossprod(st$D[[i]], lr))
+  }
+  H <- .dopt_fd_hess(gfun, v)
+  cols <- c(.dopt_point_cols(ctx, pt), ctx$kbase + (kk - 1L) * s * n + seq_len(s * n))
+  nzh <- which(H != 0, arr.ind = TRUE)
+  list(i = cols[nzh[, 1L]], j = cols[nzh[, 2L]], v = H[nzh])
 }
 
 # ---------------------------------------------------------------------------
@@ -1445,7 +1656,12 @@ print.DynamicOptProblem <- function(x, ...) {
     kk <- list(V = values[pts, , drop = FALSE], th = th, beta = beta, diff = integer(), K = NULL)
     if (deriv && length(diffj)) {
       kk$diff <- diffj
-      if (!is.null(beta)) {
+      if (!is.null(beta) && isTRUE(ctx$kstage)) {
+        # the derivative stage variables (T f at the stages)
+        Kk <- v$K[, , k, drop = FALSE]
+        dim(Kk) <- dim(v$K)[1:2]
+        kk$K <- t(Kk)[, diffj, drop = FALSE] / (if (ctx$free) Tv else 1)
+      } else if (!is.null(beta)) {
         kk$K <- v$FF[ctx$spt[k, ], rows_of, drop = FALSE]
       } else {
         kk$f0 <- v$FF[a, rows_of]; kk$f1 <- v$FF[b, rows_of]
@@ -1516,6 +1732,9 @@ solve.DynamicOptProblem <- function(a, b, tol = NULL, maxiter = NULL, inner_maxi
   else .dopt_auglag(evalf, ctx$z0, ctx$lower, ctx$upper, tol = tol, maxiter = maxiter,
                     inner_maxit = inner_maxit, verbose = verbose)
   v <- .dopt_eval(ctx, res$z, level = 0L)
+  # ModelingToolkit's solve builds the solutions with build_solution (the
+  # retcode Default) and sets ConvergenceFailure when successful_solve fails
+  retcode <- if (identical(res$status, "Success")) "Default" else "ConvergenceFailure"
   nodes <- ctx$node_pt
   times <- v$t[nodes]
   pv <- ctx$pv
@@ -1530,7 +1749,7 @@ solve.DynamicOptProblem <- function(a, b, tol = NULL, maxiter = NULL, inner_maxi
   prob <- .new_problem("ODEProblem", f = ODEFunction(sys), u0 = X[1L, ], tspan = range(times), p = pv,
                        sys = sys, kwargs = list())
   alg <- list(name = paste0("DirectCollocation (", scheme$name, ")"))
-  sol <- .new_ode_solution(t = times, u = X, prob = prob, alg = alg, retcode = res$status, p = pv,
+  sol <- .new_ode_solution(t = times, u = X, prob = prob, alg = alg, retcode = retcode, p = pv,
                            steps = .dopt_steps(ctx, v, Xall), dense = TRUE)
   if (ctx$m) {
     Pm <- matrix(pv, ctx$N, length(pv), byrow = TRUE)
@@ -1545,7 +1764,7 @@ solve.DynamicOptProblem <- function(a, b, tol = NULL, maxiter = NULL, inner_maxi
     iprob <- .new_problem("ODEProblem", f = NULL, u0 = Wall[1L, ], tspan = range(times), p = numeric(),
                           sys = NULL, kwargs = list())
     input_sol <- .new_ode_solution(t = times, u = Wall[nodes, , drop = FALSE], prob = iprob, alg = alg,
-                                   retcode = res$status, steps = .dopt_steps(ctx, v, Wall, deriv = FALSE),
+                                   retcode = retcode, steps = .dopt_steps(ctx, v, Wall, deriv = FALSE),
                                    dense = TRUE)
   }
   model <- list(objective = v$f, z = res$z, constraint_violation = res$violation,

@@ -2,7 +2,8 @@
 # solver (R/dynamic-opt-nlp.R): small NLPs whose solves enter the
 # restoration phase, and the cart pole of ModelingToolkit's tests solved
 # from rest without an initial trajectory, with the JuMP backend and Ipopt
-# at print_level 5. Usage (packages: JuMP Ipopt InfiniteOpt):
+# at print_level 5. Usage (packages: JuMP Ipopt InfiniteOpt
+# OrdinaryDiffEqImplicitTableaus):
 #   julia --project=tools/julia tools/ipopt-resto-probe.jl > ipopt-resto.txt
 import JuMP
 import Ipopt
@@ -122,6 +123,72 @@ cartpole_code = raw"""
             println("error ", sprint(showerror, err))
         end
         flush(stdout)
+        # implicit tableaus: derivative stage variables K (one per stage and
+        # state at every support), and the InfiniteOpt backends with the
+        # trapezoidal integral of the cost on the supports
+        import OrdinaryDiffEqImplicitTableaus as ImplicitTableaus
+        for tname in (:ImplicitEuler, :Trapezoid, :LobattoIIIA3, :HermiteSimpson, :RadauIA3, :RadauIIA3, :RadauIIA5)
+            println("== lqr ", tname, "_dt0.1")
+            flush(stdout)
+            try
+                isdefined(ImplicitTableaus, tname) || error("no tableau ", tname)
+                tab = getfield(ImplicitTableaus, tname)()
+                lprob = MTK.JuMPDynamicOptProblem(lqr, [xq(t) => 1.0, uq => 0.0], (0, 1); dt = 0.1)
+                lsol = MTK.solve(lprob, MTK.JuMPCollocation(Ipopt.Optimizer, tab); verbose = true)
+                flush(stdout)
+                println("tableau ", repr(tab.A), " ", repr(tab.α), " ", repr(tab.c))
+                println("retcode ", lsol.sol.retcode)
+                println("x ", repr(Float64.(lsol.sol[xq(t)])))
+                println("u ", repr(Float64.(lsol.input_sol[uq])))
+                println("objective ", repr(JuMP.objective_value(lsol.model.model)))
+            catch err
+                println("error ", sprint(showerror, err))
+            end
+            flush(stdout)
+        end
+        println("== lqr default_dt0.1")
+        flush(stdout)
+        try
+            lprob = MTK.JuMPDynamicOptProblem(lqr, [xq(t) => 1.0, uq => 0.0], (0, 1); dt = 0.1)
+            lsol = MTK.solve(lprob, MTK.JuMPCollocation(Ipopt.Optimizer); verbose = true)
+            flush(stdout)
+            println("retcode ", lsol.sol.retcode)
+            println("x ", repr(Float64.(lsol.sol[xq(t)])))
+            println("u ", repr(Float64.(lsol.input_sol[uq])))
+            println("objective ", repr(JuMP.objective_value(lsol.model.model)))
+        catch err
+            println("error ", sprint(showerror, err))
+        end
+        flush(stdout)
+        println("== cartpole radauiia5_dt0.25")
+        flush(stdout)
+        try
+            jprob = MTK.JuMPDynamicOptProblem(cartpole, [u0map; pmap], (0, tf); dt = 0.25)
+            jsol = MTK.solve(jprob, MTK.JuMPCollocation(Ipopt.Optimizer, ImplicitTableaus.RadauIIA5()); verbose = true)
+            flush(stdout)
+            println("retcode ", jsol.sol.retcode)
+            println("final ", repr(Float64.(jsol.sol[var_order][end])))
+        catch err
+            println("error ", sprint(showerror, err))
+        end
+        flush(stdout)
+        for (name, dm) in (("backward", InfiniteOpt.FiniteDifference(InfiniteOpt.Backward())),
+                           ("orthogonal3", InfiniteOpt.OrthogonalCollocation(3)))
+            println("== lqr infiniteopt_", name, "_dt0.1")
+            flush(stdout)
+            try
+                iprob = MTK.InfiniteOptDynamicOptProblem(lqr, [xq(t) => 1.0, uq => 0.0], (0, 1); dt = 0.1)
+                isol = MTK.solve(iprob, MTK.InfiniteOptCollocation(Ipopt.Optimizer, dm); verbose = true)
+                flush(stdout)
+                println("retcode ", isol.sol.retcode)
+                println("x ", repr(Float64.(isol.sol[xq(t)])))
+                println("u ", repr(Float64.(isol.input_sol[uq])))
+                println("objective ", repr(InfiniteOpt.objective_value(isol.model.model)))
+            catch err
+                println("error ", sprint(showerror, err))
+            end
+            flush(stdout)
+        end
 """
 try
     Base.include_string(Main, cartpole_code)

@@ -106,8 +106,9 @@ An ADType object; \code{NoAutoDiffSelectedError()} a condition;
 }
 \description{
 The backends of ADTypes.jl, for the \code{autodiff} arguments of the solvers.
-R has no automatic differentiation: every backend that differentiates
-exactly (\code{AutoZygote()}, \code{AutoEnzyme()}, \code{AutoReverseDiff()},
+The nonlinear solvers do not differentiate with dual numbers (the ODE
+solvers and the optimizers do for \code{AutoForwardDiff()}): every backend
+that differentiates exactly (\code{AutoZygote()}, \code{AutoEnzyme()}, \code{AutoReverseDiff()},
 \code{AutoSymbolics()}, ...) uses the problem's Jacobian when it has one and
 central differences otherwise, as \code{\link[=AutoForwardDiff]{AutoForwardDiff()}} does, and
 \code{AutoFiniteDifferences()} uses central differences (the bounded solvers

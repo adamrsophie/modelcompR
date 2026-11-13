@@ -50,10 +50,19 @@
 #' `barrier` is `"MonotoneUpdate"`, `"QualityFunctionUpdate"` or
 #' `"LOQOUpdate"`, or a list with `type` and that update's fields (for
 #' example `list(type = "MonotoneUpdate", mu_init = 0.5)`).
-#' `hessian_approximation` is `"ExactHessian"` or `"CompactLBFGS"`.
-#' `linear_solver` is `"MumpsSolver"` (the default), `"LapackCPUSolver"`,
-#' `"LDLSolver"` or `"UmfpackSolver"` (which selects the InertiaFree
-#' correction). All of them factorize the KKT system densely.
+#' `hessian_approximation` is `"ExactHessian"`, `"CompactLBFGS"`, or
+#' `"BFGS"` or `"DampedBFGS"` (which need a dense KKT system).
+#' `kkt_system` is `"SparseKKTSystem"` (the default),
+#' `"SparseCondensedKKTSystem"` (the slacks and the inequality duals
+#' condensed out of a definite system; equalities are relaxed into
+#' inequalities), `"DenseKKTSystem"` or `"DenseCondensedKKTSystem"` (with
+#' `"LapackCPUSolver"`). `linear_solver` is `"MumpsSolver"` (the default),
+#' `"LapackCPUSolver"`, `"LDLSolver"`, `"UmfpackSolver"` (which selects the
+#' InertiaFree correction) or `"CHOLMODSolver"` (CHOLMOD through the
+#' Matrix package, Cholesky or, with `cholmod_algorithm = "LDL"` in
+#' `additional_options`, LDL'; it needs the condensed KKT system, as the
+#' Cholesky factorization of the indefinite augmented system fails). The
+#' others factorize the KKT system densely.
 #' `additional_options` sets MadNLP's options (for example
 #' `inertia_correction_method`, `fixed_variable_treatment`, `bound_push`,
 #' `kappa_d`) and the Richardson refinement options; MadNLP ignores the
@@ -113,6 +122,55 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
     h <- .Machine$double.eps^(1 / 3) * max(1, abs(x[k]))
     (g(replace(x, k, x[k] + h)) - g(replace(x, k, x[k] - h))) / (2 * h)
   }, numeric(length(gx)))
+}
+
+# The derivatives OptimizationBase.instantiate_function gives Ipopt and
+# MadNLP: the problem's own grad, cons_j, hess and cons_h when it has them;
+# otherwise forward mode AD (R/forwarddiff.R) as for AutoForwardDiff(),
+# with the Hessian of the Lagrangian (lag_h) taken whole, unless the
+# problem supplies both Hessians. AutoFiniteDiff(), or functions that
+# cannot run on dual numbers, take central differences. `lag(x, sigma,
+# lambda, weighted_zero)` is NULL when the Hessians are assembled from hess
+# and cons_h.
+.ipm_derivatives <- function(fn, p, x0, m) {
+  n <- length(x0)
+  f <- function(x) as.numeric(fn$f(x, p))[1L]
+  cons <- if (m) function(x) as.numeric(fn$cons(x, p)) else function(x) numeric()
+  ad_ok <- !inherits(fn$adtype, "AutoFiniteDiff") && (!is.function(fn$grad) || !is.function(fn$hess) ||
+                                                        (m && (!is.function(fn$cons_j) || !is.function(fn$cons_h))))
+  ad <- NULL
+  if (ad_ok) {
+    fa <- function(x) {
+      y <- fn$f(x, p)
+      if (inherits(y, "fdual")) y[1L] else as.numeric(y)[1L]
+    }
+    ca <- function(x) {
+      y <- fn$cons(x, p)
+      if (inherits(y, "fdual")) y else as.numeric(y)
+    }
+    if (.ad_works(fa, x0) && (!m || .ad_works(ca, x0))) ad <- .ad_opt_derivatives(fa, ca, m)
+  }
+  grad <- if (is.function(fn$grad)) function(x) as.numeric(fn$grad(x, p)) else if (!is.null(ad)) ad$grad else
+    function(x) as.numeric(.ipm_fd_jac(function(z) f(z), x, f(x)))
+  hess <- if (is.function(fn$hess)) function(x) as.matrix(fn$hess(x, p)) else if (!is.null(ad)) ad$hess else
+    function(x) {
+      H <- .ipm_fd_jac(grad, x)
+      (H + t(H)) / 2
+    }
+  cjac <- if (m && is.function(fn$cons_j)) function(x) matrix(fn$cons_j(x, p), m, n) else
+    if (m && !is.null(ad)) function(x) matrix(ad$jac(x), m, n) else function(x) matrix(.ipm_fd_jac(cons, x), m, n)
+  chess <- if (m && is.function(fn$cons_h)) function(x) lapply(fn$cons_h(x, p), as.matrix) else
+    if (!is.null(ad)) ad$cons_h else function(x) {
+      J <- function(z) as.numeric(cjac(z))
+      D <- .ipm_fd_jac(J, x)
+      lapply(seq_len(m), function(i) {
+        Hi <- D[i + m * (seq_len(n) - 1L), , drop = FALSE]
+        (Hi + t(Hi)) / 2
+      })
+    }
+  own_hessians <- is.function(fn$hess) && (!m || is.function(fn$cons_h))
+  lag <- if (m && !is.null(ad) && !own_hessians) ad$lag_h
+  list(f = f, grad = grad, hess = hess, cons = cons, cjac = cjac, chess = chess, lag = lag, ad = !is.null(ad))
 }
 
 .ipm_triplets <- function(M) {
@@ -207,25 +265,14 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
     return(.opt_solution(a, alg, x0, as.numeric(fn$f(x0, p))[1L], "Failure", original))
   }
   if (!is.null(opts$maxtime)) io$max_wall_time <- as.numeric(opts$maxtime)
-  f <- function(x) as.numeric(fn$f(x, p))[1L]
-  grad <- if (is.function(fn$grad)) function(x) as.numeric(fn$grad(x, p)) else
-    function(x) as.numeric(.ipm_fd_jac(function(z) f(z), x, f(x)))
-  hess <- if (is.function(fn$hess)) function(x) as.matrix(fn$hess(x, p)) else function(x) {
-    H <- .ipm_fd_jac(grad, x)
-    (H + t(H)) / 2
-  }
   m <- length(a$lcons %||% numeric())
-  cons <- if (m) function(x) as.numeric(fn$cons(x, p)) else function(x) numeric()
-  cjac <- if (m && is.function(fn$cons_j)) function(x) matrix(fn$cons_j(x, p), m, n) else
-    function(x) matrix(.ipm_fd_jac(cons, x), m, n)
-  chess <- if (m && is.function(fn$cons_h)) function(x) lapply(fn$cons_h(x, p), as.matrix) else function(x) {
-    J <- function(z) as.numeric(cjac(z))
-    D <- .ipm_fd_jac(J, x)
-    lapply(seq_len(m), function(i) {
-      Hi <- D[i + m * (seq_len(n) - 1L), , drop = FALSE]
-      (Hi + t(Hi)) / 2
-    })
-  }
+  dv <- .ipm_derivatives(fn, p, x0, m)
+  f <- dv$f
+  grad <- dv$grad
+  hess <- dv$hess
+  cons <- dv$cons
+  cjac <- dv$cjac
+  chess <- dv$chess
   lc <- rep_len(as.numeric(a$lcons %||% numeric()), m)
   uc <- rep_len(as.numeric(a$ucons %||% numeric()), m)
   # equalities cE = c - lcons; inequalities c - ucons <= 0 and lcons - c <= 0
@@ -244,6 +291,18 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
       out$JI <- .ipm_triplets(sgnI * J[rowsI, , drop = FALSE])
     }
     if (level >= 2L) {
+      if (!is.null(dv$lag)) {
+        # lag_h of OptimizationBase in the vector form OptimizationIpopt
+        # calls: the Hessian of obj f + dot(lambda, cons) as a whole
+        w <- numeric(m)
+        w[ie] <- w[ie] + (lamE %||% numeric(length(ie)))
+        if (length(rowsI)) {
+          lI <- lamI %||% numeric(length(rowsI))
+          for (k in seq_along(rowsI)) w[rowsI[k]] <- w[rowsI[k]] + sgnI[k] * lI[k]
+        }
+        out$H <- .ipm_triplets(dv$lag(z, obj, w))
+        return(out)
+      }
       H <- obj * hess(z)
       if (m) {
         w <- numeric(m)

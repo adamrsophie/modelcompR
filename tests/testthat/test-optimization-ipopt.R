@@ -109,6 +109,18 @@ test_that("the options of IpoptOptimizer change the iterates as in Ipopt", {
   expect_equal(s$objective, 17.014017145179164, tolerance = 1e-13)
   expect_equal(s$u, c(0.9999999923235379, 4.742999641809297, 3.8211499817883072, 1.3794082897556985),
                tolerance = 1e-13)
+  # the penalty line searches with the quasi Newton Hessian; the probe leaves
+  # mu_strategy unset, so Ipopt switches to adaptive for limited-memory,
+  # while OptimizationIpopt passes the field mu_strategy explicitly
+  for (cs in list(list("penalty", 9L, c(0.9999999900091893, 4.742999643577505, 3.821149978947923,
+                                        1.3794082932154594)),
+                  list("cg-penalty", 8L, c(0.9999999900091949, 4.742999643601107, 3.821149978917085,
+                                           1.379408293219721)))) {
+    s <- run(IpoptOptimizer(line_search_method = cs[[1L]], hessian_approximation = "limited-memory",
+                            mu_strategy = "adaptive"))
+    expect_identical(s$original$iterations, cs[[2L]])
+    expect_equal(s$u, cs[[3L]], tolerance = 1e-14)
+  }
   # the penalty acceptor has no watchdog: Invalid_Option
   s <- run(IpoptOptimizer(line_search_method = "penalty",
                           additional_options = list(watchdog_shortened_iter_trigger = 1L)))
@@ -231,7 +243,53 @@ test_that("MadNLPOptimizer runs MadNLP's iterations, restoration phases, barrier
                tolerance = 1e-7)
   expect_warning(solve(ip_hs071(), MadNLPOptimizer(additional_options = list(not_an_option = 1))),
                  "ignored: not_an_option")
-  expect_error(solve(ip_hs071(), MadNLPOptimizer(linear_solver = "CHOLMODSolver")), "not available")
+  expect_error(solve(ip_hs071(), MadNLPOptimizer(linear_solver = "PardisoSolver")), "not available")
   expect_identical(.madnlp_retcode("RESTORATION_FAILED"), "Infeasible")
   expect_identical(.madnlp_retcode("INVALID_NUMBER_OBJECTIVE"), "Failure")
+})
+
+test_that("MadNLPOptimizer has CHOLMOD, the condensed and dense KKT systems and BFGS", {
+  # julia tools/madnlp-probe.jl (MadNLP 0.11.0): status, iterations, objective
+  # and solution of each case
+  eqp <- OptimizationProblem(function(x, p) (x[1] - 1)^2 + (x[2] - 2)^2, c(0.5, 0.5), NULL,
+                             cons = function(x, p) x[1]^2 + x[2]^2, lcons = 1, ucons = 1)
+  rosen <- OptimizationProblem(function(x, p) (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2, c(-1.2, 1), NULL,
+                               lb = c(-1.5, -0.5), ub = c(0.5, 2))
+  circ <- OptimizationProblem(function(x, p) x[1]^2 + x[2]^2, c(0, 0), NULL,
+                              cons = function(x, p) c(x[1]^2 + x[2]^2, x[2] - x[1]^2), lcons = c(1, 2),
+                              ucons = c(1, 2))
+  M <- MadNLPOptimizer
+  ch <- "CHOLMODSolver"; cd <- "SparseCondensedKKTSystem"; dc <- "DenseCondensedKKTSystem"
+  dn <- function(h, k = "DenseKKTSystem") M(kkt_system = k, linear_solver = "LapackCPUSolver", hessian_approximation = h)
+  cases <- list(
+    list(ip_hs071_exact(), M(linear_solver = ch, kkt_system = cd), "SOLVE_SUCCEEDED", 10L, 17.014017080715853,
+         c(0.9999999923034928, 4.742999676338813, 3.8211499967660383, 1.3794082743398326)),
+    list(ip_hs071_exact(), M(linear_solver = ch, kkt_system = cd, additional_options = list(cholmod_algorithm = "LDL")),
+         "SOLVE_SUCCEEDED", 10L, 17.014017080715853,
+         c(0.9999999923034928, 4.742999676338828, 3.8211499967660183, 1.3794082743398357)),
+    # the augmented system is indefinite, so the Cholesky factorization fails
+    list(ip_hs071_exact(), M(linear_solver = ch), "RESTORATION_FAILED", 2L, 16.109692919198878,
+         c(1.0099999899999998, 4.9600000494, 4.9600000494, 1.0099999899999998)),
+    list(circ, M(kkt_system = cd), "INFEASIBLE_PROBLEM_DETECTED", 27L, 1.0000000099993942, c(0, 1.000000004999697)),
+    list(eqp, M(kkt_system = cd), "SOLVE_SUCCEEDED", 7L, 1.5278640326405746, c(0.4472135977358751, 0.8944271954717502)),
+    list(ip_hs071_exact(), dn("BFGS"), "SOLVE_SUCCEEDED", 12L, 17.014017142022357,
+         c(0.9999999908356604, 4.7429996428711325, 3.8211499800580433, 1.379408291969931)),
+    list(ip_hs071_exact(), dn("DampedBFGS"), "SOLVE_SUCCEEDED", 11L, 17.01401714521598,
+         c(0.9999999923034928, 4.742999640298555, 3.8211499837517025, 1.3794082895195174)),
+    list(ip_hs071_exact(c(5, 1, 1, 5)), dn("DampedBFGS"), "SOLVE_SUCCEEDED", 27L, 27.14642759332415,
+         c(0.9999999901008013, 5.000000049633485, 1.4494897622801646, 3.4494896655169933)),
+    list(ip_hs071_exact(), dn("BFGS", dc), "SOLVE_SUCCEEDED", 12L, 17.01401714202236,
+         c(0.9999999908356604, 4.742999642871132, 3.8211499800580437, 1.3794082919699313)),
+    list(eqp, dn("BFGS"), "SOLVE_SUCCEEDED", 7L, 1.5278640449996583, c(0.4472135953926899, 0.8944271910538946)),
+    list(rosen, dn("DampedBFGS"), "SOLVE_SUCCEEDED", 33L, 0.24999999540272802, c(0.500000004597272, 0.2500000046192872)))
+  for (cs in cases) {
+    s <- solve(cs[[1L]], cs[[2L]])
+    expect_identical(s$original$status, cs[[3L]])
+    expect_identical(s$original$iterations, cs[[4L]])
+    expect_equal(s$objective, cs[[5L]], tolerance = 1e-12)
+    expect_equal(unname(s$u), cs[[6L]], tolerance = 1e-12)
+  }
+  expect_error(solve(ip_hs071(), M(hessian_approximation = "BFGS")), "require a dense KKT system")
+  expect_error(solve(ip_hs071(), M(kkt_system = "DenseKKTSystem")), "Sparse Linear solver is not supported")
+  expect_error(solve(ip_hs071(), M(kkt_system = cd, hessian_approximation = "CompactLBFGS")), "not supported")
 })

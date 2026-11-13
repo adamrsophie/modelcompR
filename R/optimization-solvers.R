@@ -230,7 +230,11 @@ solve.OptimizationProblem <- function(a, b, ...) {
   fn <- a$f
   w <- a
   w$f$f <- function(x, p) {
-    v <- sgn * as.numeric(fn$f(x, p))
+    v <- fn$f(x, p)
+    # dual numbers of forward mode differentiation (R/forwarddiff.R) pass
+    # through uncounted, as ForwardDiff's evaluations bypass the callback
+    if (inherits(v, "fdual")) return(sgn * v)
+    v <- sgn * as.numeric(v)
     cnt$f <- cnt$f + 1L
     # a vector objective (least squares residuals, root finding) is ranked by
     # its sum of squares

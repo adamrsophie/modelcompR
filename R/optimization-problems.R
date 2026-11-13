@@ -455,7 +455,8 @@ OptimizationFunction <- function(sys, grad = FALSE, hess = FALSE, cons_j = FALSE
   if (is.function(sys)) {
     return(structure(list(f = sys, grad = if (is.function(grad)) grad, hess = if (is.function(hess)) hess,
                           cons = cons, cons_j = if (is.function(cons_j)) cons_j,
-                          cons_h = if (is.function(cons_h)) cons_h, sys = NULL),
+                          cons_h = if (is.function(cons_h)) cons_h, sys = NULL,
+                          adtype = if (inherits(grad, "ADType")) grad),
                      class = c("OptimizationFunction", "SciMLFunction")))
   }
   sys <- .opt_system(sys)

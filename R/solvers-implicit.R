@@ -45,8 +45,15 @@
   fn <- function(x) ctx$f(x, ctx$p, t)
   ad <- ctx$autodiff
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
-  # AutoForwardDiff without a symbolic Jacobian, and AutoFiniteDiff("central"),
-  # use central differences; the default and "forward" forward differences
+  # AutoForwardDiff without a symbolic Jacobian differentiates f with dual
+  # numbers (R/forwarddiff.R, ForwardDiff.jacobian; stats.nf counts one call
+  # per chunk), or with central differences when f cannot run on duals
+  if (inherits(ad, "AutoForwardDiff") && !inherits(ad, "AutoFiniteDiff")) {
+    jr <- .ad_try_jacobian(fn, u)
+    if (!is.null(jr)) return(list(J = jr$jacobian, nf = jr$chunks))
+  }
+  # AutoFiniteDiff("central") uses central differences; the default and
+  # "forward" forward differences
   if (inherits(ad, "AutoForwardDiff") || (inherits(ad, "AutoFiniteDiff") && ad$fdtype != "forward")) {
     J <- .jac_central(fn, u)
     return(list(J = J, nf = 2L * length(u)))
@@ -453,9 +460,10 @@
 #'   `predictor(uprev, p, t, dt)` guessing the stage value at the stage time
 #'   `t`) it uses.
 #' @param autodiff How Jacobians are computed when the problem has no
-#'   symbolic Jacobian: `AutoForwardDiff()` (central differences, as R has no
-#'   dual numbers), `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see
-#'   [AutoForwardDiff()]. The default uses forward differences.
+#'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
+#'   central differences when the function cannot run on them),
+#'   `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see [AutoForwardDiff()].
+#'   The default uses forward differences.
 #' @return An algorithm object.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -1000 * (u - cos(t)), 0, c(0, 1))

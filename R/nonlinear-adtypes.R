@@ -2,7 +2,8 @@
 # src/legacy.jl) reexported by NonlinearSolve, and NonlinearSolveBase's
 # pickchunksize (ForwardDiff.pickchunksize, src/prelude.jl).
 #
-# R has no automatic differentiation. Every backend that differentiates
+# The nonlinear solvers have no automatic differentiation (the dual numbers
+# of R/forwarddiff.R serve the ODE solvers and the optimizers). Every backend that differentiates
 # exactly (forward, reverse or symbolic mode) is a subclass of
 # AutoForwardDiff here, so the solvers use the problem's Jacobian when it has
 # one and central differences otherwise, as for AutoForwardDiff(). The
@@ -12,8 +13,9 @@
 #' Automatic differentiation choices
 #'
 #' The backends of ADTypes.jl, for the `autodiff` arguments of the solvers.
-#' R has no automatic differentiation: every backend that differentiates
-#' exactly (`AutoZygote()`, `AutoEnzyme()`, `AutoReverseDiff()`,
+#' The nonlinear solvers do not differentiate with dual numbers (the ODE
+#' solvers and the optimizers do for `AutoForwardDiff()`): every backend
+#' that differentiates exactly (`AutoZygote()`, `AutoEnzyme()`, `AutoReverseDiff()`,
 #' `AutoSymbolics()`, ...) uses the problem's Jacobian when it has one and
 #' central differences otherwise, as [AutoForwardDiff()] does, and
 #' `AutoFiniteDifferences()` uses central differences (the bounded solvers

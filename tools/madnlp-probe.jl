@@ -120,3 +120,40 @@ run_nocons("rosenbrock_bounds", rosen_f, [-1.2, 1.0], [-1.5, -0.5], [0.5, 2.0], 
 run_nocons("rosenbrock_bounds_lbfgs", rosen_f, [-1.2, 1.0], [-1.5, -0.5], [0.5, 2.0],
     mk(hessian_approximation = MadNLP.CompactLBFGS))
 
+
+# CHOLMODSolver (Cholesky and LDL' factorizations), the dense KKT systems
+# with LAPACK, the BFGS and DampedBFGS approximations (which need a dense
+# KKT system) and the condensed KKT system on more problems
+cholmod(; kw...) = mk(; linear_solver = MadNLP.CHOLMODSolver, kw...)
+condensed(; kw...) = mk(; kkt_system = MadNLP.SparseCondensedKKTSystem, kw...)
+dense(; kw...) = mk(; kkt_system = MadNLP.DenseKKTSystem, linear_solver = MadNLP.LapackCPUSolver, kw...)
+dense_condensed(; kw...) = mk(; kkt_system = MadNLP.DenseCondensedKKTSystem, linear_solver = MadNLP.LapackCPUSolver,
+    kw...)
+run("hs071_cholmod_condensed", hs..., cholmod(kkt_system = MadNLP.SparseCondensedKKTSystem))
+run("hs071_cholmod_ldl_condensed", hs..., cholmod(kkt_system = MadNLP.SparseCondensedKKTSystem,
+    additional_options = Dict{Symbol, Any}(:cholmod_algorithm => MadNLP.LDL)))
+run("hs071_far_cholmod_condensed", hs_far..., cholmod(kkt_system = MadNLP.SparseCondensedKKTSystem))
+run("hs071_cholmod", hs..., cholmod())
+run("hs071_far_condensed", hs_far..., condensed())
+run("hs071_fixed_condensed", hs_fixed..., condensed())
+run("infeasible_circle_condensed", circle..., condensed())
+run("wachter_biegler_condensed", wb..., condensed())
+run("equality_only_condensed", eq..., condensed())
+run_nocons("rosenbrock_bounds_condensed", rosen_f, [-1.2, 1.0], [-1.5, -0.5], [0.5, 2.0], condensed())
+run("hs071_dense", hs..., dense())
+run("hs071_far_dense", hs_far..., dense())
+run("hs071_dense_condensed", hs..., dense_condensed())
+run("hs071_far_dense_condensed", hs_far..., dense_condensed())
+run("wachter_biegler_dense", wb..., dense())
+run("hs071_bfgs", hs..., dense(hessian_approximation = MadNLP.BFGS))
+run("hs071_damped_bfgs", hs..., dense(hessian_approximation = MadNLP.DampedBFGS))
+run("hs071_far_bfgs", hs_far..., dense(hessian_approximation = MadNLP.BFGS))
+run("hs071_far_damped_bfgs", hs_far..., dense(hessian_approximation = MadNLP.DampedBFGS))
+run("hs071_bfgs_dense_condensed", hs..., dense_condensed(hessian_approximation = MadNLP.BFGS))
+run("hs071_damped_bfgs_dense_condensed", hs..., dense_condensed(hessian_approximation = MadNLP.DampedBFGS))
+run("equality_only_bfgs", eq..., dense(hessian_approximation = MadNLP.BFGS))
+run("wachter_biegler_bfgs", wb..., dense(hessian_approximation = MadNLP.BFGS))
+run_nocons("rosenbrock_bounds_bfgs", rosen_f, [-1.2, 1.0], [-1.5, -0.5], [0.5, 2.0],
+    dense(hessian_approximation = MadNLP.BFGS))
+run_nocons("rosenbrock_bounds_damped_bfgs", rosen_f, [-1.2, 1.0], [-1.5, -0.5], [0.5, 2.0],
+    dense(hessian_approximation = MadNLP.DampedBFGS))

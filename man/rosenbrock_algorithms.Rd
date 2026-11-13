@@ -193,9 +193,10 @@ Rodas6P(
 }
 \arguments{
 \item{autodiff}{How Jacobians are computed when the problem has no
-symbolic Jacobian: \code{AutoForwardDiff()} (central differences, as R has no
-dual numbers), \code{AutoFiniteDiff(fdtype)} or \code{AutoSparse(ad)}; see
-\code{\link[=AutoForwardDiff]{AutoForwardDiff()}}. The default uses forward differences.}
+symbolic Jacobian: \code{AutoForwardDiff()} (dual numbers, as ForwardDiff;
+central differences when the function cannot run on them),
+\code{AutoFiniteDiff(fdtype)} or \code{AutoSparse(ad)}; see \code{\link[=AutoForwardDiff]{AutoForwardDiff()}}.
+The default uses forward differences.}
 
 \item{concrete_jac, linsolve}{Accepted for compatibility with
 OrdinaryDiffEq.jl; the linear systems are always solved densely.}
