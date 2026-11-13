@@ -124,11 +124,11 @@ test_that("costs at every saved time, solve_gradient and continuous costs match 
   # ReverseLossCallback reads the buffer of the last drift evaluation, which
   # upstream already replaces by the forward solution for DAEs. The cost with
   # the cotangent fixed at the forward states is the same cost (Julia's
-  # em_interpfix differs from em_interp)
+  # em_interpfix of the probe, which differs from its em_interp)
   sol <- solve(prob, EM(), dt = 0.05)
   r <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = sde_dg, sensealg = InterpolatingAdjoint())
-  expect_equal(unname(r$du0), c(4.0192523922688821, -0.88635376454790904), tolerance = 1e-8)
-  expect_equal(unname(r$dp), c(3.1103999804475086, -0.52689197311727054, 0.73188148677913067, -0.15193298799636976),
+  expect_equal(unname(r$du0), c(4.019252392281734, -0.8863537645165549), tolerance = 1e-8)
+  expect_equal(unname(r$dp), c(3.1103999804905595, -0.5268919731233217, 0.7318814867874182, -0.15193298799182006),
                tolerance = 1e-8)
   rfix <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = function(u, p, t, i) sol(t),
                                 sensealg = InterpolatingAdjoint())

@@ -148,6 +148,32 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
   ifelse(is.na(out), (y1 - y0) / dt, out)
 }
 
+# .ssprk_interp: _ode_interpolant of the SSPRK22, SSPRK33, SSPRK43 and
+# SSPRK432 caches at Val{1} (@ssprkpre1 under @muladd)
+.gde_ssprk_d <- function(theta, dt, y0, y1, k) .fma(y1 - y0, (2 * theta) * (1 / dt), k[[1L]] * .fma(theta, -2, 1))
+
+# .lsrk_interp and .newmark_interp: the Hermite derivative with the end
+# derivatives that the generic _ode_addsteps! evaluates
+.gde_lsrk_d <- function(theta, dt, y0, y1, k) .gde_hermite_d(theta, dt, y0, y1, .lsrk_ends(k, y0, y1))
+
+.gde_newmark_d <- function(theta, dt, y0, y1, k)
+  .gde_hermite_d(theta, dt, y0, y1, list(k$f(y0, k$p, k$t), k$f(y1, k$p, k$t + dt)))
+
+# .dabdf2_interp: hermite_interpolant at Val{1} with differential_vars, the
+# secant for the algebraic components
+.gde_dae_hermite_d <- function(theta, dt, y0, y1, k) {
+  if (length(k) < 2L) return((y1 - y0) / dt)
+  h <- .gde_hermite_d(theta, dt, y0, y1, k)
+  dv <- k[[3L]]
+  if (is.null(dv) || all(dv)) h else ifelse(dv, h, (y1 - y0) / dt)
+}
+
+# .dprkn6_interp: DPRKN6 has no Val{1} interpolant, so the generic
+# hermite_interpolant takes k[1] = (k1, k2) and k[2] = (k3, k4), the first
+# four stage accelerations, as the end derivatives of (du, u)
+.gde_dprkn6_d <- function(theta, dt, y0, y1, k)
+  .gde_hermite_d(theta, dt, y0, y1, list(c(k[[1L]], k[[2L]]), c(k[[3L]], k[[4L]])))
+
 # .bdf_interp: the derivative of the Lagrange polynomial through the
 # history values. OrdinaryDiffEqBDF resamples that polynomial at fixed
 # Chebyshev nodes (_resample_at_chebyshev!, bdf_utils.jl) and differentiates
@@ -255,6 +281,11 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
   if (identical(body(interp), body(.rosen_interp23(0)))) return(.gde_rosenbrock23_d(environment(interp)$d))
   if (identical(interp, .hermite_dae_interp)) return(.gde_hermite_dae_d)
   if (identical(interp, .bdf_interp)) return(.gde_bdf_d)
+  if (identical(interp, .ssprk_interp)) return(.gde_ssprk_d)
+  if (identical(interp, .lsrk_interp)) return(.gde_lsrk_d)
+  if (identical(interp, .newmark_interp)) return(.gde_newmark_d)
+  if (identical(interp, .dabdf2_interp)) return(.gde_dae_hermite_d)
+  if (identical(body(interp), body(.dprkn6_interp(0, 0)))) return(.gde_dprkn6_d)
   NULL
 }
 

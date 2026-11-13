@@ -450,9 +450,9 @@ families, the \verb{AlJahdali*} families and the adaptive \code{RDPK3Sp35()},
 }
 
 Each method has the order, embedded error estimate and step size
-controller of its Julia version; dense output is cubic Hermite
-interpolation for methods that evaluate the derivative at the new state
-and linear otherwise.
+controller of its Julia version, and the dense output OrdinaryDiffEq
+gives it: the free second order interpolant of \code{SSPRK22()}, \code{SSPRK33()},
+\code{SSPRK43()} and \code{SSPRK432()} and cubic Hermite interpolation otherwise.
 }
 \examples{
 prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))

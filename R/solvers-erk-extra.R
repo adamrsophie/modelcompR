@@ -145,7 +145,9 @@ NULL
 
 .erkx_alg <- function(name, order, adaptive, step, stage_limiter, step_limiter, fsal = TRUE, ...)
   .new_alg(name, order, adaptive = adaptive, step = step,
-           interp = if (fsal) .hermite_interp else .sde_linear_interp,
+           # without an FSAL stage (pRRK*) OrdinaryDiffEq keeps a single k and its
+           # generic _ode_addsteps! evaluates both end derivatives on first use
+           interp = if (fsal) .hermite_interp else .lsrk_interp,
            init = function(ctx, t, u) list(), step_limiter = step_limiter, stage_limiter = stage_limiter, ...)
 
 .lim <- function(lim, u, p, t) if (is.null(lim)) u else lim(u, NULL, p, t)
@@ -251,7 +253,7 @@ FRK65 <- function(omega = 0, stage_limiter = NULL, step_limiter = NULL, thread =
       us[[i + 1L]] <- v
       if (i < s) ks[[i + 1L]] <- f(v, p, t + cs[i + 1L] * dth)
     }
-    list(u = us[[s + 1L]], k = NULL, cache = list(), nf = s)
+    list(u = us[[s + 1L]], k = .lsrk_k(ctx, t, dt), cache = list(), nf = s)
   }
   .erkx_alg(name, order, FALSE, step, stage_limiter, step_limiter, fsal = FALSE, kappa = kappa)
 }

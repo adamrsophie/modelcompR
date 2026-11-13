@@ -290,3 +290,130 @@ end
 tryp(() -> SciMLBase.has_global_error(GlobalAdjoint(Tsit5())), "has_global_error_ga")
 # the directions of a three state problem from Xoshiro(123) (R draws with rng)
 tryp(() -> randn(Xoshiro(123), 3), "ga_randn_123")
+
+# ---------------------------------------------------------------------------
+# The ImplicitEuler self companion of gee_alg_ImplicitEuler: the initial step
+# size pieces (initdt.jl: f0, f1 at t0 + 1e-6), the initial dt of the
+# integrator, the first companion steps and states and the first evaluations.
+tryp("gee_ie_trace2") do
+    fsol = solve(probc, ImplicitEuler(); abstol = 1.0e-5, reltol = 1.0e-5, dense = true)
+    rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+    evals = Float64[]
+    rec = (e, p, t) -> (push!(evals, t); rhs(e, p, t))
+    opts = GlobalErrorEstimation(ImplicitEuler()).options
+    cprob = ODEProblem{false}(rec, zeros(2), (0.0, 2.0))
+    integ = SciMLBase.init(cprob, ImplicitEuler(); abstol = opts.companion_abstol,
+        reltol = opts.companion_reltol, tstops = fsol.t)
+    dt0 = integ.dt
+    empty!(evals)
+    csol = solve(cprob, ImplicitEuler(); abstol = opts.companion_abstol, reltol = opts.companion_reltol,
+        tstops = fsol.t)
+    (rhs(zeros(2), nothing, 0.0), rhs(zeros(2), nothing, 1.0e-6), dt0, csol.t[1:12],
+        reduce(vcat, csol.u[2:12]), evals[1:40], opts.companion_abstol, opts.companion_reltol,
+        csol.stats.naccept, csol.stats.nreject, csol.stats.nnonlinconvfail)
+end
+
+# ---------------------------------------------------------------------------
+# Dense output of the methods without an interpolant of their own
+# (R/solvers-erk.R .ERK_DENSE, tests/testthat/test-dense-output.R): fixed
+# steps of 0.1 on a nonautonomous problem, the values and first derivatives
+# at points in the first and later steps, a saveat solve per kind of dense
+# output and the companion estimate of GlobalDiffEq.
+using OrdinaryDiffEqSSPRK, OrdinaryDiffEqLowStorageRK, OrdinaryDiffEqRKN, OrdinaryDiffEqNewmark
+lvt(u, p, t) = [1.5 * u[1] - u[1] * u[2], -3.0 * u[2] + u[1] * u[2] + 0.1 * t]
+probt = ODEProblem(lvt, [1.0, 1.0], (0.0, 1.0))
+dtq = (0.03, 0.47, 0.71)
+dense_algs = (
+    "Alshina2" => Alshina2(), "Alshina3" => Alshina3(), "Alshina6" => Alshina6(),
+    "CarpenterKennedy2N54" => CarpenterKennedy2N54(), "DGLDDRK73_C" => DGLDDRK73_C(),
+    "DGLDDRK84_C" => DGLDDRK84_C(), "DGLDDRK84_F" => DGLDDRK84_F(), "NDBLSRK124" => NDBLSRK124(),
+    "NDBLSRK134" => NDBLSRK134(), "NDBLSRK144" => NDBLSRK144(), "ORK256" => ORK256(),
+    "pRRK22" => pRRK22(kappa = 0.5), "pRRK33" => pRRK33(kappa = 0.5), "pRRK54" => pRRK54(kappa = 0.5),
+    "PSRK3p5q4" => PSRK3p5q4(), "PSRK3p6q5" => PSRK3p6q5(), "PSRK4p7q6" => PSRK4p7q6(),
+    "RDPK3Sp35" => RDPK3Sp35(), "RDPK3Sp49" => RDPK3Sp49(), "RDPK3Sp510" => RDPK3Sp510(),
+    "RK46NL" => RK46NL(), "RKO65" => RKO65(), "RKV76IIa" => RKV76IIa(), "SHLDDRK64" => SHLDDRK64(),
+    "SSPRK104" => SSPRK104(), "SSPRK22" => SSPRK22(), "SSPRK33" => SSPRK33(), "SSPRK43" => SSPRK43(),
+    "SSPRK432" => SSPRK432(), "SSPRK53" => SSPRK53(), "SSPRK53_2N1" => SSPRK53_2N1(),
+    "SSPRK53_2N2" => SSPRK53_2N2(), "SSPRK53_H" => SSPRK53_H(), "SSPRK54" => SSPRK54(),
+    "SSPRK63" => SSPRK63(), "SSPRK73" => SSPRK73(), "SSPRK83" => SSPRK83(), "SSPRK932" => SSPRK932(),
+)
+for (name, alg) in dense_algs
+    tryp("dense41_$(name)") do
+        s = solve(probt, alg; dt = 0.1, adaptive = false)
+        (s.stats.nf, s.u[end], reduce(vcat, [s(t) for t in dtq]), reduce(vcat, [s(t, Val{1}) for t in dtq]))
+    end
+end
+for (name, alg) in ("SSPRK33" => SSPRK33(), "SSPRK53" => SSPRK53(), "Alshina3" => Alshina3(),
+        "RKO65" => RKO65(), "pRRK33" => pRRK33(kappa = 0.5), "RK46NL" => RK46NL())
+    tryp("dense41_saveat_$(name)") do
+        s = solve(probt, alg; dt = 0.1, adaptive = false, saveat = [0.25, 0.65])
+        (s.stats.nf, s.t, reduce(vcat, s.u))
+    end
+end
+for (name, alg) in ("SSPRK33" => SSPRK33(), "SSPRK53" => SSPRK53(), "Alshina2" => Alshina2(),
+        "RKO65" => RKO65(), "pRRK33" => pRRK33(kappa = 0.5))
+    tryp("dense41_gee_$(name)") do
+        global_error_estimate(probc, GlobalErrorEstimation(alg; companion_alg = Tsit5()); dt = 0.01)
+    end
+end
+for (name, alg) in ("SSPRK43" => SSPRK43(), "RDPK3Sp35" => RDPK3Sp35(), "SSPRK932" => SSPRK932())
+    tryp("dense41_gee_$(name)") do
+        global_error_estimate(probc, GlobalErrorEstimation(alg); abstol = 1.0e-5, reltol = 1.0e-5)
+    end
+end
+# DImplicitEuler on the index 1 DAE of tools/irkc-probe.jl: k = [du(t1), du(t0)]
+Fd(du, u, p, t) = [du[1] - u[2], u[2] * u[2] * u[2] + u[2] + u[1] * u[1] * u[1] + u[1]]
+Jd(du, u, p, gamma, t) = [gamma -1.0; 3u[1]^2+1 3u[2]^2+1]
+dprobd = DAEProblem(DAEFunction(Fd; jac = Jd), [-1.0, -1.0], [1.0, -1.0], (0.0, 2.0); differential_vars = [true, false])
+tryp("dense41_DImplicitEuler") do
+    s = solve(dprobd, DImplicitEuler(); reltol = 1.0e-4, abstol = 1.0e-6, initializealg = SciMLBase.NoInit())
+    tt = (s.t[2] / 2, 0.3, 1.1)
+    (length(s.t), s.stats.nreject, reduce(vcat, [s(t) for t in tt]), reduce(vcat, [s(t, Val{1}) for t in tt]))
+end
+# DPRKN6 (Val{0} of its own, Val{1} the generic Hermite on its stages) and
+# NewmarkBeta on u'' = -u - u^3 (state (v, u))
+p1 = DynamicalODEProblem((v, u, p, t) -> -u .- u .* u .* u, (v, u, p, t) -> v, [0.5, -0.3], [1.0, 0.2], (0.0, 1.0))
+tryp("dense41_DPRKN6") do
+    s = solve(p1, DPRKN6())
+    (length(s.t), reduce(vcat, [collect(s(t)) for t in dtq]), reduce(vcat, [collect(s(t, Val{1})) for t in dtq]))
+end
+tryp("dense41_NewmarkBeta") do
+    s = solve(p1, NewmarkBeta(); dt = 0.1, adaptive = false)
+    (length(s.t), reduce(vcat, [collect(s(t)) for t in dtq]), reduce(vcat, [collect(s(t, Val{1})) for t in dtq]))
+end
+
+# The stiff forward solvers with a Tsit5 companion (the forward interpolant
+# alone) and the stats of their self companion solves
+for (name, alg) in ("Rosenbrock23" => Rosenbrock23(), "Rodas5P" => Rodas5P(), "FBDF" => FBDF())
+    tryp("dense41_geetsit_$(name)") do
+        global_error_estimate(probc, GlobalErrorEstimation(alg; companion_alg = Tsit5());
+            abstol = 1.0e-5, reltol = 1.0e-5)
+    end
+    tryp("dense41_geeself_$(name)") do
+        fsol = solve(probc, alg; abstol = 1.0e-5, reltol = 1.0e-5, dense = true)
+        rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+        opts = GlobalErrorEstimation(alg).options
+        csol = solve(ODEProblem{false}(rhs, zeros(2), (0.0, 2.0)), alg; abstol = opts.companion_abstol,
+            reltol = opts.companion_reltol, tstops = fsol.t)
+        (csol.stats.naccept, csol.stats.nreject, csol.stats.nf, csol.stats.nnonlinconvfail, csol.u[end])
+    end
+end
+# Val{1} of methods accepted through the shared registrations: DABDF2 on the
+# DAE above, PDIRK44 and CFRLDDRK64 on probt
+using OrdinaryDiffEqPDIRK
+tryp("dense41_DABDF2") do
+    s = solve(dprobd, DABDF2(); reltol = 1.0e-4, abstol = 1.0e-6, initializealg = SciMLBase.NoInit())
+    tt = (s.t[2] / 2, 0.3, 1.1)
+    (length(s.t), reduce(vcat, [s(t) for t in tt]), reduce(vcat, [s(t, Val{1}) for t in tt]))
+end
+for (name, alg) in ("PDIRK44" => PDIRK44(), "CFRLDDRK64" => CFRLDDRK64())
+    tryp("dense41_$(name)") do
+        s = solve(probt, alg; dt = 0.1, adaptive = false)
+        (reduce(vcat, [s(t) for t in dtq]), reduce(vcat, [s(t, Val{1}) for t in dtq]))
+    end
+end
+# How @muladd nests a sum of three products
+tryp("dense41_muladd") do
+    MM = Base.loaded_modules[Base.PkgId(Base.UUID("46d2c3a1-f734-5fdb-9937-b9b9aeba4221"), "MuladdMacro")]
+    string(MM.to_muladd(:(a * b + c * d + e * f)))
+end

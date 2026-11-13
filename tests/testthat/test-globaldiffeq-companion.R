@@ -85,9 +85,11 @@ test_that("the dense first derivatives match Julia", {
     fd <- (8 * (dn$value(t + h) - dn$value(t - h)) - (dn$value(t + 2 * h) - dn$value(t - 2 * h))) / (12 * h)
     expect_equal(dn$deriv(t), fd, tolerance = 1e-7, info = alg$name)
   }
-  # the linear dense output of the low storage and SSP methods has none (an
-  # R limitation: OrdinaryDiffEq gives them Hermite or quadratic output)
-  expect_false(.gde_alg_has_dense_derivative(SSPRK33()))
+  # the SSP, low storage and other methods without an interpolant of their
+  # own have the free SSP or the Hermite output of OrdinaryDiffEq
+  for (nm in c("SSPRK33", "SSPRK53", "Alshina2", "RKO65", "CarpenterKennedy2N54", "pRRK33",
+               "DImplicitEuler", "DPRKN6", "NewmarkBeta"))
+    expect_true(.gde_alg_has_dense_derivative(get(nm)()), info = nm)
 })
 
 test_that("the companion estimates match Julia", {
@@ -196,8 +198,12 @@ test_that("GlobalErrorEstimation validates its arguments as Julia", {
                "GlobalErrorEstimation currently requires the standard mass matrix")
   expect_error(solve(gec_prob(), GlobalErrorEstimation(Tsit5(), gtol = 1e-6), abstol = -1),
                "local_abstol must be a nonnegative finite real number")
-  # Julia's message for a solution without a derivative interpolation
-  expect_error(global_error_estimate(gec_prob(), GlobalErrorEstimation(SSPRK33()), dt = 0.1),
+  # Julia's message for a solution without a derivative interpolation (the
+  # linear interpolation of an SDE solution)
+  sde <- solve(SDEProblem(function(u, p, t) -u, function(u, p, t) 0.1 * u, 1, c(0, 1)), EM(), dt = 0.1)
+  expect_error(.gde_validate_solution(sde, "GlobalErrorEstimation"),
                "requires a solver with dense (continuous) output that provides a first-derivative", fixed = TRUE)
+  expect_error(global_error_estimate(gec_prob(), GlobalErrorEstimation(SSPRK33(), companion_alg = Tsit5()),
+                                     dt = 0.1), NA)
   expect_error(global_error_estimate(gec_prob(), alg, dense = FALSE), NA)
 })

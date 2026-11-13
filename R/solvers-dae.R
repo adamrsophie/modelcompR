@@ -323,6 +323,8 @@ print.DAESolution <- function(x, ...) {
   cache <- new.env(parent = emptyenv())
   cache$nl <- .new_nlsolver()
   cache$nf0 <- 0L
+  # k[1] of initialize!: the derivative after the DAE initialization
+  cache$k1 <- ctx$du
   cache
 }
 
@@ -339,10 +341,13 @@ print.DAESolution <- function(x, ...) {
     r <- 7 / 12 * dt^2
     EEst <- .err_norm(r * abs((unew - u) / dt1 - (u - ctx$uprev2) / dt2), u, unew, ctx$abstol, ctx$reltol)
   }
-  c(out, list(u = unew, EEst = EEst, du = nl$z / dt, k = list()))
+  # perform_step! shifts k[1] into k[2] and stores (u - uprev) / dt in k[1],
+  # also on steps that are then rejected; the generic hermite_interpolant
+  # takes them as the derivatives at the start and the end of the step
+  kprev <- cache$k1
+  cache$k1 <- (unew - u) / dt
+  c(out, list(u = unew, EEst = EEst, du = nl$z / dt, k = list(cache$k1, kprev, ctx$differential_vars)))
 }
-
-.linear_interp <- function(theta, dt, y0, y1, k) (1 - theta) * y0 + theta * y1
 
 #' DAE algorithms
 #'
@@ -377,7 +382,7 @@ DFBDF <- function(max_order = 5L, qmax = 10, qsteady_min = 1, qsteady_max = 2, a
 #' @rdname dae_algorithms
 #' @export
 DImplicitEuler <- function(autodiff = NULL) .with_autodiff(autodiff, {
-  .new_alg("DImplicitEuler", 1L, step = .dimplicit_euler_step, interp = .linear_interp,
+  .new_alg("DImplicitEuler", 1L, step = .dimplicit_euler_step, interp = .dabdf2_interp,
            init = .dimplicit_euler_init, stiff = TRUE, dae = TRUE, controller = "I",
            on_reject = .nl_on_reject)
 })

@@ -162,9 +162,9 @@ test_that("test_convergence of DAEs and DDEs matches DiffEqDevTools", {
     final = c(0.08850360928444562, 0.04637313806540422, 0.02376828749726939),
     l2 = c(0.07093235107973936, 0.037104784019025845, 0.019021070476860684),
     l_inf = c(0.15663094211439832, 0.08224971321510566, 0.04220646242376658)), 1e-9)
-  # Julia interpolates DImplicitEuler with a Hermite polynomial (L2 starts
-  # 0.06993692498469824); the R solver interpolates linearly.
-  expect_equal(sim$errors$L2[1], 0.069820167061648952, tolerance = 1e-10)
+  # the dense error: DImplicitEuler interpolates with the generic Hermite
+  # polynomial of OrdinaryDiffEq on its last two derivatives
+  expect_equal(sim$errors$L2[1], 0.06993692498469824, tolerance = 1e-10)
   fdd <- function(u, h, p, t) -h(p, t - 1)
   andd <- function(u0, h, p, t) if (t <= 1) 1 - t else -(2 * (t - 1) - (t * t - 1) / 2)
   ddprob <- DDEProblem(DDEFunction(fdd, analytic = andd), 1, function(p, t) 1, c(0, 2), constant_lags = 1)

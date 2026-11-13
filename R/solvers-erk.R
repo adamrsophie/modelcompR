@@ -45,9 +45,9 @@
 #'   `SplitEuler()` is the explicit Euler method for split problems.
 #'
 #' Each method has the order, embedded error estimate and step size
-#' controller of its Julia version; dense output is cubic Hermite
-#' interpolation for methods that evaluate the derivative at the new state
-#' and linear otherwise.
+#' controller of its Julia version, and the dense output OrdinaryDiffEq
+#' gives it: the free second order interpolant of `SSPRK22()`, `SSPRK33()`,
+#' `SSPRK43()` and `SSPRK432()` and cubic Hermite interpolation otherwise.
 #'
 #' @param stage_limiter,step_limiter Limiters, see Details.
 #' @param thread Threading option (ignored).
@@ -71,6 +71,7 @@ NULL
   adaptive <- isTRUE(tb$adaptive) && length(bt)
   nonlin <- isTRUE(tb$nonlinear_est)
   est <- .ERK_ESTIMATORS[[name]]
+  dense <- if (fsal) "fsal" else if (is.null(tableau) && name %in% names(.ERK_DENSE)) .ERK_DENSE[[name]] else "linear"
   step <- function(ctx, t, u, dt, cache) {
     f <- ctx$f; p <- ctx$p
     n <- length(u)
@@ -91,8 +92,9 @@ NULL
       K[, s] <- f(unew, p, t + dt)
       nf <- nf + 1L
     }
-    res <- list(u = unew, k = if (fsal) list(K[, 1L], K[, s]) else NULL,
-                cache = list(fsal = if (fsal) K[, s]), nf = nf)
+    k <- switch(dense, fsal = list(K[, 1L], K[, s]), ssp = list(K[, 1L]), ends = .lsrk_k(ctx, t, dt),
+                stages1 = list(K[, 1L], K[, 2L]), stages2 = list(K[, 2L], K[, 3L]), NULL)
+    res <- list(u = unew, k = k, cache = list(fsal = if (fsal) K[, s]), nf = nf)
     if (adaptive) {
       if (!is.null(est)) {
         res$EEst <- est(K, dt, u, unew, ctx, t)
@@ -106,8 +108,8 @@ NULL
   if (identical(tb$controller, "PIDController")) {
     ctrl <- list(controller = "PID", pid_beta = tb$pid_beta, accept_safety = tb$pid_accept_safety %||% 0.81)
   }
-  parts <- list(step = step, interp = if (fsal) .hermite_interp else .sde_linear_interp,
-                init = function(ctx, t, u) list())
+  interp <- switch(dense, ssp = .ssprk_interp, ends = .lsrk_interp, linear = .sde_linear_interp, .hermite_interp)
+  parts <- list(step = step, interp = interp, init = function(ctx, t, u) list())
   # the low storage methods run their register forms
   if (is.null(tableau) && !is.null(.LSRK[[name]])) parts <- .lsrk_parts(name)
   alg <- do.call(.new_alg, c(list(name, tb$order, adaptive = adaptive), parts,
@@ -117,6 +119,30 @@ NULL
                                   ssp_coefficient = tb$ssp, step_limiter = step_limiter,
                                   stage_limiter = stage_limiter, tableau = tb)))
   utils::modifyList(alg, list(...))
+}
+
+# The dense output of the methods without an FSAL stage, as OrdinaryDiffEq
+# gives it. ssp: the free second order interpolant of interpolants.jl of
+# OrdinaryDiffEqSSPRK. ends: the cubic Hermite interpolant with the
+# derivatives at both ends, which the generic _ode_addsteps! evaluates on
+# first use since these methods keep a single k. stages1, stages2: these
+# methods keep their stages in k and the generic hermite_interpolant takes
+# the first two of them, k1 and k2, as the end derivatives (OrdinaryDiffEq
+# has no interpolant of their own; RKO65 keeps its six stages from the
+# second stage of the tableau on).
+.ERK_DENSE <- c(
+  SSPRK22 = "ssp", SSPRK33 = "ssp", SSPRK43 = "ssp", SSPRK432 = "ssp",
+  SSPRK53 = "ends", SSPRK53_2N1 = "ends", SSPRK53_2N2 = "ends", SSPRK53_H = "ends", SSPRK54 = "ends",
+  SSPRK63 = "ends", SSPRK73 = "ends", SSPRK83 = "ends", SSPRK104 = "ends", SSPRK932 = "ends",
+  Alshina2 = "stages1", Alshina3 = "stages1", Alshina6 = "stages1", PSRK3p5q4 = "stages1",
+  PSRK3p6q5 = "stages1", PSRK4p7q6 = "stages1", RKV76IIa = "stages1", RKO65 = "stages2")
+
+# _ode_interpolant of the SSPRK22, SSPRK33, SSPRK43 and SSPRK432 caches
+# (@ssprkpre0 under @muladd), k = list(f(uprev)).
+.ssprk_interp <- function(theta, dt, y0, y1, k) {
+  c00 <- .fma(theta, -theta, 1)
+  b10dt <- theta * .fma(theta, -1, 1) * dt
+  .fma(y0, c00, .fma(y1, theta^2, k[[1L]] * b10dt))
 }
 
 # Methods whose Julia error estimate is not a single embedded difference
