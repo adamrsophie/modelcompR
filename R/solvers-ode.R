@@ -821,9 +821,8 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
         done <- TRUE
         break
       }
-      # res$nreject = 0L: not counted as a rejection (force_stepfail of the
-      # Nordsieck methods)
-      stats$nreject <- stats$nreject + (res$nreject %||% 1L)
+      # not counted in nreject: _loopfooter! increments it only when the
+      # error estimate rejects a step
       accept_prev <- FALSE
       # a method that finishes the failed step keeps its error estimate
       if (!is.null(res$EEst)) EEst_prev <- res$EEst

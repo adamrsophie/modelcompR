@@ -122,8 +122,7 @@
   first <- TRUE
   fail <- function() {
     cache$last_stepfail <- TRUE
-    # force_stepfail: _loopfooter! does not count it in nreject
-    c(cnt, list(fail = TRUE, nreject = 0L, u = u, cache = cache, eigen_est = eig))
+    c(cnt, list(fail = TRUE, u = u, cache = cache, eigen_est = eig))
   }
   stage <- function(z, tmp, ci) {
     r <- .nlsolve(nl, cx, t, dt, z, tmp, gam, 1, .fma(ci, dt, t), u, method = "dirk",
