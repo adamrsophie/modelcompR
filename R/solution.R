@@ -266,7 +266,8 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
       findInterval(-tt, -starts, rightmost.closed = TRUE)
     i <- max(1L, min(length(steps), i))
     # after an event, prefer the step that starts at the event time
-    out[q, ] <- if (deriv == 0L) .step_value(steps[[i]], tt) else .step_deriv(steps[[i]], tt, deriv)
+    dti <- ends[i] - starts[i]
+    out[q, ] <- if (deriv == 0L) .step_value(steps[[i]], tt, dti) else .step_deriv(steps[[i]], tt, deriv, dti)
   }
   out
 }
@@ -481,12 +482,13 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
 }
 
 # The n-th derivative of the interpolant of a dense step at time t.
-.step_deriv <- function(step, t, n) {
+.step_deriv <- function(step, t, n, dt = step$dt) {
+  # dt as in .step_value: sol(t) passes the difference of the saved times
   sp <- .interp_deriv_spec(step$interp)
   if (is.null(sp)) stop("the interpolant of this method has no derivatives in the port", call. = FALSE)
   if (!is.na(sp$max) && n > sp$max) .deriv_order_error()
-  theta <- if (step$dt == 0) 1 else (t - step$t0) / step$dt
-  as.numeric(sp$f(theta, step$dt, step$y0, step$y1, step$k, n))
+  theta <- if (dt == 0) 1 else (t - step$t0) / dt
+  as.numeric(sp$f(theta, dt, step$y0, step$y1, step$k, n))
 }
 
 # Linear interpolation between the saved points (linear_interpolant), the

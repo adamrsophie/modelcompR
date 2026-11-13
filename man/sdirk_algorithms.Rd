@@ -45,7 +45,8 @@ ImplicitMidpoint(
   autodiff = NULL,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 TRBDF2(
@@ -53,7 +54,8 @@ TRBDF2(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 SDIRK2(
@@ -61,21 +63,24 @@ SDIRK2(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 SDIRK22(
   autodiff = NULL,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 SSPSDIRK2(
   autodiff = NULL,
   smooth_est = TRUE,
   predictor = Predictor$Trivial,
-  extrapolant = NULL
+  extrapolant = NULL,
+  nlsolve = NLNewton()
 )
 
 Kvaerno3(
@@ -83,7 +88,8 @@ Kvaerno3(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 KenCarp3(
@@ -91,41 +97,75 @@ KenCarp3(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
-CFNLIRK3(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+CFNLIRK3(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
 Cash4(
   autodiff = NULL,
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  embedding = 3L
+  embedding = 3L,
+  nlsolve = NLNewton()
 )
 
-SFSDIRK4(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+SFSDIRK4(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
-SFSDIRK5(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+SFSDIRK5(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
-SFSDIRK6(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+SFSDIRK6(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
-SFSDIRK7(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+SFSDIRK7(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
-SFSDIRK8(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
+SFSDIRK8(
+  autodiff = NULL,
+  predictor = Predictor$Linear,
+  extrapolant = NULL,
+  nlsolve = NLNewton()
+)
 
 Hairer4(
   autodiff = NULL,
   smooth_est = TRUE,
   predictor = Predictor$Linear,
-  extrapolant = NULL
+  extrapolant = NULL,
+  nlsolve = NLNewton()
 )
 
 Hairer42(
   autodiff = NULL,
   smooth_est = TRUE,
   predictor = Predictor$Linear,
-  extrapolant = NULL
+  extrapolant = NULL,
+  nlsolve = NLNewton()
 )
 
 Kvaerno4(
@@ -133,7 +173,8 @@ Kvaerno4(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 Kvaerno5(
@@ -141,7 +182,8 @@ Kvaerno5(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 KenCarp4(
@@ -149,7 +191,8 @@ KenCarp4(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 KenCarp47(
@@ -157,7 +200,8 @@ KenCarp47(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 KenCarp5(
@@ -165,7 +209,8 @@ KenCarp5(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 KenCarp58(
@@ -173,7 +218,8 @@ KenCarp58(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK54I8L2SA(
@@ -181,7 +227,8 @@ ESDIRK54I8L2SA(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK436L2SA2(
@@ -189,7 +236,8 @@ ESDIRK436L2SA2(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK437L2SA(
@@ -197,7 +245,8 @@ ESDIRK437L2SA(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK547L2SA2(
@@ -205,7 +254,8 @@ ESDIRK547L2SA2(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK659L2SA(
@@ -213,7 +263,8 @@ ESDIRK659L2SA(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ESDIRK325L2SA(
@@ -221,7 +272,8 @@ ESDIRK325L2SA(
   smooth_est = FALSE,
   predictor = Predictor$StageExtrap,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ARS222(
@@ -229,7 +281,8 @@ ARS222(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ARS232(
@@ -237,7 +290,8 @@ ARS232(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ARS343(
@@ -245,7 +299,8 @@ ARS343(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 ARS443(
@@ -253,7 +308,8 @@ ARS443(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 IMEXSSP222(
@@ -261,7 +317,8 @@ IMEXSSP222(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 IMEXSSP2322(
@@ -269,7 +326,8 @@ IMEXSSP2322(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 IMEXSSP3332(
@@ -277,7 +335,8 @@ IMEXSSP3332(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 IMEXSSP3433(
@@ -285,7 +344,8 @@ IMEXSSP3433(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 
 BHR553(
@@ -293,7 +353,8 @@ BHR553(
   smooth_est = TRUE,
   predictor = Predictor$Linear,
   extrapolant = NULL,
-  step_limiter = NULL
+  step_limiter = NULL,
+  nlsolve = NLNewton()
 )
 }
 \arguments{
@@ -316,6 +377,12 @@ or of order 3 only for stages in the first half of the step).}
 
 \item{step_limiter}{A function \code{step_limiter(u, integ, p, t)} returning
 the state after each accepted step, or \code{NULL}.}
+
+\item{nlsolve}{The Newton iteration of the implicit stages: an
+\code{\link[=NLNewton]{NLNewton()}} whose \code{kappa}, \code{max_iter}, \code{new_W_dt_cutoff}, \code{check_div}
+and \code{predictor} it uses (\code{fast_convergence_cutoff} is stored, as
+OrdinaryDiffEq stores it without using it). A \code{predictor(uprev, p, t, dt)} returns a guess of the stage value at the stage time \code{t}; it
+replaces the guess of \code{predictor} at every stage.}
 
 \item{smooth_est}{Multiply the embedded error estimate by the inverse of
 the Newton matrix (a smoothed estimate for very stiff problems).}

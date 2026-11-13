@@ -8,8 +8,8 @@
 # Julia method. A last stage evaluated at the new state (c = 1, row = b) is
 # the first stage of the next step (FSAL); methods without it take a fresh
 # first stage and interpolate linearly, as their Julia caches keep no end
-# derivative. The SSP methods are run from their full tableaus; the low
-# storage methods run the register forms of OrdinaryDiffEqLowStorageRK
+# derivative. The SSP methods run the perform_step! forms of
+# OrdinaryDiffEqSSPRK (R/solvers-ssprk.R); the low storage methods run the register forms of OrdinaryDiffEqLowStorageRK
 # (R/solvers-lowstorage.R), whose rounding differs from the tableau form.
 
 #' Explicit Runge-Kutta methods
@@ -96,10 +96,7 @@ NULL
                 stages1 = list(K[, 1L], K[, 2L]), stages2 = list(K[, 2L], K[, 3L]), NULL)
     res <- list(u = unew, k = k, cache = list(fsal = if (fsal) K[, s]), nf = nf)
     if (adaptive) {
-      if (!is.null(est)) {
-        res$EEst <- est(K, dt, u, unew, ctx, t)
-        if (identical(name, "SSPRK932")) res$nf <- res$nf + 1L
-      }
+      if (!is.null(est)) res$EEst <- est(K, dt, u, unew, ctx, t)
       else res$err <- dt * .lincomb(K, bt)
     }
     res
@@ -110,8 +107,11 @@ NULL
   }
   interp <- switch(dense, ssp = .ssprk_interp, ends = .lsrk_interp, linear = .sde_linear_interp, .hermite_interp)
   parts <- list(step = step, interp = interp, init = function(ctx, t, u) list())
-  # the low storage methods run their register forms
+  # the low storage methods run their register forms, the SSP methods the
+  # out of place perform_step! of OrdinaryDiffEqSSPRK (R/solvers-ssprk.R)
   if (is.null(tableau) && !is.null(.LSRK[[name]])) parts <- .lsrk_parts(name)
+  if (is.null(tableau) && !is.null(.SSPRK_FORMS[[name]]))
+    parts[c("step", "init")] <- .ssprk_parts(name, stage_limiter, dense)
   alg <- do.call(.new_alg, c(list(name, tb$order, adaptive = adaptive), parts,
                              ctrl,
                              list(adaptive_order = tb$adaptive_order, qmax = tb$qmax, qmin = tb$qmin,
@@ -140,14 +140,16 @@ NULL
 # _ode_interpolant of the SSPRK22, SSPRK33, SSPRK43 and SSPRK432 caches
 # (@ssprkpre0 under @muladd), k = list(f(uprev)).
 .ssprk_interp <- function(theta, dt, y0, y1, k) {
-  c00 <- .fma(theta, -theta, 1)
+  # @evalpoly(Theta, 1, NEGZERO, -1) compiles to an unfused 1 - Theta * Theta
+  # here: the fused form misses the Julia references in the last bit
+  c00 <- 1 - theta * theta
   b10dt <- theta * .fma(theta, -1, 1) * dt
   # @muladd y0 * c00 + y1 * c10 + k1 * b10dt: the last product is fused outermost
   .fma(k[[1L]], b10dt, .fma(y1, theta^2, y0 * c00))
 }
 
 # Methods whose Julia error estimate is not a single embedded difference
-# (perform_step! of BS5ConstantCache, DP8ConstantCache, SSPRK932ConstantCache).
+# (perform_step! of BS5ConstantCache and DP8ConstantCache).
 .erk_nrm <- function(e, u, unew, ctx) .err_norm(e, u, unew, ctx$abstol, ctx$reltol)
 
 .ERK_ESTIMATORS <- list(
@@ -168,14 +170,6 @@ NULL
     e5 <- .erk_nrm(dt * .lincomb(K, er), u, unew, ctx)
     e3 <- .erk_nrm(dt * .lincomb(K, bt), u, unew, ctx)
     if (abs(e5) < 0x1.56e1fc2f8f359p-997 && abs(e3) < 0x1.56e1fc2f8f359p-997) 0 else e5^2 / sqrt(e5^2 + 0.01 * e3^2)
-  },
-  # the extra stage at the end of the first sweep gives an embedded solution
-  SSPRK932 = function(K, dt, u, unew, ctx, t) {
-    u6 <- u + dt / 6 * .lincomb(K, rep(1, 6))
-    k7 <- ctx$f(u6, ctx$p, t + dt)
-    ut <- (u + 6 * u6 + 6 * dt * k7) / 7
-    attr(ut, "nf") <- 1L
-    .erk_nrm(ut - unew, u, unew, ctx)
   })
 
 #' @rdname explicit_rk_methods

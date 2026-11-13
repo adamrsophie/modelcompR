@@ -75,6 +75,12 @@
 #' @param step_limiter A function `step_limiter(u, integ, p, t)` returning
 #'   the state after each accepted step, or `NULL`.
 #' @param embedding The embedded method of `Cash4()`, 3 or 2.
+#' @param nlsolve The Newton iteration of the implicit stages: an
+#'   [NLNewton()] whose `kappa`, `max_iter`, `new_W_dt_cutoff`, `check_div`
+#'   and `predictor` it uses (`fast_convergence_cutoff` is stored, as
+#'   OrdinaryDiffEq stores it without using it). A `predictor(uprev, p, t,
+#'   dt)` returns a guess of the stage value at the stage time `t`; it
+#'   replaces the guess of `predictor` at every stage.
 #' @return An algorithm object.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -50 * (u - cos(t)), 0, c(0, 1))
@@ -89,218 +95,223 @@ NULL
 
 #' @rdname sdirk_algorithms
 #' @export
-ImplicitMidpoint <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ImplicitMidpoint", autodiff, FALSE, predictor, extrapolant, step_limiter)
+ImplicitMidpoint <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, step_limiter = NULL,
+                             nlsolve = NLNewton())
+  .sdirk_alg("ImplicitMidpoint", autodiff, FALSE, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 TRBDF2 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("TRBDF2", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("TRBDF2", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 SDIRK2 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("SDIRK2", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SDIRK2", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SDIRK22 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, step_limiter = NULL) {
+SDIRK22 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, step_limiter = NULL,
+                    nlsolve = NLNewton()) {
   .sdirk_predictor(predictor, extrapolant)
   if (!is.null(step_limiter) && !is.function(step_limiter))
     stop("step_limiter must be a function(u, integ, p, t)", call. = FALSE)
-  alg <- Trapezoid(autodiff = autodiff)
+  alg <- Trapezoid(autodiff = autodiff, nlsolve = nlsolve)
   alg$step_limiter <- step_limiter
   alg
 }
 
 #' @rdname sdirk_algorithms
 #' @export
-SSPSDIRK2 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Trivial, extrapolant = NULL)
-  .sdirk_alg("SSPSDIRK2", autodiff, FALSE, predictor, extrapolant)
+SSPSDIRK2 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Trivial, extrapolant = NULL,
+                      nlsolve = NLNewton())
+  .sdirk_alg("SSPSDIRK2", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 Kvaerno3 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("Kvaerno3", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("Kvaerno3", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 KenCarp3 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("KenCarp3", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("KenCarp3", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-CFNLIRK3 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("CFNLIRK3", autodiff, FALSE, predictor, extrapolant)
+CFNLIRK3 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("CFNLIRK3", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 Cash4 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                  embedding = 3L)
+                  embedding = 3L, nlsolve = NLNewton())
   .sdirk_alg("Cash4", autodiff, smooth_est, predictor, extrapolant,
-             tab = .SDIRK_TABS[[if (embedding == 3) "Cash4" else "Cash4_e2"]])
+             tab = .SDIRK_TABS[[if (embedding == 3) "Cash4" else "Cash4_e2"]], nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SFSDIRK4 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("SFSDIRK4", autodiff, FALSE, predictor, extrapolant)
+SFSDIRK4 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SFSDIRK4", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SFSDIRK5 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("SFSDIRK5", autodiff, FALSE, predictor, extrapolant)
+SFSDIRK5 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SFSDIRK5", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SFSDIRK6 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("SFSDIRK6", autodiff, FALSE, predictor, extrapolant)
+SFSDIRK6 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SFSDIRK6", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SFSDIRK7 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("SFSDIRK7", autodiff, FALSE, predictor, extrapolant)
+SFSDIRK7 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SFSDIRK7", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-SFSDIRK8 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("SFSDIRK8", autodiff, FALSE, predictor, extrapolant)
+SFSDIRK8 <- function(autodiff = NULL, predictor = Predictor$Linear, extrapolant = NULL, nlsolve = NLNewton())
+  .sdirk_alg("SFSDIRK8", autodiff, FALSE, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-Hairer4 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("Hairer4", autodiff, smooth_est, predictor, extrapolant)
+Hairer4 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
+                    nlsolve = NLNewton())
+  .sdirk_alg("Hairer4", autodiff, smooth_est, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
-Hairer42 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL)
-  .sdirk_alg("Hairer42", autodiff, smooth_est, predictor, extrapolant)
+Hairer42 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
+                     nlsolve = NLNewton())
+  .sdirk_alg("Hairer42", autodiff, smooth_est, predictor, extrapolant, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 Kvaerno4 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("Kvaerno4", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("Kvaerno4", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 Kvaerno5 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("Kvaerno5", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("Kvaerno5", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 KenCarp4 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("KenCarp4", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("KenCarp4", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 KenCarp47 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                      step_limiter = NULL)
-  .sdirk_alg("KenCarp47", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                      step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("KenCarp47", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 KenCarp5 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                     step_limiter = NULL)
-  .sdirk_alg("KenCarp5", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                     step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("KenCarp5", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 KenCarp58 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                      step_limiter = NULL)
-  .sdirk_alg("KenCarp58", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                      step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("KenCarp58", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK54I8L2SA <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                           extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK54I8L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                           extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK54I8L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK436L2SA2 <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                           extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK436L2SA2", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                           extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK436L2SA2", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK437L2SA <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                          extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK437L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                          extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK437L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK547L2SA2 <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                           extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK547L2SA2", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                           extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK547L2SA2", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK659L2SA <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                          extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK659L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                          extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK659L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ESDIRK325L2SA <- function(autodiff = NULL, smooth_est = FALSE, predictor = Predictor$StageExtrap,
-                          extrapolant = NULL, step_limiter = NULL)
-  .sdirk_alg("ESDIRK325L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                          extrapolant = NULL, step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ESDIRK325L2SA", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ARS222 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("ARS222", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ARS222", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ARS232 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("ARS232", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ARS232", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ARS343 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("ARS343", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ARS343", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 ARS443 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("ARS443", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("ARS443", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 IMEXSSP222 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                       step_limiter = NULL)
-  .sdirk_alg("IMEXSSP222", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                       step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("IMEXSSP222", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 IMEXSSP2322 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                        step_limiter = NULL)
-  .sdirk_alg("IMEXSSP2322", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                        step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("IMEXSSP2322", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 IMEXSSP3332 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                        step_limiter = NULL)
-  .sdirk_alg("IMEXSSP3332", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                        step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("IMEXSSP3332", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 IMEXSSP3433 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                        step_limiter = NULL)
-  .sdirk_alg("IMEXSSP3433", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                        step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("IMEXSSP3433", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)
 
 #' @rdname sdirk_algorithms
 #' @export
 BHR553 <- function(autodiff = NULL, smooth_est = TRUE, predictor = Predictor$Linear, extrapolant = NULL,
-                   step_limiter = NULL)
-  .sdirk_alg("BHR553", autodiff, smooth_est, predictor, extrapolant, step_limiter)
+                   step_limiter = NULL, nlsolve = NLNewton())
+  .sdirk_alg("BHR553", autodiff, smooth_est, predictor, extrapolant, step_limiter, nlsolve = nlsolve)

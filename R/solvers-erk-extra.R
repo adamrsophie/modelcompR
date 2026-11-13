@@ -352,7 +352,7 @@ SSPRKMSVS43 <- function(stage_limiter = NULL, step_limiter = NULL, thread = NULL
       v <- u + dt * fs
       k <- f(v, p, t + dt)
       unew <- (u + v + dt * k) / 2
-      nf <- 1L
+      # Julia does not count the evaluation of k (an upstream count bug)
       if (cache$step == 1L) { cache$u_3 <- u; cache$k3 <- f(u, p, t + dt); nf <- nf + 1L }
       if (cache$step == 2L) { cache$u_2 <- u; cache$k2 <- f(u, p, t + dt); nf <- nf + 1L }
       if (cache$step == 3L) { cache$u_1 <- u; cache$k1 <- f(u, p, t + dt); nf <- nf + 1L }

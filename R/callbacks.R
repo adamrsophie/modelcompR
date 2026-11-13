@@ -197,11 +197,13 @@ u_modified <- function(integ, value = TRUE) {
   integ$cb_last <- lapply(cbs$continuous, function(cb) cb$condition(integ$u, integ$t, integ))
 }
 
-.step_value <- function(step, t) {
-  theta <- if (step$dt == 0) 0 else (t - step$t0) / step$dt
+.step_value <- function(step, t, dt = step$dt) {
+  # dt: integrator.dt for the integrator interpolation; sol(t) passes the
+  # difference of the saved times, as ode_interpolation of SciMLBase does
+  theta <- if (dt == 0) 0 else (t - step$t0) / dt
   if (abs(theta) < 1e-15) return(step$y0)
   if (abs(theta - 1) < 1e-15) return(step$y1)
-  step$interp(theta, step$dt, step$y0, step$y1, step$k)
+  step$interp(theta, dt, step$y0, step$y1, step$k)
 }
 
 # Find the first crossing of g on [ta, tb] with g(ta) = ga, g(tb) = gb of

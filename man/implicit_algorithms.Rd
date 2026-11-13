@@ -7,9 +7,9 @@
 \alias{FBDF}
 \title{Implicit ODE algorithms}
 \usage{
-ImplicitEuler(autodiff = NULL)
+ImplicitEuler(autodiff = NULL, nlsolve = NLNewton())
 
-Trapezoid(autodiff = NULL)
+Trapezoid(autodiff = NULL, nlsolve = NLNewton())
 
 FBDF(
   max_order = 5L,
@@ -30,6 +30,12 @@ FBDF(
 }
 \arguments{
 \item{autodiff}{As for \code{\link[=ImplicitEuler]{ImplicitEuler()}}.}
+
+\item{nlsolve}{The Newton iteration of \code{ImplicitEuler()} and
+\code{Trapezoid()}: an \code{\link[=NLNewton]{NLNewton()}} whose \code{kappa}, \code{max_iter},
+\code{new_W_dt_cutoff}, \code{check_div} and \code{predictor} (a function
+\code{predictor(uprev, p, t, dt)} guessing the stage value at the stage time
+\code{t}) it uses.}
 
 \item{max_order}{Maximum order of \code{FBDF()}.}
 

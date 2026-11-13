@@ -29,7 +29,7 @@
     stop(spec$name, " only works with diagonal mass matrices. Please choose a solver suitable for your problem (e.g. Rodas5P)",
          call. = FALSE)
   cache <- new.env(parent = emptyenv())
-  cache$nl <- .new_nlsolver()
+  cache$nl <- .new_nlsolver(spec$nlsolve)
   cache$spec <- spec
   cache$fsal_val <- ctx$f(u, ctx$p, t)
   # integrator.reeval_fsal: .sdirk_on_event evaluates `fsal` again after an
@@ -126,7 +126,7 @@
   }
   stage <- function(z, tmp, ci) {
     r <- .nlsolve(nl, cx, t, dt, z, tmp, gam, 1, .fma(ci, dt, t), u, method = "dirk",
-                  firststage = first, eta_first = tab$adaptive)
+                  firststage = first, eta_first = tab$adaptive, pred_c = ci)
     first <<- FALSE
     for (nm in c("nf", "njacs", "nsolve", "nw")) cnt[[nm]] <<- cnt[[nm]] + r[[nm]]
     if (!is.null(r$eigen_est)) eig <<- r$eigen_est
@@ -240,15 +240,16 @@
 # `smooth_est` is the flag the method honors (_esdirk_smooth_est): FALSE for
 # the methods without one.
 .sdirk_alg <- function(name, autodiff = NULL, smooth_est = FALSE, predictor = NULL, extrapolant = NULL,
-                       step_limiter = NULL, tab = .SDIRK_TABS[[name]]) {
+                       step_limiter = NULL, tab = .SDIRK_TABS[[name]], nlsolve = NLNewton()) {
   if (!is.null(step_limiter) && !is.function(step_limiter))
     stop("step_limiter must be a function(u, integ, p, t)", call. = FALSE)
   tab$A <- matrix(tab$Ai, tab$s, tab$s, byrow = TRUE)
   if (length(tab$Ae)) tab$AE <- matrix(tab$Ae, tab$s, tab$s, byrow = TRUE)
   spec <- list(name = name, tab = tab, predictor = .sdirk_predictor(predictor %||% tab$predictor, extrapolant),
-               smooth_est = isTRUE(smooth_est))
+               smooth_est = isTRUE(smooth_est), nlsolve = .check_nlsolve(nlsolve))
   alg <- .new_alg(name, tab$order, adaptive = tab$adaptive, step = .sdirk_step, interp = .hermite_dae_interp,
                   init = .sdirk_init(spec), on_event = .sdirk_on_event, stiff = TRUE, mass_matrix = TRUE,
-                  qsteady_max = if (tab$adaptive) 6 / 5, on_reject = .nl_on_reject, step_limiter = step_limiter)
+                  qsteady_max = if (tab$adaptive) 6 / 5, on_reject = .nl_on_reject, step_limiter = step_limiter,
+                  nlsolve = spec$nlsolve)
   .with_autodiff(autodiff, alg)
 }

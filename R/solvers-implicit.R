@@ -96,13 +96,25 @@
 
 # ---------------------------------------------------------------------------
 # NLNewton (type.jl): κ = 1/100, max_iter = 10, fast_convergence_cutoff =
-# 1/5, new_W_dt_cutoff = 1/5, check_div = TRUE.
+# 1/5, new_W_dt_cutoff = 1/5, check_div = TRUE, or the settings of an
+# NLNewton() given as `nlsolve` (.check_nlsolve).
 
-.new_nlsolver <- function() {
+.new_nlsolver <- function(nlsolve = NULL) {
   nl <- new.env(parent = emptyenv())
   nl$kappa <- 1 / 100
   nl$maxiters <- 10L
   nl$new_W_dt_cutoff <- 1 / 5
+  nl$check_div <- TRUE
+  nl$predictor <- NULL
+  if (!is.null(nlsolve)) {
+    nl$kappa <- nlsolve$kappa
+    nl$maxiters <- nlsolve$max_iter
+    nl$new_W_dt_cutoff <- nlsolve$new_W_dt_cutoff
+    # stored as in nlsolve!, which unpacks it without using it
+    nl$fast_convergence_cutoff <- nlsolve$fast_convergence_cutoff
+    nl$check_div <- isTRUE(nlsolve$check_div)
+    nl$predictor <- nlsolve$predictor
+  }
   nl$J <- NULL
   nl$Jdu <- NULL
   nl$W <- NULL
@@ -114,6 +126,19 @@
   nl$prev_theta <- 1
   nl$firstcall <- TRUE
   nl
+}
+
+# The `nlsolve` argument of the SDIRK methods: an NLNewton() whose kappa,
+# max_iter, fast_convergence_cutoff, new_W_dt_cutoff, check_div and
+# predictor the Newton iteration takes. The other nonlinear solvers and the
+# always_new and relax options of NLNewton are not available here.
+.check_nlsolve <- function(nlsolve) {
+  if (is.null(nlsolve)) return(NULL)
+  if (!inherits(nlsolve, "NLNewton"))
+    stop("nlsolve must be NLNewton(); ", class(nlsolve)[1L], " is not available for this method", call. = FALSE)
+  if (isTRUE(nlsolve$always_new) || (!is.null(nlsolve$relax) && !identical(nlsolve$relax, 0)))
+    stop("NLNewton(always_new = TRUE) and NLNewton(relax) are not available for this method", call. = FALSE)
+  nlsolve
 }
 
 # do_newJW (derivative_utils.jl); returns c(new_jac, new_W). `gdt` is
@@ -183,9 +208,12 @@
 # keep W after a rejected step. `eta_first` is isadaptive(alg): FALSE skips
 # the rate test on the first iteration (check_eta_convergence of an algorithm
 # that is not adaptive, such as CNAB2 or a fixed step SDIRK method). Returns list(z, ok, nf, njacs, nsolve, nw,
-# eigen_est).
+# eigen_est). A stage predictor of `nlsolve` (apply_predictor!) guesses the
+# stage value at t + pred_c dt (tstep when pred_c is NULL) at every attempt,
+# a TryAgain retry included; the guess is mapped to z through the inverse of
+# the map from z to the stage value.
 .nlsolve <- function(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, u0 = NULL,
-                     method = "multistep", firststage = TRUE, eta_first = TRUE) {
+                     method = "multistep", firststage = TRUE, eta_first = TRUE, pred_c = NULL) {
   nl$isfs <- firststage
   dae <- !is.null(u0)
   dirk <- identical(method, "dirk")
@@ -201,6 +229,10 @@
                    gdt_test = gamma * dt)
     add(w)
     if (!is.null(w$eigen_est)) eig <- w$eigen_est
+    if (!is.null(nl$predictor)) {
+      upred <- nl$predictor(uprev, ctx$p, if (is.null(pred_c)) tstep else t + pred_c * dt, dt)
+      z <- if (dae) upred - u0 else if (dirk) (upred - tmp) * (1 / gamma) else upred
+    }
     nl$status <- "Convergence"
     eta <- if (isTRUE(nl$new_W)) max(nl$eta_old, .Machine$double.eps)^0.8 else nl$eta_old
     ndz <- 1
@@ -219,6 +251,9 @@
       }
       cnt$nf <- cnt$nf + 1L
       if (is.null(nl$W) || any(!is.finite(ztmp))) {
+        # compute_step! solves with W (and counts it) before the norm is
+        # found to be infinite
+        if (!is.null(nl$W)) cnt$nsolve <- cnt$nsolve + 1L
         ndz <- Inf
       } else {
         dz <- .wsolve(nl$W, ztmp)
@@ -241,11 +276,13 @@
             converged <- TRUE
             break
           }
-          nl$status <- "Divergence"
-          nl$nfails <- nl$nfails + 1L
-          break
+          if (nl$check_div) {
+            nl$status <- "Divergence"
+            nl$nfails <- nl$nfails + 1L
+            break
+          }
         }
-        if (theta > 2) {
+        if (nl$check_div && theta > 2) {
           nl$status <- "Divergence"
           nl$nfails <- nl$nfails + 1L
           break
@@ -264,6 +301,9 @@
     if (converged) {
       nl$status <- "Convergence"
       nl$nfails <- 0L
+    } else if (!nl$check_div && is.finite(ndz)) {
+      # without check_div the status starts as Convergence and stays so
+      nl$status <- "Convergence"
     } else if (nl$status != "Divergence") {
       nl$status <- "Divergence"
       nl$nfails <- nl$nfails + 1L
@@ -287,9 +327,9 @@
 # ---------------------------------------------------------------------------
 # ImplicitEuler and Trapezoid
 
-.implicit_init <- function(ctx, t, u) {
+.implicit_init <- function(ctx, t, u, nlsolve = NULL) {
   cache <- new.env(parent = emptyenv())
-  cache$nl <- .new_nlsolver()
+  cache$nl <- .new_nlsolver(nlsolve)
   cache$fsal <- ctx$f(u, ctx$p, t)
   cache$uprev3 <- u
   cache$tprev2 <- NA_real_
@@ -407,6 +447,11 @@
 #' (`ODEProblem(sys, ..., jac = TRUE)`) and finite differences otherwise.
 #'
 #' @param max_order Maximum order of `FBDF()`.
+#' @param nlsolve The Newton iteration of `ImplicitEuler()` and
+#'   `Trapezoid()`: an [NLNewton()] whose `kappa`, `max_iter`,
+#'   `new_W_dt_cutoff`, `check_div` and `predictor` (a function
+#'   `predictor(uprev, p, t, dt)` guessing the stage value at the stage time
+#'   `t`) it uses.
 #' @param autodiff How Jacobians are computed when the problem has no
 #'   symbolic Jacobian: `AutoForwardDiff()` (central differences, as R has no
 #'   dual numbers), `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see
@@ -423,18 +468,20 @@ NULL
 
 #' @rdname implicit_algorithms
 #' @export
-ImplicitEuler <- function(autodiff = NULL) .with_autodiff(autodiff, {
+ImplicitEuler <- function(autodiff = NULL, nlsolve = NLNewton()) .with_autodiff(autodiff, {
+  nlsolve <- .check_nlsolve(nlsolve)
   .new_alg("ImplicitEuler", 1L, step = .implicit_euler_step, interp = .hermite_dae_interp,
-           init = .implicit_init, on_event = .implicit_on_event,
-           stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject)
+           init = function(ctx, t, u) .implicit_init(ctx, t, u, nlsolve), on_event = .implicit_on_event,
+           stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject, nlsolve = nlsolve)
 })
 
 #' @rdname implicit_algorithms
 #' @export
-Trapezoid <- function(autodiff = NULL) .with_autodiff(autodiff, {
+Trapezoid <- function(autodiff = NULL, nlsolve = NLNewton()) .with_autodiff(autodiff, {
+  nlsolve <- .check_nlsolve(nlsolve)
   .new_alg("Trapezoid", 2L, step = .trapezoid_step, interp = .hermite_dae_interp,
-           init = .implicit_init, on_event = .implicit_on_event,
-           stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject)
+           init = function(ctx, t, u) .implicit_init(ctx, t, u, nlsolve), on_event = .implicit_on_event,
+           stiff = TRUE, mass_matrix = TRUE, qsteady_max = 6 / 5, on_reject = .nl_on_reject, nlsolve = nlsolve)
 })
 
 # ---------------------------------------------------------------------------
