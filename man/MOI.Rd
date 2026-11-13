@@ -22,7 +22,19 @@ with \verb{2 t u >= sum(x^2)}, \verb{t, u >= 0}), \code{NormOneCone(d)},
 \code{n} by \code{n} matrix, column by column), \code{ScaledPositiveSemidefiniteConeTriangle(n)}
 (the same with the off diagonal entries scaled by \code{sqrt(2)}) and Clarabel's
 \code{GenPowerCone(a, dim2)} (\code{prod(x^a) >= norm(z)} for \code{x} of length
-\code{length(a)} and \code{z} of length \code{dim2}, \code{sum(a) == 1}).
+\code{length(a)} and \code{z} of length \code{dim2}, \code{sum(a) == 1}). Sets Clarabel
+lacks are reformulated by the bridges of MathOptInterface:
+\code{NormCone(p, d)} (\verb{(t, x)} with \code{norm(x, p) <= t}),
+\code{GeometricMeanCone(d)} (\code{t <= prod(x)^(1 / (d - 1))}, \code{x >= 0}),
+\code{DualGeometricMeanCone(d)}, \code{RelativeEntropyCone(d)} (\verb{(u, v, w)} with
+\code{sum(w * log(w / v)) <= u}), \code{NormSpectralCone(m, n)} and
+\code{NormNuclearCone(m, n)} (\code{t} and an \code{m} by \code{n} matrix stored column by
+column), \code{PositiveSemidefiniteConeSquare(n)}, \code{LogDetConeTriangle(n)} and
+\code{LogDetConeSquare(n)} (\verb{(t, u, X)} with \verb{u logdet(X / u) >= t}),
+\code{RootDetConeTriangle(n)}, \code{RootDetConeSquare(n)} (\verb{(t, X)} with
+\code{det(X)^(1 / n) >= t}) and \code{HyperRectangle(lower, upper)}.
+\code{DualExponentialCone}, \code{DualPowerCone} and \code{DualRelativeEntropyCone} have
+no reformulation for this solver, as in MathOptInterface.
 \code{TerminationStatusCode} and \code{ResultStatusCode} list the status names that
 \code{sol$original$termination_status}, \code{primal_status} and \code{dual_status} take.
 }

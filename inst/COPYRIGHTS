@@ -34,7 +34,7 @@ noted:
   Copyright (c) their SciML and JuliaSymbolics contributors and distributed
   under the MIT License.
 - ConvexOptimization.jl, the lib/ConvexOptimization library of
-  Optimization.jl (https://github.com/SciML/Optimization.jl), version 0.1.0
+  Optimization.jl (https://github.com/SciML/Optimization.jl), version 0.1.4
   (the conic backend of ConvexOptimizationProblem).
   Copyright (c) 2023 Vaibhav Dixit and contributors. MIT License. License
   text: inst/CONVEX-LICENSES.
@@ -43,13 +43,14 @@ noted:
   Copyright (c) 2017: Miles Lubin and contributors; Copyright (c) 2017:
   Google Inc. MIT License. License text: inst/CONVEX-LICENSES.
 - SymbolicAnalysis.jl (https://github.com/Vaibhavdixit02/SymbolicAnalysis.jl),
-  version 0.3.9 (disciplined convex programming rules).
+  version 0.5.8 (disciplined convex programming rules).
   Copyright (c) 2024 Vaibhav Dixit and contributors. MIT License. License
   text: inst/CONVEX-LICENSES.
 - Clarabel.jl (https://github.com/oxfordcontrol/Clarabel.jl), version 0.11.1,
-  commit fbc5dd0 (the interior point conic solver and its MathOptInterface
-  wrapper), and QDLDL.jl (https://github.com/osqp/QDLDL.jl), version 0.4.1
-  (the quasidefinite LDL factorization).
+  commit fbc5dd0 (the interior point conic solver, its chordal decomposition
+  of PSD cones and its MathOptInterface wrapper), and QDLDL.jl
+  (https://github.com/osqp/QDLDL.jl), version 0.4.1 (the quasidefinite LDL
+  factorization).
   Copyright 2022 University of Oxford Control Group (Clarabel.jl) and the
   QDLDL.jl authors. Apache License, version 2.0. License text:
   inst/CLARABEL-LICENSE. The R files ported from them say so in their

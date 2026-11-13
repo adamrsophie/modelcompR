@@ -90,6 +90,12 @@ as.list.mtk_symvec <- function(x, ...) {
 
 #' @export
 Ops.mtk_symvec <- function(e1, e2) {
+  # the convex tracer keeps elementwise squares and divisions by variables as
+  # atoms (R/symbolic-analysis.R)
+  if (.cvx_state$active && !missing(e2)) {
+    r <- .cvx_trace_ops(.Generic, e1, e2)
+    if (!is.null(r)) return(r)
+  }
   op <- get(.Generic, envir = baseenv())
   a <- .symvec_elems(e1)
   if (missing(e2)) return(.symvec(lapply(a, function(z) op(z)), names(e1)))
@@ -110,12 +116,14 @@ chooseOpsMethod.mtk_symvec <- function(x, y, mx, my, cl, reverse) TRUE
 
 #' @export
 Math.mtk_symvec <- function(x, ...) {
+  if (.cvx_state$active && .Generic == "abs") return(.cvx_trace_abs(x))
   f <- get(.Generic, envir = baseenv())
   .symvec(lapply(unclass(x), function(z) f(z, ...)), names(x))
 }
 
 #' @export
 Summary.mtk_symvec <- function(..., na.rm = FALSE) {
+  if (.cvx_state$active && .Generic %in% c("sum", "max", "min")) return(.cvx_trace_summary(.Generic, list(...)))
   el <- .symvec_elems(list(...))
   r <- switch(.Generic,
     sum = if (length(el)) Reduce(`+`, el) else .S0(),

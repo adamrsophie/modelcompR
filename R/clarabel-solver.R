@@ -257,9 +257,12 @@
       cones <- newcones
     }
   }
-  # Clarabel.jl decomposes a PSD cone with a sparse aggregate pattern into
-  # cliques here; that is not yet ported (PORTING.md), so such a cone is solved
-  # whole, which reaches the same optimum on another path
+  # a PSD cone with a sparse aggregate pattern splits into its cliques
+  chordal <- .chd_try_info(A, b, cones, settings)
+  if (!is.null(chordal)) {
+    r <- .chd_augment(chordal, P, q, A, b, settings)
+    chordal <- r$info; P <- r$P; q <- r$q; A <- r$A; b <- r$b; cones <- r$cones
+  }
   b <- pmin(b, infbound)
   n <- A$n; m <- A$m
   data <- new.env(parent = emptyenv())
@@ -268,6 +271,7 @@
   data$d <- rep(1, n); data$dinv <- rep(1, n); data$e <- rep(1, m); data$einv <- rep(1, m); data$c <- 1
   data$normq <- .cl_norminf(q); data$normb <- .cl_norminf(b)
   data$presolver <- presolver
+  data$chordal_info <- chordal
   data
 }
 
@@ -1040,6 +1044,8 @@
   v$s <- v$s * (data$einv * scaleinv)
   v$tau <- v$tau * scaleinv; v$kappa <- v$kappa * scaleinv
   S$variables <- v
+  # the chordal decomposition unwinds before the presolve
+  if (!is.null(data$chordal_info)) v <- .chd_reverse(data$chordal_info, v$x, v$s, v$z, data$cones, S$settings)
   if (!is.null(data$presolver)) {
     keep <- data$presolver$keep
     sol$x <- v$x

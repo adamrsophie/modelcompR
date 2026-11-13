@@ -3,7 +3,7 @@
 # Symbolics.jl, with the matrix products and norm atoms that trace a convex
 # problem.
 #
-# Ported from SymbolicAnalysis.jl 0.3.9
+# Ported from SymbolicAnalysis.jl 0.5.8
 # (https://github.com/Vaibhavdixit02/SymbolicAnalysis.jl), Copyright (c) 2024
 # Vaibhav Dixit and contributors, MIT License (inst/CONVEX-LICENSES), and
 # from linear_expansion of Symbolics.jl
@@ -13,10 +13,135 @@
 
 # ---------------------------------------------------------------------------
 # Tracing: the symbolic vectors of modelingtoolkitize (mtk_symvec,
-# R/modelingtoolkitize-trace.R), with matrix products and norm atoms
+# R/modelingtoolkitize-trace.R), with matrix products and the atoms of a
+# convex problem. Julia traces array expressions (`sum(abs.(w))`,
+# `maximum(w)`, `u' * P * u`) to single terms; while a convex problem is
+# traced (`.cvx_state$active`) the symbolic vector methods keep the same
+# structure as one uninterpreted function node per atom, with its arguments
+# in the order written: sum_abs, maximum_abs, sum_sq, maximum, minimum, max,
+# min, abs, self_prod (w' w), quad_prod (v' P v, P appended by columns) and
+# rdiv (a division by an expression in the variables).
+
+.cvx_state <- new.env(parent = emptyenv())
+.cvx_state$active <- FALSE
+.cvx_state$optkeys <- character()
+
+.cvx_fn <- function(name, args) do.call(Function(name), unname(args))
+.cvx_sv1 <- function(e) .symvec(list(e))
+.cvx_same <- function(a, b) length(a) == length(b) && all(vapply(seq_along(a), function(i)
+  identical(.key(as_sym(a[[i]])), .key(as_sym(b[[i]]))), TRUE))
+
+.cvx_trace_abs <- function(x) {
+  el <- .symvec_elems(x)
+  out <- .symvec(lapply(el, function(z) if (.cvx_is_num(z)) as_sym(abs(.cvx_num(z))) else .cvx_fn("abs", list(z))),
+                 names(x))
+  attr(out, "cvx_map") <- "abs"
+  attr(out, "cvx_arg") <- el
+  out
+}
+
+.cvx_trace_ops <- function(gen, e1, e2) {
+  if (gen == "^" && inherits(e1, "mtk_symvec") && is.numeric(e2) && length(e2) == 1L && e2 == 2) {
+    el <- .symvec_elems(e1)
+    out <- .symvec(lapply(el, function(z) z^2), names(e1))
+    attr(out, "cvx_map") <- "sq"
+    attr(out, "cvx_arg") <- el
+    return(out)
+  }
+  if (gen == "/") {
+    b <- .symvec_elems(e2)
+    if (!any(vapply(b, .cvx_depends, TRUE, keys = .cvx_state$optkeys))) return(NULL)
+    a <- .symvec_elems(e1)
+    n <- max(length(a), length(b))
+    return(.symvec(lapply(seq_len(n), function(i) {
+      num <- a[[(i - 1L) %% length(a) + 1L]]; den <- b[[(i - 1L) %% length(b) + 1L]]
+      if (.cvx_depends(den, .cvx_state$optkeys)) .cvx_fn("rdiv", list(num, den)) else num / den
+    })))
+  }
+  NULL
+}
+
+.cvx_flatten_fn <- function(el, name) {
+  out <- list()
+  for (z in el) {
+    if (is_sym(z) && .type(z) == "Function" && identical(.name(z), name)) out <- c(out, .cvx_flatten_fn(.args(z), name))
+    else out[[length(out) + 1L]] <- z
+  }
+  out
+}
+
+.cvx_trace_summary <- function(gen, args) {
+  if (length(args) == 1L && !is.null(m <- attr(args[[1L]], "cvx_map"))) {
+    w <- attr(args[[1L]], "cvx_arg")
+    if (gen == "sum") return(.cvx_sv1(.cvx_fn(if (m == "abs") "sum_abs" else "sum_sq", w)))
+    if (m == "abs") {
+      if (gen == "min")
+        stop("`minimum(abs.(w))` is neither convex nor concave and cannot be lowered. Route to a general ",
+             "OptimizationProblem/NLP solver.", call. = FALSE)
+      return(.cvx_sv1(.cvx_fn("maximum_abs", w)))
+    }
+  }
+  el <- .symvec_elems(args)
+  if (gen == "sum") return(.cvx_sv1(if (length(el)) Reduce(`+`, el) else as_sym(0)))
+  if (all(vapply(el, .cvx_is_num, TRUE))) {
+    f <- if (gen == "max") base::max else base::min
+    return(.cvx_sv1(as_sym(f(vapply(el, .cvx_num, 0)))))
+  }
+  if (length(el) == 1L) return(.cvx_sv1(el[[1L]]))
+  # one vector argument is Julia's maximum(w) / minimum(w); several arguments
+  # its scalar max(a, b, ...), which the lowering flattens
+  if (length(args) == 1L) return(.cvx_sv1(.cvx_fn(if (gen == "max") "maximum" else "minimum", el)))
+  .cvx_sv1(.cvx_fn(gen, .cvx_flatten_fn(el, gen)))
+}
+
+#' @export
+t.mtk_symvec <- function(x) structure(list(v = .symvec_elems(x), mid = list()), class = "mtk_symadj")
+
+# v' M as the scalar elements of a row vector
+.cvx_adj_row <- function(x) {
+  v <- x$v
+  if (!length(x$mid)) return(v)
+  M <- Reduce(`%*%`, x$mid)
+  lapply(seq_len(ncol(M)), function(j) {
+    out <- as_sym(0)
+    for (i in seq_along(v)) if (M[i, j] != 0) out <- out + M[i, j] * v[[i]]
+    out
+  })
+}
+
+.cvx_dot <- function(a, b) {
+  out <- as_sym(0)
+  for (i in seq_along(a)) out <- out + a[[i]] * b[[i]]
+  out
+}
 
 # Matrix products and norm seen by a traced function
 .cvx_matmul <- function(x, y) {
+  if (inherits(x, "mtk_symadj")) {
+    if (inherits(y, "mtk_symvec")) {
+      w <- .symvec_elems(y)
+      if (.cvx_same(x$v, w)) {
+        if (!length(x$mid)) return(.cvx_sv1(.cvx_fn("self_prod", w)))
+        P <- Reduce(`%*%`, x$mid)
+        return(.cvx_sv1(.cvx_fn("quad_prod", c(w, as.list(as.numeric(P))))))
+      }
+      r <- .cvx_adj_row(x)
+      if (length(r) != length(w)) stop("non-conformable arguments", call. = FALSE)
+      return(.cvx_sv1(.cvx_dot(r, w)))
+    }
+    if (is.numeric(y) && is.null(dim(y))) {
+      r <- .cvx_adj_row(x)
+      if (length(r) != length(y)) stop("non-conformable arguments", call. = FALSE)
+      return(.cvx_sv1(.cvx_dot(r, as.list(y))))
+    }
+    if (!is.numeric(y))
+      stop("`u' * P * u` / `quad_form(u, P)` is lowered only for a constant numeric matrix `P`; got `",
+           paste(format(y), collapse = ", "), "`. A `P` built from `p` moves the cone matrix with theta and ",
+           "cannot be canonicalized: pass the quadratic form differently, or use ",
+           "`solve(remake(prob, p = ...), alg)`.", call. = FALSE)
+    x$mid[[length(x$mid) + 1L]] <- as.matrix(y)
+    return(x)
+  }
   if (!inherits(x, "mtk_symvec") && !inherits(y, "mtk_symvec")) return(base::`%*%`(x, y))
   dot <- function(cf, es) {
     out <- as_sym(0)
@@ -36,8 +161,15 @@
 }
 
 # norm(w, type) of a symbolic vector is the atom norm(w..., order); the types
-# of base::norm map to the vector norms they compute
+# of base::norm map to the vector norms they compute. Of a symbolic matrix,
+# type "2" is the spectral norm (opnorm) and "F" the norm of its entries.
 .cvx_norm <- function(x, type = "O", ...) {
+  if (is.list(x) && !is.null(dim(x)) && !inherits(x, "mtk_symvec")) {
+    t1 <- toupper(substr(as.character(type), 1L, 1L))
+    if (t1 == "2") return(opnorm(x))
+    if (t1 %in% c("F", "E")) return(.cvx_norm(.symvec(as.list(x)), "2"))
+    stop("the norm type '", type, "' of a symbolic matrix is not a supported atom; use \"2\" or \"F\"", call. = FALSE)
+  }
   if (!inherits(x, "mtk_symvec") && !is_sym(x)) return(base::norm(x, type, ...))
   order <- if (is.character(type)) {
     switch(toupper(substr(type, 1L, 1L)), O = , "1" = as_sym(1), I = , M = Symbol(".norm_Inf"), F = , E = , "2" = as_sym(2),
@@ -59,12 +191,120 @@
 }
 
 # ---------------------------------------------------------------------------
+# Matrix and quadratic atoms: numeric on numbers, symbolic nodes on traced
+# values
+
+# A symbolic matrix: a list matrix (matrix(c(u[1], 0, 0, u[2]), 2)) of
+# expressions; NULL for a numeric matrix
+.cvx_symmat <- function(X, name) {
+  if (inherits(X, "mtk_symvec") || is_sym(X)) stop("`", name, "` requires a matrix argument.", call. = FALSE)
+  if (is.numeric(X)) {
+    if (is.null(dim(X)) || length(dim(X)) != 2L) stop("`", name, "` requires a matrix argument.", call. = FALSE)
+    return(NULL)
+  }
+  if (!is.list(X) || length(dim(X)) != 2L) stop("`", name, "` requires a matrix argument.", call. = FALSE)
+  el <- lapply(as.vector(X), function(z) if (inherits(z, "mtk_symvec")) .symvec_elems(z)[[1L]] else as_sym(z))
+  if (all(vapply(el, .cvx_is_num, TRUE)))
+    return(list(numeric = matrix(vapply(el, .cvx_num, 0), nrow(X), ncol(X))))
+  list(el = el, nrow = nrow(X), ncol = ncol(X))
+}
+
+.cvx_matrix_atom <- function(X, name, numfun) {
+  s <- .cvx_symmat(X, name)
+  if (is.null(s)) return(numfun(X))
+  if (!is.null(s$numeric)) return(numfun(s$numeric))
+  if (!(s$nrow > 0 && s$ncol > 0)) stop("`", name, "` requires a nonempty matrix.", call. = FALSE)
+  .cvx_sv1(.cvx_fn(name, c(s$el, list(s$nrow))))
+}
+
+#' Matrix and quadratic atoms of disciplined convex programs
+#'
+#' The atoms that [ConvexMOI()] lowers to cones, as in ConvexOptimization.jl
+#' and SymbolicAnalysis.jl: `eigmax(X)` and `eigmin(X)` (the extreme
+#' eigenvalues of a symmetric matrix, lowered to a positive semidefinite
+#' cone), `opnorm(X)` (the spectral norm, `norm(X, "2")`), `logdet(X)` (the
+#' log determinant, a log determinant cone) and `quad_form(x, P)`
+#' (`x' P x` for a constant positive semidefinite `P`, a rotated second order
+#' cone). On numbers they compute the value; on the traced variables of a
+#' convex problem they return the atom. A symbolic matrix is a list matrix of
+#' expressions, such as `matrix(c(u[1], 0, 0, 1 - u[1]), 2)`.
+#'
+#' @param X A numeric or symbolic matrix.
+#' @param x A numeric or symbolic vector.
+#' @param P A numeric matrix.
+#' @return A number, or the traced atom.
+#' @examples
+#' eigmax(matrix(c(2, 1, 1, 2), 2))
+#' quad_form(c(1, 2), diag(2))
+#' prob <- ConvexOptimizationProblem(function(u, p) eigmax(matrix(c(u[1], 0, 0, 1 - u[1]), 2)), 0)
+#' solve(prob, ConvexMOI())$u
+#' @export
+eigmax <- function(X) .cvx_matrix_atom(X, "eigmax", function(M) {
+  if (nrow(M) != ncol(M)) stop("`eigmax` requires a square symmetric matrix; got size (", nrow(M), ", ", ncol(M), ").",
+                               call. = FALSE)
+  max(eigen(M, symmetric = isSymmetric(M), only.values = TRUE)$values)
+})
+
+#' @rdname eigmax
+#' @export
+eigmin <- function(X) .cvx_matrix_atom(X, "eigmin", function(M) {
+  if (nrow(M) != ncol(M)) stop("`eigmin` requires a square symmetric matrix; got size (", nrow(M), ", ", ncol(M), ").",
+                               call. = FALSE)
+  min(eigen(M, symmetric = isSymmetric(M), only.values = TRUE)$values)
+})
+
+#' @rdname eigmax
+#' @export
+opnorm <- function(X) .cvx_matrix_atom(X, "opnorm", function(M) if (length(M)) max(svd(M, 0L, 0L)$d) else 0)
+
+#' @rdname eigmax
+#' @export
+logdet <- function(X) .cvx_matrix_atom(X, "logdet", function(M) {
+  d <- determinant(M, logarithm = TRUE)
+  if (d$sign < 0) stop("DomainError: logdet of a matrix with a negative determinant", call. = FALSE)
+  as.numeric(d$modulus)
+})
+
+#' @rdname eigmax
+#' @export
+quad_form <- function(x, P) {
+  if (!inherits(x, "mtk_symvec") && !is_sym(x)) {
+    if (length(x) != nrow(P)) stop("DimensionMismatch: x and P must have same length", call. = FALSE)
+    return(sum(x * (P %*% x)))
+  }
+  w <- .symvec_elems(x)
+  if (!is.numeric(P))
+    stop("`u' * P * u` / `quad_form(u, P)` is lowered only for a constant numeric matrix `P`; got `",
+         paste(format(P), collapse = ", "), "`. A `P` built from `p` moves the cone matrix with theta and cannot be ",
+         "canonicalized: pass the quadratic form differently, or use `solve(remake(prob, p = ...), alg)`.",
+         call. = FALSE)
+  P <- as.matrix(P)
+  .cvx_sv1(.cvx_fn("quad_form", c(w, as.list(as.numeric(P)))))
+}
+
+# the vector and the matrix of a quad_form / quad_prod node
+.cvx_quad_parts <- function(e) {
+  a <- .args(e)
+  L <- length(a)
+  n <- as.integer(round((-1 + sqrt(1 + 4 * L)) / 2))
+  list(v = a[seq_len(n)], P = matrix(vapply(a[n + seq_len(n * n)], .cvx_num, 0), n, n))
+}
+
+# the entries, rows and columns of a matrix atom node
+.cvx_mat_parts <- function(e) {
+  a <- .args(e)
+  m <- as.integer(.cvx_num(a[[length(a)]]))
+  el <- a[-length(a)]
+  list(el = el, nrow = m, ncol = length(el) %/% m)
+}
+
+# ---------------------------------------------------------------------------
 # Expression helpers
 
 .cvx_is_num <- function(e) is_sym(e) && .type(e) %in% c("Integer", "Rational", "Float")
 .cvx_num <- function(e) as.numeric(e)
 .cvx_free <- function(e) if (.cvx_is_num(e)) list() else free_symbols(e)
-.cvx_depends <- function(e, keys) any(.keys(.cvx_free(e)) %in% keys)
+.cvx_depends <- function(e, keys) is_sym(e) && !.cvx_is_num(e) && any(.keys(.cvx_free(e)) %in% keys)
 .cvx_is_norm <- function(e) .type(e) == "Function" && identical(.name(e), "norm")
 .cvx_fname <- function(e) if (.type(e) == "Function") .name(e) else .type(e)
 
@@ -76,41 +316,140 @@
 
 .sa_num_sign <- function(v) if (v < 0) "Negative" else "Positive"
 
-.sa_incr_if_pos <- function(arg) {
-  s <- .sa_sign(arg)
+# the sign and curvature of an array argument (getsign / getcurvature of an
+# AbstractArray)
+.sa_vsign <- function(es) {
+  s <- vapply(es, .sa_sign, "")
+  if (length(s) && all(s == "Negative")) "Negative" else if (all(s == "Positive")) "Positive" else "AnySign"
+}
+
+.sa_vcurv <- function(es) {
+  has_cvx <- FALSE; has_ccv <- FALSE
+  for (e in es) {
+    cv <- .sa_curvature(e)
+    if (cv == "Affine") next
+    if (cv == "Convex") {
+      if (has_ccv) return("UnknownCurvature")
+      has_cvx <- TRUE
+    } else if (cv == "Concave") {
+      if (has_cvx) return("UnknownCurvature")
+      has_ccv <- TRUE
+    } else return("UnknownCurvature")
+  }
+  if (has_cvx) "Convex" else if (has_ccv) "Concave" else "Affine"
+}
+
+.sa_incr_if_pos <- function(group) {
+  s <- .sa_vsign(group)
   if (s == "AnySign") "AnyMono" else if (s == "Positive") "Increasing" else "Decreasing"
 }
 
-# The DCP rule of a call: list(sign, curvature, monotonicity (vector, the last
-# repeats; a function of the argument for increasing_if_positive))
+# The curvature of f(group_1, ...) for an atom of curvature fc and
+# monotonicity mono (a vector whose last entry repeats, or a function of the
+# argument group such as increasing_if_positive)
+.sa_compose <- function(fc, mono, groups) {
+  composes <- function(target) {
+    flipped <- if (target == "Convex") "Concave" else "Convex"
+    for (i in seq_along(groups)) {
+      ac <- .sa_vcurv(groups[[i]])
+      if (ac == "Affine") next
+      m <- if (is.function(mono)) mono else mono[[min(i, length(mono))]]
+      if (is.function(m)) m <- m(groups[[i]])
+      ok <- if (ac == target) m == "Increasing" else if (ac == flipped) m == "Decreasing" else FALSE
+      if (!ok) return(FALSE)
+    }
+    TRUE
+  }
+  if (fc == "Convex") return(if (composes("Convex")) "Convex" else "UnknownCurvature")
+  if (fc == "Concave") return(if (composes("Concave")) "Concave" else "UnknownCurvature")
+  if (fc == "Affine") {
+    cvx <- composes("Convex"); ccv <- composes("Concave")
+    return(if (cvx && ccv) "Affine" else if (cvx) "Convex" else if (ccv) "Concave" else "UnknownCurvature")
+  }
+  "UnknownCurvature"
+}
+
+.sa_is_posdef <- function(P) {
+  if (!isSymmetric(unname(P), tol = 0)) return(FALSE)
+  ev <- eigen(P, symmetric = TRUE, only.values = TRUE)$values
+  all(ev > 0)
+}
+
+# The DCP rule of a call: list(sign, curvature, monotonicity, argument
+# groups), or NULL for a call without one
 .sa_rule <- function(e) {
   args <- .args(e)
-  f <- .cvx_fname(e)
-  if (.type(e) == "Pow") {
+  t <- .type(e)
+  one <- function(s, c, m) list(s, c, m, lapply(args, list))
+  if (t == "Pow") {
     i <- args[[2L]]
-    if (!.cvx_is_num(i)) return(NULL)
+    if (!.cvx_is_num(i)) {
+      # power_rule for a non-constant exponent: a positive constant base
+      b <- args[[1L]]
+      if (.cvx_is_num(b) && .cvx_num(b) > 0) {
+        bv <- .cvx_num(b)
+        return(one("Positive", "Convex", c("AnyMono", if (bv > 1) "Increasing" else if (bv < 1) "Decreasing" else "AnyMono")))
+      }
+      return(one("AnySign", "UnknownCurvature", "AnyMono"))
+    }
     i <- .cvx_num(i)
-    return(if (i == 1) list("AnySign", "Affine", "Increasing")
-      else if (i == round(i) && i %% 2 == 0) list("Positive", "Convex", .sa_incr_if_pos)
-      else if (i == round(i)) list("Positive", "Convex", "Increasing")
-      else if (i >= 1) list("Positive", "Convex", "Increasing")
-      else if (i > 0) list("Positive", "Concave", "Increasing")
-      else list("Positive", "Convex", "Increasing"))
+    return(if (i == 1) one("AnySign", "Affine", "Increasing")
+      else if (i == round(i) && i %% 2 == 0) one("Positive", "Convex", .sa_incr_if_pos)
+      else if (i == round(i)) one("Positive", "Convex", "Increasing")
+      else if (i >= 1) one("Positive", "Convex", "Increasing")
+      else if (i > 0) one("Positive", "Concave", "Increasing")
+      else one("Positive", "Convex", "Increasing"))
   }
-  switch(f,
-    exp = list("Positive", "Convex", "Increasing"),
-    log = list("AnySign", "Concave", "Increasing"),
-    Abs = , abs = list("Positive", "Convex", .sa_incr_if_pos),
-    Max = list("AnySign", "Convex", "Increasing"),
-    Min = list("AnySign", "Concave", "Increasing"),
-    log1p = list("Negative", "Concave", "Increasing"),
+  if (t != "Function") return(NULL)
+  vec1 <- function(s, c, m) list(s, c, m, list(args))
+  mat <- function(s, c, m) list(s, c, m, list(args[-length(args)]))
+  switch(.name(e),
+    exp = , exp2 = , exp10 = one("Positive", "Convex", "Increasing"),
+    expm1 = one("AnySign", "Convex", "Increasing"),
+    log = , log2 = , log10 = , log1p = one("AnySign", "Concave", "Increasing"),
+    Abs = , abs = , abs2 = , cosh = , hypot = one("Positive", "Convex", .sa_incr_if_pos),
+    Max = , max = one("AnySign", "Convex", "Increasing"),
+    Min = , min = one("AnySign", "Concave", "Increasing"),
+    maximum = vec1("AnySign", "Convex", "Increasing"),
+    minimum = vec1("AnySign", "Concave", "Increasing"),
+    # sum and maximum over the elementwise abs or square of w (a convex
+    # broadcast of sign Positive): the reducer keeps its own sign AnySign
+    sum_abs = , maximum_abs = , sum_sq = {
+      c <- .sa_compose("Convex", .sa_incr_if_pos, list(args))
+      list("AnySign", c, "Increasing", list())
+    },
+    # w' w: a product of two non constant factors
+    self_prod = {
+      warning("DCP does not support multiple non-constant arguments in multiplication", call. = FALSE)
+      list("AnySign", "UnknownCurvature", "AnyMono", list())
+    },
+    quad_form = , quad_prod = {
+      q <- .cvx_quad_parts(e)
+      if (.sa_is_posdef(q$P))
+        list("Positive", "Convex", list(if (all(q$P >= 0)) .sa_incr_if_pos else "AnyMono", "Increasing"), list(q$v))
+      else list("AnySign", "UnknownCurvature", "AnyMono", list(q$v))
+    },
+    eigmax = mat("AnySign", "Convex", "AnyMono"),
+    eigmin = mat("AnySign", "Concave", "AnyMono"),
+    opnorm = mat("Positive", "Convex", "AnyMono"),
+    logdet = mat("AnySign", "Concave", "AnyMono"),
     norm = {
       p <- args[[length(args)]]
+      w <- list(args[-length(args)])
       pv <- if (identical(.key(p), .key(Symbol(".norm_Inf")))) Inf else if (.cvx_is_num(p)) .cvx_num(p) else NA
-      if (is.na(pv)) list("Positive", "UnknownCurvature", "AnyMono")
-      else if (pv >= 1) list("Positive", "Convex", .sa_incr_if_pos)
-      else if (pv > 0) list("Positive", "UnknownCurvature", "Increasing")
-      else list("Positive", "UnknownCurvature", "AnyMono")
+      if (is.na(pv)) list("Positive", "UnknownCurvature", "AnyMono", w)
+      else if (pv >= 1) list("Positive", "Convex", .sa_incr_if_pos, w)
+      else if (pv > 0) list("Positive", if (.sa_vsign(w[[1L]]) == "Positive") "Concave" else "UnknownCurvature",
+                            "Increasing", w)
+      else list("Positive", "UnknownCurvature", "AnyMono", w)
+    },
+    # the rule of `/` for a denominator in the variables
+    rdiv = {
+      num <- args[[1L]]; den <- args[[2L]]
+      if (.cvx_is_num(num) && .cvx_num(num) != 0 && .sa_sign(den) == "Positive") {
+        if (.cvx_num(num) > 0) one("Positive", "Convex", c("AnyMono", "Decreasing"))
+        else one("Negative", "Concave", c("AnyMono", "Increasing"))
+      } else one("AnySign", "UnknownCurvature", "AnyMono")
     },
     NULL)
 }
@@ -141,19 +480,6 @@
   if (is.null(r)) "AnySign" else r[[1L]]
 }
 
-.sa_composes_as <- function(target, mono, args) {
-  flipped <- if (target == "Convex") "Concave" else "Convex"
-  for (i in seq_along(args)) {
-    ac <- .sa_curvature(args[[i]])
-    if (ac == "Affine") next
-    m <- if (is.function(mono)) mono(args[[i]]) else mono[[min(i, length(mono))]]
-    if (is.function(m)) m <- m(args[[i]])
-    ok <- if (ac == target) m == "Increasing" else if (ac == flipped) m == "Decreasing" else FALSE
-    if (!ok) return(FALSE)
-  }
-  TRUE
-}
-
 .sa_curvature <- function(e) {
   if (!is_sym(e) || .cvx_is_num(e) || .type(e) == "Symbol") return("Affine")
   t <- .type(e)
@@ -172,37 +498,15 @@
     }
     if (is.null(nonconst)) return("Affine")
     cv <- .sa_curvature(nonconst)
+    if (cv == "Affine") return("Affine")
     if (.sa_num_sign(prod) == "Negative") return(switch(cv, Convex = "Concave", Concave = "Convex", cv))
     return(cv)
   }
-  if (t == "Add") {
-    has_cvx <- FALSE; has_ccv <- FALSE
-    for (a in args) {
-      cv <- .sa_curvature(a)
-      if (cv == "Affine") next
-      if (cv == "Convex") {
-        has_cvx <- TRUE
-        if (has_ccv) return("UnknownCurvature")
-      } else if (cv == "Concave") {
-        has_ccv <- TRUE
-        if (has_cvx) return("UnknownCurvature")
-      } else return("UnknownCurvature")
-    }
-    return(if (has_cvx) "Convex" else if (has_ccv) "Concave" else "Affine")
-  }
+  if (t == "Add") return(.sa_vcurv(args))
   r <- .sa_rule(e)
   if (is.null(r)) return("UnknownCurvature")
-  # the exponent of a power is not an argument the rule composes over
-  cargs <- if (t == "Pow") args[1L] else if (.cvx_is_norm(e)) args[-length(args)] else args
-  fc <- r[[2L]]; mono <- r[[3L]]
-  if (fc == "Convex") return(if (.sa_composes_as("Convex", mono, cargs)) "Convex" else "UnknownCurvature")
-  if (fc == "Concave") return(if (.sa_composes_as("Concave", mono, cargs)) "Concave" else "UnknownCurvature")
-  if (fc == "Affine") {
-    cvx <- .sa_composes_as("Convex", mono, cargs)
-    ccv <- .sa_composes_as("Concave", mono, cargs)
-    return(if (cvx && ccv) "Affine" else if (cvx) "Convex" else if (ccv) "Concave" else "UnknownCurvature")
-  }
-  "UnknownCurvature"
+  if (!length(r[[4L]])) return(r[[2L]])
+  .sa_compose(r[[2L]], r[[3L]], r[[4L]])
 }
 
 #' Disciplined convex programming analysis

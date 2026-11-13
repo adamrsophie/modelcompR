@@ -1,4 +1,4 @@
-ConvexOptimization.jl, lib/ConvexOptimization of Optimization.jl (https://github.com/SciML/Optimization.jl), version 0.1.0
+ConvexOptimization.jl, lib/ConvexOptimization of Optimization.jl (https://github.com/SciML/Optimization.jl), version 0.1.4
 
 MIT License
 
@@ -54,7 +54,7 @@ The MathOptInterface.jl package is licensed under the MIT "Expat" License:
 
 ----------------------------------------------------------------------
 
-SymbolicAnalysis.jl (https://github.com/Vaibhavdixit02/SymbolicAnalysis.jl), version 0.3.9
+SymbolicAnalysis.jl (https://github.com/Vaibhavdixit02/SymbolicAnalysis.jl), version 0.5.8
 
 MIT License
 
