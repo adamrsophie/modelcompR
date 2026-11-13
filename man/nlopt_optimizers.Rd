@@ -46,11 +46,17 @@ ranking evolution), \code{LD_MMA} and \code{LD_CCSAQ} (conservative convex
 separable approximations), the augmented Lagrangian family (\code{AUGLAG},
 \code{AUGLAG_EQ}, \code{LN_AUGLAG}, \code{LN_AUGLAG_EQ}, \code{LD_AUGLAG}, \code{LD_AUGLAG_EQ}) and
 the multi level single linkage family (\code{G_MLSL}, \code{G_MLSL_LDS}, \code{GN_MLSL},
-\code{GD_MLSL}, \code{GN_MLSL_LDS}, \code{GD_MLSL_LDS}). \code{LD_LBFGS_NOCEDAL} has no
-implementation in NLopt and returns \code{INVALID_ARGS} (a \code{Failure}).
-\code{LN_COBYLA} and \code{LD_LBFGS} run stand in kernels of the package (COBYLA
-of PRIMA, L-BFGS-B) whose steps differ from NLopt, and the other
-identifiers raise an error on \code{\link[=solve]{solve()}} until their ports land. The
+\code{GD_MLSL}, \code{GN_MLSL_LDS}, \code{GD_MLSL_LDS}), the DIRECT family (\code{GN_DIRECT},
+\code{GN_DIRECT_L}, \code{GN_DIRECT_L_RAND} and their \verb{_NOSCAL} variants, and
+Gablonsky's \code{GN_ORIG_DIRECT} and \code{GN_ORIG_DIRECT_L}), \code{LN_PRAXIS} (Brent's
+principal axis method), \code{GD_STOGO} and \code{GD_STOGO_RAND} (branch and bound
+with trust region BFGS searches), \code{GN_AGS} (the index method on a Peano
+evolvent), Luksan's limited memory and
+truncated Newton methods (\code{LD_LBFGS}, \code{LD_VAR1}, \code{LD_VAR2}, \code{LD_TNEWTON},
+\code{LD_TNEWTON_RESTART}, \code{LD_TNEWTON_PRECOND}, \code{LD_TNEWTON_PRECOND_RESTART}),
+Powell's \code{LN_COBYLA}, \code{LN_NEWUOA}, \code{LN_NEWUOA_BOUND} and \code{LN_BOBYQA}, and
+Kraft's \code{LD_SLSQP}. \code{LD_LBFGS_NOCEDAL} has no implementation in NLopt and
+returns \code{INVALID_ARGS} (a \code{Failure}). The
 stochastic algorithms draw from NLopt's Mersenne Twister, seeded by
 \code{NLopt$srand(seed)} (from the clock otherwise).
 

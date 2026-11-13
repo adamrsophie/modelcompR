@@ -72,8 +72,7 @@ test_that("stopval and maxtime stop the NLopt algorithms", {
 
 test_that("the NLopt algorithms reach the solutions of NLopt", {
   # julia tools/nlopt-probe.jl (NLopt.jl); the ported algorithms take the
-  # steps of NLopt, the stand in kernels (LD_LBFGS, LN_COBYLA) only reach the
-  # same points
+  # steps of NLopt
   o <- Opt("LN_NELDERMEAD", 3)
   o$xtol_rel <- 1e-10
   o$maxeval <- 2000L
@@ -175,4 +174,91 @@ test_that("MMA, CCSAQ, AUGLAG and MLSL of NLopt", {
   o <- Opt("G_MLSL", 2)
   o$lower_bounds <- c(-2, -2); o$upper_bounds <- c(2, 2)
   expect_identical(solve(OptimizationProblem(fr, c(0, 0), numeric()), o)$original$ret, "INVALID_ARGS")
+})
+
+test_that("the local NLopt algorithms take the steps of NLopt", {
+  # julia tools/nlopt-probe.jl (NLopt.jl): the Luksan family, COBYLA, NEWUOA,
+  # BOBYQA and SLSQP reproduce NLopt_jll to the last bit on the reference
+  # platform (results, return codes and evaluation counts)
+  poly3 <- function(x) nl_poly3(x)
+  poly3g <- function(x) {
+    a <- x[1] - 1; b <- x[2] - 2; c <- x[3] + 1
+    c(2 * a + 2 * a * b * b + 0.5 * c, 4 * b + 2 * a * a * b, 6 * c + 0.5 * a)
+  }
+  rosen <- function(x) nl_rosen(x)
+  roseng <- function(x) nl_roseng(x)
+  ssum <- function(x) { s <- x[1] + x[2]; for (i in 3:5) s <- s + x[i]; s }
+  quart5 <- function(x) {
+    s <- ssum(x); v <- 0.1 * s * s * s * s
+    for (i in 1:5) { d <- x[i] - 0.1 * i; v <- v + i * d * d }
+    v
+  }
+  quart5g <- function(x) { s <- ssum(x); vapply(1:5, function(i) 2 * i * (x[i] - 0.1 * i) + 0.4 * s * s * s, 0) }
+  ballf <- function(x) { s <- 0; for (t in x) s <- s + t * t; s - 4 }
+  planef <- function(x) { s <- 0; for (t in x) s <- s + t; s - 1 }
+  fns <- list(poly3 = list(poly3, poly3g), rosen = list(rosen, roseng), quart5 = list(quart5, quart5g))
+  run <- function(alg, fn, x0, lb = NULL, ub = NULL, cons = "none", xtol = 0, ftol = 0, maxeval = 0) {
+    n <- length(x0)
+    o <- .nlopt_create(alg, n)
+    if (!is.null(lb)) o$lb <- lb
+    if (!is.null(ub)) o$ub <- ub
+    o$xtol_rel <- xtol; o$ftol_rel <- ftol; o$maxeval <- as.integer(maxeval)
+    o$f <- fns[[fn]][[1]]
+    o$fg <- function(x) list(val = fns[[fn]][[1]](x), grad = fns[[fn]][[2]](x))
+    if (cons != "none") {
+      o$fc <- list(list(m = 1L, f = ballf, fg = function(x) list(val = ballf(x), grad = matrix(2 * x, 1)), tol = 1e-8))
+      if (cons == "eq") {
+        o$h <- list(list(m = 1L, f = planef, fg = function(x) list(val = planef(x), grad = matrix(1, 1, n)), tol = 1e-8))
+      }
+    }
+    .nlopt_optimize(o, x0)
+  }
+  check <- function(r, x, f, ret, numevals, info) {
+    if (ref_platform()) {
+      expect_identical(sprintf("%a", r$x), sprintf("%a", as.numeric(x)), info = info)
+      expect_identical(sprintf("%a", r$minf), sprintf("%a", as.numeric(f)), info = info)
+      expect_identical(r$ret, ret, info = info)
+      expect_identical(r$numevals, numevals, info = info)
+    } else {
+      expect_equal(r$x, as.numeric(x), tolerance = ref_tol(0), info = info)
+      expect_equal(r$minf, as.numeric(f), tolerance = ref_tol(0), info = info)
+    }
+  }
+  b5 <- list(rep(-3, 5), rep(3, 5))
+  b3 <- list(rep(-5, 3), rep(5, 3))
+  check(run("LD_LBFGS", "rosen", c(-1.2, 1), c(-2, -2), c(0.8, 2), ftol = 1e-14, maxeval = 3000),
+        c("0x1.999999999999ap-1", "0x1.47ae147ae147cp-1"), "0x1.47ae147ae1478p-5", "SUCCESS", 38L, "LD_LBFGS")
+  check(run("LD_VAR1", "rosen", c(-1.2, 1), ftol = 1e-14, maxeval = 3000),
+        c("0x1.fffffff60797cp-1", "0x1.ffffffebe101ep-1"), "0x1.9aa565e6608p-60", "SUCCESS", 53L, "LD_VAR1")
+  check(run("LD_VAR2", "quart5", rep(1, 5), b5[[1]], b5[[2]], xtol = 1e-9, maxeval = 4000),
+        c("-0x1.c6e065b26b565p-4", "0x1.82f63379c076ap-4", "0x1.d652113a2dd51p-3", "0x1.6391f9aa403a1p-2",
+          "0x1.d4c6b33d54cbap-2"), "0x1.ac53efc01102ep-3", "SUCCESS", 21L, "LD_VAR2")
+  check(run("LD_TNEWTON", "rosen", c(-1.2, 1), ftol = 1e-14, maxeval = 3000),
+        c("0x1.fffffffffffa3p-1", "0x1.ffffffffffee7p-1"), "0x1.bce5ap-87", "SUCCESS", 182L, "LD_TNEWTON")
+  check(run("LD_TNEWTON_RESTART", "poly3", c(0, 0, 0), xtol = 1e-10, maxeval = 2000),
+        c("0x1.0000000000001p+0", "0x1.fffffffffffffp+0", "-0x1.fffffffffffffp-1"), "0x1p-102", "SUCCESS", 19L,
+        "LD_TNEWTON_RESTART")
+  check(run("LD_TNEWTON_PRECOND", "rosen", c(-1.2, 1), c(-2, -2), c(0.8, 2), ftol = 1e-14, maxeval = 3000),
+        c("0x1.999999999999ap-1", "0x1.47ae147ad9ef4p-1"), "0x1.47ae147ae1478p-5", "SUCCESS", 216L,
+        "LD_TNEWTON_PRECOND")
+  check(run("LD_TNEWTON_PRECOND_RESTART", "quart5", rep(1, 5), b5[[1]], b5[[2]], xtol = 1e-9, maxeval = 4000),
+        c("-0x1.c6e065b62c8dcp-4", "0x1.82f6338b5135p-4", "0x1.d652112e70163p-3", "0x1.6391f9a49d79dp-2",
+          "0x1.d4c6b33c0302cp-2"), "0x1.ac53efc01102bp-3", "SUCCESS", 29L, "LD_TNEWTON_PRECOND_RESTART")
+  check(run("LN_COBYLA", "poly3", c(0, 0, 0), b3[[1]], b3[[2]], cons = "eq", xtol = 1e-10, maxeval = 5000),
+        c("0x1.cd1cfa1413d38p-2", "0x1.a003d8a7bff31p+0", "-0x1.134b172cc4e7dp+0"), "0x1.53bdc6f748aa4p-1",
+        "XTOL_REACHED", 178L, "LN_COBYLA")
+  check(run("LN_NEWUOA", "rosen", c(-1.2, 1), c(-2, -2), c(0.8, 2), ftol = 1e-14, maxeval = 3000),
+        c("0x1.000000000000ap+0", "0x1.0000000000014p+0"), "0x1.9p-98", "ROUNDOFF_LIMITED", 466L, "LN_NEWUOA")
+  check(run("LN_NEWUOA_BOUND", "rosen", c(-1.2, 1), c(-2, -2), c(0.8, 2), ftol = 1e-14, maxeval = 3000),
+        c("0x1.999999999999ap-1", "0x1.47ae1496cb133p-1"), "0x1.47ae147ae151p-5", "FTOL_REACHED", 141L,
+        "LN_NEWUOA_BOUND")
+  check(run("LN_BOBYQA", "quart5", rep(1, 5), b5[[1]], b5[[2]], xtol = 1e-9, maxeval = 4000),
+        c("-0x1.c6e0661df9917p-4", "0x1.82f633ceddd13p-4", "0x1.d652113233c6p-3", "0x1.6391f9a68521ep-2",
+          "0x1.d4c6b320e2c11p-2"), "0x1.ac53efc011029p-3", "SUCCESS", 198L, "LN_BOBYQA")
+  check(run("LD_SLSQP", "poly3", c(0, 0, 0), b3[[1]], b3[[2]], cons = "eq", xtol = 1e-10, maxeval = 5000),
+        c("0x1.cd1cfa12066a8p-2", "0x1.a003d8a80e065p+0", "-0x1.134b172c8fa0fp+0"), "0x1.53bdc6f740f13p-1",
+        "XTOL_REACHED", 14L, "LD_SLSQP")
+  check(run("LD_SLSQP", "poly3", c(0, 0, 0), b3[[1]], b3[[2]], cons = "ineq", xtol = 1e-10, maxeval = 5000),
+        c("0x1.67b94a1321ba4p-1", "0x1.aa65a23bee9e3p+0", "-0x1.b615616f8034bp-1"), "0x1.73bedc8bd3b1bp-2",
+        "XTOL_REACHED", 25L, "LD_SLSQP inequality")
 })

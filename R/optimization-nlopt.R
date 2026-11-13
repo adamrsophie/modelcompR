@@ -22,11 +22,12 @@
 # the identifiers whose NLopt algorithm is ported (the others raise on solve)
 .nlopt_ported <- c("LN_NELDERMEAD", "LN_SBPLX", "LD_LBFGS_NOCEDAL", "GN_CRS2_LM", "GN_ESCH", "GN_ISRES",
                    "LD_MMA", "LD_CCSAQ", "AUGLAG", "AUGLAG_EQ", "LN_AUGLAG", "LN_AUGLAG_EQ", "LD_AUGLAG",
-                   "LD_AUGLAG_EQ", "G_MLSL", "G_MLSL_LDS", "GN_MLSL", "GD_MLSL", "GN_MLSL_LDS", "GD_MLSL_LDS")
-
-# the identifiers that still run a stand in kernel of the package (the
-# stopping criteria of NLopt are enforced around it) until their port lands
-.nlopt_standins <- c(LN_COBYLA = "cobyla", LD_LBFGS = "l-bfgs-b")
+                   "LD_AUGLAG_EQ", "G_MLSL", "G_MLSL_LDS", "GN_MLSL", "GD_MLSL", "GN_MLSL_LDS", "GD_MLSL_LDS",
+                   "GN_DIRECT", "GN_DIRECT_L", "GN_DIRECT_L_RAND", "GN_DIRECT_NOSCAL", "GN_DIRECT_L_NOSCAL",
+                   "GN_DIRECT_L_RAND_NOSCAL", "GN_ORIG_DIRECT", "GN_ORIG_DIRECT_L", "LN_PRAXIS", "GN_AGS", "GD_STOGO", "GD_STOGO_RAND",
+                   "LD_LBFGS", "LD_VAR1", "LD_VAR2", "LD_TNEWTON", "LD_TNEWTON_RESTART", "LD_TNEWTON_PRECOND",
+                   "LD_TNEWTON_PRECOND_RESTART", "LN_COBYLA", "LN_NEWUOA", "LN_NEWUOA_BOUND", "LN_BOBYQA",
+                   "LD_SLSQP")
 
 #' NLopt algorithms and optimizers
 #'
@@ -49,11 +50,17 @@
 #' separable approximations), the augmented Lagrangian family (`AUGLAG`,
 #' `AUGLAG_EQ`, `LN_AUGLAG`, `LN_AUGLAG_EQ`, `LD_AUGLAG`, `LD_AUGLAG_EQ`) and
 #' the multi level single linkage family (`G_MLSL`, `G_MLSL_LDS`, `GN_MLSL`,
-#' `GD_MLSL`, `GN_MLSL_LDS`, `GD_MLSL_LDS`). `LD_LBFGS_NOCEDAL` has no
-#' implementation in NLopt and returns `INVALID_ARGS` (a `Failure`).
-#' `LN_COBYLA` and `LD_LBFGS` run stand in kernels of the package (COBYLA
-#' of PRIMA, L-BFGS-B) whose steps differ from NLopt, and the other
-#' identifiers raise an error on [solve()] until their ports land. The
+#' `GD_MLSL`, `GN_MLSL_LDS`, `GD_MLSL_LDS`), the DIRECT family (`GN_DIRECT`,
+#' `GN_DIRECT_L`, `GN_DIRECT_L_RAND` and their `_NOSCAL` variants, and
+#' Gablonsky's `GN_ORIG_DIRECT` and `GN_ORIG_DIRECT_L`), `LN_PRAXIS` (Brent's
+#' principal axis method), `GD_STOGO` and `GD_STOGO_RAND` (branch and bound
+#' with trust region BFGS searches), `GN_AGS` (the index method on a Peano
+#' evolvent), Luksan's limited memory and
+#' truncated Newton methods (`LD_LBFGS`, `LD_VAR1`, `LD_VAR2`, `LD_TNEWTON`,
+#' `LD_TNEWTON_RESTART`, `LD_TNEWTON_PRECOND`, `LD_TNEWTON_PRECOND_RESTART`),
+#' Powell's `LN_COBYLA`, `LN_NEWUOA`, `LN_NEWUOA_BOUND` and `LN_BOBYQA`, and
+#' Kraft's `LD_SLSQP`. `LD_LBFGS_NOCEDAL` has no implementation in NLopt and
+#' returns `INVALID_ARGS` (a `Failure`). The
 #' stochastic algorithms draw from NLopt's Mersenne Twister, seeded by
 #' `NLopt$srand(seed)` (from the clock otherwise).
 #'
@@ -196,7 +203,7 @@ print.NLoptOpt <- function(x, ...) {
       "the `grad` kwarg.")))
   if (is_opt && alg$n != n)
     stop("Passed NLopt.Opt optimization dimension does not match OptimizationProblem dimension.", call. = FALSE)
-  if (!(name %in% c(.nlopt_ported, names(.nlopt_standins))))
+  if (!(name %in% .nlopt_ported))
     stop("the NLopt algorithm ", name, " is not yet ported to native R in modelcompR", call. = FALSE)
   e <- if (is_opt) alg else Opt(alg, n)
   # the objective, already in the minimizing sense (solve() negated it for
@@ -375,56 +382,25 @@ print.NLoptOpt <- function(x, ...) {
     GN_ESCH = if (!global_ok) bad_domain else
       .nlopt_esch_minimize(o$f, o$lb, o$ub, x, stop, pop, as.integer(floor(pop * 1.5))),
     GN_ISRES = if (!global_ok) bad_domain else .nlopt_isres_minimize(o$f, o$fc, o$h, o$lb, o$ub, x, stop, pop),
-    LN_COBYLA = , LD_LBFGS = .nlopt_standin(o, x, stop),
+    GN_DIRECT = , GN_DIRECT_L = , GN_DIRECT_L_RAND = , GN_DIRECT_NOSCAL = , GN_DIRECT_L_NOSCAL = ,
+    GN_DIRECT_L_RAND_NOSCAL = .nlopt_cdirect_dispatch(o, x, stop),
+    GN_ORIG_DIRECT = , GN_ORIG_DIRECT_L = .nlopt_orig_direct_dispatch(o, x, stop),
+    GN_AGS = .nlopt_ags_dispatch(o, x, stop),
+    GD_STOGO = , GD_STOGO_RAND = .nlopt_stogo_dispatch(o, x, stop),
+    LN_PRAXIS = .nlopt_praxis_dispatch(o, x, stop),
+    LD_LBFGS = .nlopt_luksan_plis(o$fg, o$lb, o$ub, x, stop, o$vector_storage, .nlopt_get_param(o, "tolg", 0)),
+    LD_VAR1 = , LD_VAR2 = .nlopt_luksan_plip(o$fg, o$lb, o$ub, x, stop, o$vector_storage,
+                                            if (alg == "LD_VAR1") 1L else 2L, .nlopt_get_param(o, "tolg", 0)),
+    LD_TNEWTON = , LD_TNEWTON_RESTART = , LD_TNEWTON_PRECOND = , LD_TNEWTON_PRECOND_RESTART = {
+      k <- match(alg, c("LD_TNEWTON", "LD_TNEWTON_RESTART", "LD_TNEWTON_PRECOND", "LD_TNEWTON_PRECOND_RESTART")) - 1L
+      .nlopt_luksan_pnet(o$fg, o$lb, o$ub, x, stop, o$vector_storage, 1L + k %% 2L, 1L + k %/% 2L,
+                         .nlopt_get_param(o, "tolg", 0))
+    },
+    LN_COBYLA = .nlopt_cobyla_minimize(o, x, stop, .nlopt_dx(o, x)),
+    LN_NEWUOA = .nlopt_newuoa_minimize(o, x, stop, FALSE),
+    LN_NEWUOA_BOUND = .nlopt_newuoa_minimize(o, x, stop, TRUE),
+    LN_BOBYQA = .nlopt_bobyqa(o$f, o$lb, o$ub, x, .nlopt_dx(o, x), stop),
+    LD_SLSQP = .nlopt_slsqp(o, x, stop),
     list(ret = "INVALID_ARGS", x = x, minf = Inf))
   out(res$ret, res$x, res$minf, stop$nevals)
-}
-
-# The stand in kernels (COBYLA of PRIMA, L-BFGS-B) behind the stopping
-# criteria of NLopt: every evaluation is counted, and the search stops at
-# the first point better than stopval (STOPVAL_REACHED) or past maxtime
-# (MAXTIME_REACHED), returning the best point so far.
-.nlopt_standin <- function(o, x0, stop) {
-  n <- length(x0)
-  best <- new.env(parent = emptyenv())
-  best$x <- x0; best$f <- Inf
-  halt <- function(ret) stop(structure(class = c("nlopt_halt", "condition"), list(message = ret, call = NULL)))
-  check <- function(x, val) {
-    stop$nevals <- stop$nevals + 1L
-    if (val < best$f) { best$f <- val; best$x <- x }
-    if (.nlopt_stop_forced(stop)) halt("FORCED_STOP")
-    if (val < stop$minf_max) halt("STOPVAL_REACHED")
-    if (.nlopt_stop_time(stop)) halt("MAXTIME_REACHED")
-    val
-  }
-  f <- function(x) check(x, o$f(x))
-  maxeval <- if (stop$maxeval > 0) stop$maxeval else NULL
-  res <- tryCatch(switch(.nlopt_standins[[o$algorithm]],
-    "l-bfgs-b" = {
-      g <- function(x) as.numeric(o$fg(x)$grad)
-      r <- .sp_lbfgsb(f, x0, jac = g, bounds = list(lb = o$lb, ub = o$ub),
-                      ftol = if (stop$ftol_rel > 0) stop$ftol_rel else 2.220446049250313e-09,
-                      gtol = if (stop$ftol_rel > 0 || stop$ftol_abs > 0) 0 else 1e-5,
-                      maxfun = maxeval %||% 15000L, maxiter = 15000L)
-      list(x = r$x, minf = r$fun, ret = if (isTRUE(r$success)) "SUCCESS" else if (identical(r$status, 1L))
-        "MAXEVAL_REACHED" else "FAILURE")
-    },
-    "cobyla" = {
-      ineq <- function(x) as.numeric(unlist(lapply(o$fc, function(c) c$f(x))))
-      eq <- function(x) as.numeric(unlist(lapply(o$h, function(c) c$f(x))))
-      calcfc <- function(x) {
-        hv <- eq(x)
-        list(f = f(x), c = c(hv, -hv, ineq(x)))
-      }
-      step <- .nlopt_dx(o, x0)
-      rhobeg <- max(abs(step))
-      rhoend <- max(stop$xtol_rel * max(abs(x0), 1), max(stop$xtol_abs %||% 0), 1e-8 * rhobeg)
-      r0 <- calcfc(x0)
-      r <- .pr_cobyla(calcfc, length(r0$c), x0, xl = o$lb, xu = o$ub, f0 = r0$f, nlconstr0 = r0$c,
-                      rhobeg = rhobeg, rhoend = min(rhoend, rhobeg),
-                      maxfun = maxeval %||% (1000L * n), fortran = TRUE)
-      list(x = r$x, minf = r$f, ret = switch(as.character(r$info), "0" = "XTOL_REACHED", "1" = "STOPVAL_REACHED",
-                                             "3" = "MAXEVAL_REACHED", "FAILURE"))
-    }), nlopt_halt = function(e) list(x = best$x, minf = best$f, ret = conditionMessage(e)))
-  res
 }

@@ -196,7 +196,6 @@ runhex("ld_var2_quart5_tolg", :LD_VAR2, 5, quart5, nothing, nothing, fill(1.0, 5
        params = Dict("tolg" => 1e-4))
 close(TRACEIO)
 
-# ---------------------------------------------------------------------------
 # Bit level references of the DIRECT family (GN_DIRECT*, GN_ORIG_DIRECT*),
 # LN_PRAXIS, StoGO (GD_STOGO, GD_STOGO_RAND) and AGS (GN_AGS) ports: every
 # run is seeded with NLopt.srand(1234); the summary goes to standard output
