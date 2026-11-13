@@ -150,7 +150,7 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
 
 # .ssprk_interp: _ode_interpolant of the SSPRK22, SSPRK33, SSPRK43 and
 # SSPRK432 caches at Val{1} (@ssprkpre1 under @muladd)
-.gde_ssprk_d <- function(theta, dt, y0, y1, k) .fma(y1 - y0, (2 * theta) * (1 / dt), k[[1L]] * .fma(theta, -2, 1))
+.gde_ssprk_d <- function(theta, dt, y0, y1, k) .fma(k[[1L]], .fma(theta, -2, 1), (y1 - y0) * ((2 * theta) * (1 / dt)))
 
 # .lsrk_interp and .newmark_interp: the Hermite derivative with the end
 # derivatives that the generic _ode_addsteps! evaluates

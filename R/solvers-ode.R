@@ -672,7 +672,9 @@ solve.ODEProblem <- function(a, b, ...) {
     # its LU factorization, ArrayInterface.issingular) takes the small step
     if (mm && !is.finite(determinant(as.matrix(M))$modulus)) return(max(1e-6, dtmin_at(integ$t)))
     f0 <- cache$fsal %||% ctx$f(integ$u, ctx$p, integ$t)
-    .initial_dt(ctx, integ$t, integ$u, f0, tdir, a$order, abstol, reltol, dtmax, dtmin_at(integ$t))
+    # _determine_initdt: the first step does not pass the first tstop
+    dtm <- if (length(tstops)) min(dtmax, abs(tstops[1L] - integ$t)) else dtmax
+    .initial_dt(ctx, integ$t, integ$u, f0, tdir, a$order, abstol, reltol, dtm, dtmin_at(integ$t))
   }
   dt <- opts$dt %||% NULL
   if (is.null(dt)) {

@@ -142,7 +142,8 @@ NULL
 .ssprk_interp <- function(theta, dt, y0, y1, k) {
   c00 <- .fma(theta, -theta, 1)
   b10dt <- theta * .fma(theta, -1, 1) * dt
-  .fma(y0, c00, .fma(y1, theta^2, k[[1L]] * b10dt))
+  # @muladd y0 * c00 + y1 * c10 + k1 * b10dt: the last product is fused outermost
+  .fma(k[[1L]], b10dt, .fma(y1, theta^2, y0 * c00))
 }
 
 # Methods whose Julia error estimate is not a single embedded difference

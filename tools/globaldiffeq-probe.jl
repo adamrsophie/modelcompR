@@ -417,3 +417,44 @@ tryp("dense41_muladd") do
     MM = Base.loaded_modules[Base.PkgId(Base.UUID("46d2c3a1-f734-5fdb-9937-b9b9aeba4221"), "MuladdMacro")]
     string(MM.to_muladd(:(a * b + c * d + e * f)))
 end
+
+# Where the ImplicitEuler self companion first leaves the forward nodes, and
+# the right continuous derivative at the final time with the Tsit5 companion
+# stats for the stiff forward solvers
+tryp("gee_ie_trace3") do
+    fsol = solve(probc, ImplicitEuler(); abstol = 1.0e-5, reltol = 1.0e-5, dense = true)
+    rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+    evals = Float64[]
+    rec = (e, p, t) -> (push!(evals, t); rhs(e, p, t))
+    nodes = Set(fsol.t)
+    csol = solve(ODEProblem{false}(rec, zeros(2), (0.0, 2.0)), ImplicitEuler(); abstol = 1.0e-10,
+        reltol = 1.0e-8, tstops = fsol.t)
+    i = findfirst(t -> !(t in nodes), evals)
+    j = findfirst(t -> !(t in nodes), csol.t)
+    (i, evals[max(1, i - 12):(i + 12)], j, csol.t[max(1, j - 6):(j + 6)],
+        reduce(vcat, csol.u[max(1, j - 6):(j + 6)]))
+end
+for (name, alg) in ("ImplicitEuler" => ImplicitEuler(), "Rosenbrock23" => Rosenbrock23(),
+        "Rodas5P" => Rodas5P(), "FBDF" => FBDF())
+    tryp("gee_end_$(name)") do
+        fsol = solve(probc, alg; abstol = 1.0e-5, reltol = 1.0e-5, dense = true)
+        rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+        csol = solve(ODEProblem{false}(rhs, zeros(2), (0.0, 2.0)), Tsit5(); abstol = 1.0e-10,
+            reltol = 1.0e-8, tstops = fsol.t)
+        (fsol(2.0, Val{1}; continuity = :right), fsol(2.0, Val{1}), rhs(zeros(2), nothing, 2.0),
+            csol.stats.naccept, csol.stats.nreject, csol.stats.nf, csol.u[end])
+    end
+end
+for (name, alg) in ("SSPRK33" => SSPRK33(), "RKO65" => RKO65(), "SSPRK53" => SSPRK53())
+    tryp("gee_end_$(name)") do
+        fsol = solve(probc, alg; dt = 0.01, abstol = 1.0e-6, reltol = 1.0e-3, dense = true)
+        rhs = GlobalDiffEq._defect_correction_rhs(probc, fsol, true)
+        evals = Float64[]
+        rec = (e, p, t) -> (push!(evals, t); rhs(e, p, t))
+        csol = solve(ODEProblem{false}(rec, zeros(2), (0.0, 2.0)), Tsit5(); abstol = 1.0e-10,
+            reltol = 1.0e-8, tstops = fsol.t)
+        (fsol(2.0, Val{1}; continuity = :right), fsol(2.0, Val{1}), rhs(zeros(2), nothing, 2.0),
+            rhs(zeros(2), nothing, 1.0), rhs(zeros(2), nothing, 0.995), csol.stats.naccept,
+            csol.stats.nreject, csol.stats.nf, csol.u[end], csol.t[1:8], evals[1:20])
+    end
+end
