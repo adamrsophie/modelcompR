@@ -71,6 +71,18 @@ cases = [
     ("adaptive_never", ["mu_strategy" => "adaptive", "adaptive_mu_globalization" => "never-monotone-mode"]),
     ("penalty_ls", ["line_search_method" => "penalty"]),
     ("cg_penalty_ls", ["line_search_method" => "cg-penalty"]),
+    ("penalty_far_start", ["line_search_method" => "penalty"]),
+    ("penalty_adaptive", ["line_search_method" => "penalty", "mu_strategy" => "adaptive"]),
+    ("penalty_lbfgs", ["line_search_method" => "penalty", "hessian_approximation" => "limited-memory"]),
+    ("penalty_watchdog1", ["line_search_method" => "penalty", "watchdog_shortened_iter_trigger" => 1]),
+    ("penalty_nu_init", ["line_search_method" => "penalty", "nu_init" => 10.0, "rho" => 0.5]),
+    ("cg_penalty_far_start", ["line_search_method" => "cg-penalty"]),
+    ("cg_penalty_adaptive", ["line_search_method" => "cg-penalty", "mu_strategy" => "adaptive"]),
+    ("cg_penalty_lbfgs", ["line_search_method" => "cg-penalty", "hessian_approximation" => "limited-memory"]),
+    ("cg_penalty_always_cd", ["line_search_method" => "cg-penalty", "perturb_always_cd" => "yes"]),
+    ("cg_penalty_always_cd_far_start", ["line_search_method" => "cg-penalty", "perturb_always_cd" => "yes"]),
+    ("cg_penalty_no_piecewise", ["line_search_method" => "cg-penalty", "never_use_piecewise_penalty_ls" => "yes",
+                                  "perturb_always_cd" => "yes"]),
     ("acceptable", ["acceptable_tol" => 1e-2, "acceptable_iter" => 2, "tol" => 1e-14]),
     ("constr_viol_tol", ["constr_viol_tol" => 1e-12, "tol" => 1e-3]),
     ("dual_inf_tol", ["dual_inf_tol" => 1e-12, "tol" => 1e-3]),
@@ -83,7 +95,7 @@ cases = [
 for (name, opts) in cases
     println("== ", name)
     flush(stdout)
-    x0 = name == "far_start" ? [5.0, 1.0, 1.0, 5.0] : [1.0, 5.0, 5.0, 1.0]
+    x0 = endswith(name, "far_start") ? [5.0, 1.0, 1.0, 5.0] : [1.0, 5.0, 5.0, 1.0]
     try
         prob, status = hs071(opts; x0 = x0)
         flush(stdout)

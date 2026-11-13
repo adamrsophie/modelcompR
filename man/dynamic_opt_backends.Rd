@@ -106,6 +106,13 @@ ModelingToolkit, JuMP and CasADi hold the inputs constant over a step
 piecewise constant), ignore \code{nominal_values}, and Pyomo does not accept
 \code{initial_trajectory}; with the other backends and with a name or tableau
 given to \code{solve()} the inputs are free at every collocation point.
+With an explicit tableau (such as \code{"RK4"}), JuMP and CasADi create no
+stage variables: each step is one equality per state, from the stages
+evaluated at the state and input of the step's start, and integral costs
+use the trapezoidal rule on the nodes. The JuMP and InfiniteOpt backends
+fix the initial states (bounds with equal values, which the interior
+point method removes from the variables), and CasADi adds them as
+equality constraints.
 Further arguments of \code{\link[=DynamicOptProblem]{DynamicOptProblem()}}, such as \code{tune_parameters},
 \code{initial_trajectory}, \code{nominal_values} and \code{bounds}, are passed through
 \code{...}.

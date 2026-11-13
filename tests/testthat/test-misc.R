@@ -324,8 +324,23 @@ test_that("collocation schemes, integral costs and the collocation polynomial", 
               c = c(0, 0.5, 0.5, 1))
   expect_lt(abs(solve(prob, rk4)$model$objective - tanh(1)), 1e-5)
   js <- solve(prob, JuMPCollocation("ipopt", rk4))
-  expect_lt(abs(js$model$objective - tanh(1)), 1e-3)
   expect_equal(js$input_sol(0.03), js$input_sol(0.07))
+  # with an explicit tableau JuMP has no stage variables (one equality per
+  # step), fixes x(0) and integrates the cost by the trapezoidal rule on the
+  # nodes; the input at t = 0 carries half the weight of the others in the
+  # cost, so the optimum pushes it hard. julia tools/ipopt-resto-probe.jl
+  # (case lqr rk4_dt0.1, Ipopt 3.14.19): 21 free variables, 10 equalities,
+  # one iteration; the states agree to 1e-10, the second derivatives being
+  # differences of exact Jacobians here
+  jp <- JuMPDynamicOptProblem(sys, list(x ~ 1, u ~ 0), c(0, 1), dt = 0.1)
+  js <- solve(jp, JuMPCollocation("ipopt", rk4))
+  expect_identical(js$model$iterations, 1L)
+  expect_equal(js$model$objective, 0.71499799333216096, tolerance = 1e-12)
+  expect_equal(unname(unlist(js$sol$u)),
+               c(1, 0.8670004013335678, 0.8091706060136874, 0.759432516753944, 0.7172887526617397,
+                 0.6823178760961531, 0.6541701782915279, 0.632564182269818, 0.6172838280708064,
+                 0.6081763121525028, 0.605150559355724), tolerance = 1e-9)
+  expect_identical(length(js$model$z), 22L)
   expect_error(solve(prob, "nonsense"), "unknown collocation method")
   # Radau IIA with three stages is the default tableau of ModelingToolkit
   sc <- .dopt_scheme("RadauIIA5")
@@ -441,6 +456,20 @@ test_that("the cart pole swings up", {
   expect_equal(max(abs(final[setdiff(names(final), c("cp_th(t)", "cp_x(t)"))])), 0, tolerance = 1e-7)
   expect_equal(sol$sol(tf)[["cp_th(t)"]], pi, tolerance = 1e-7)
   expect_true(all(abs(unlist(sol$input_sol$u)) <= 10 + 1e-8))
+  # from rest with the RK4 tableau of ModelingToolkit's test, which needs no
+  # starting trajectory: julia tools/ipopt-resto-probe.jl (Ipopt 3.14.19,
+  # Linux) reports 101 variables (the 4 fixed initial states removed), 84
+  # equality constraints and Optimal Solution Found after 60 iterations
+  skip_on_cran()
+  prob <- suppressWarnings(JuMPDynamicOptProblem(cartpole, op, c(0, tf), dt = 0.25))
+  sol <- solve(prob, JuMPCollocation("ipopt", "RK4"))
+  expect_identical(sol$sol$retcode, "Success")
+  expect_identical(length(sol$model$z), 105L)
+  expect_identical(length(sol$model$multipliers$equality), 84L)
+  expect_identical(sol$model$iterations, 60L)
+  expect_equal(sol$model$objective, 27.398119, tolerance = 1e-7)
+  final <- tail(sol$sol$u, 1)[[1L]]
+  expect_equal(unname(final[c("cp_th(t)", "cp_x(t)")]), c(pi, 0), tolerance = 1e-8)
 })
 
 test_that("collocation derivatives are exact for every kind of term", {

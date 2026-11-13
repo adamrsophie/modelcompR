@@ -103,6 +103,25 @@ cartpole_code = raw"""
             end
             flush(stdout)
         end
+        # the linear quadratic problem of test-misc.R with the explicit RK4
+        # tableau: x' = u, x(0) = 1, cost int_0^1 x^2 + u^2
+        MTK.@variables xq(..) uq(t) [input = true]
+        MTK.@named lqr = MTK.System([D(xq(t)) ~ uq], t; costs = [MTK.Symbolics.Integral(t in (0, 1))(xq(t)^2 + uq^2)])
+        lqr = MTK.mtkcompile(lqr; inputs = [uq])
+        println("== lqr rk4_dt0.1")
+        flush(stdout)
+        try
+            lprob = MTK.JuMPDynamicOptProblem(lqr, [xq(t) => 1.0, uq => 0.0], (0, 1); dt = 0.1)
+            lsol = MTK.solve(lprob, MTK.JuMPCollocation(Ipopt.Optimizer, ExplicitTableaus.RK4()); verbose = true)
+            flush(stdout)
+            println("retcode ", lsol.sol.retcode)
+            println("x ", repr(Float64.(lsol.sol[xq(t)])))
+            println("u ", repr(Float64.(lsol.input_sol[uq])))
+            println("objective ", repr(JuMP.objective_value(lsol.model.model)))
+        catch err
+            println("error ", sprint(showerror, err))
+        end
+        flush(stdout)
 """
 try
     Base.include_string(Main, cartpole_code)

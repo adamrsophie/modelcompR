@@ -25,7 +25,8 @@
 # Hermite interpolation condition), backward Euler, Radau IIA, Gauss
 # Legendre and any tableau are available. Integral (Lagrange) costs use the
 # quadrature weights b of the scheme, and the solution between nodes is the
-# collocation polynomial. The nonlinear program is solved by the interior
+# collocation polynomial. An explicit tableau of the JuMP and CasADi
+# backends has no stage variables, as in MTK's add_solve_constraints!. The nonlinear program is solved by the interior
 # point method of R/dynamic-opt-nlp.R with exact first derivatives from
 # symbolic Jacobians and second derivatives by differences of them.
 
@@ -183,6 +184,13 @@ AbstractCollocation <- "AbstractCollocation"
 #' piecewise constant), ignore `nominal_values`, and Pyomo does not accept
 #' `initial_trajectory`; with the other backends and with a name or tableau
 #' given to `solve()` the inputs are free at every collocation point.
+#' With an explicit tableau (such as `"RK4"`), JuMP and CasADi create no
+#' stage variables: each step is one equality per state, from the stages
+#' evaluated at the state and input of the step's start, and integral costs
+#' use the trapezoidal rule on the nodes. The JuMP and InfiniteOpt backends
+#' fix the initial states (bounds with equal values, which the interior
+#' point method removes from the variables), and CasADi adds them as
+#' equality constraints.
 #' Further arguments of [DynamicOptProblem()], such as `tune_parameters`,
 #' `initial_trajectory`, `nominal_values` and `bounds`, are passed through
 #' `...`.
@@ -244,6 +252,13 @@ PyomoDynamicOptProblem <- function(sys, op, tspan, dt = NULL, steps = NULL, gues
   scheme <- .dopt_scheme(spec)
   # JuMP and CasADi evaluate every stage of a step with the input at its start
   scheme$hold <- backend %in% c("JuMP", "CasADi")
+  # their add_solve_constraints! take an explicit tableau (MTK.is_explicit)
+  # without stage variables, and the InfiniteOpt extension behind JuMP and
+  # InfiniteOpt fixes the initial states (JuMP's fix) where CasADi adds
+  # equality constraints
+  A <- scheme$A
+  scheme$explicit <- scheme$hold && all(A[upper.tri(A, diag = TRUE)] == 0)
+  scheme$fix_u0 <- backend %in% c("JuMP", "InfiniteOpt")
   structure(list(backend = backend, solver = solver, scheme = scheme),
             class = c(paste0(backend, "Collocation"), AbstractCollocation))
 }
@@ -709,7 +724,11 @@ print.DynamicOptProblem <- function(x, ...) {
   N <- ctx$N; n <- ctx$n; m <- ctx$m; k <- ctx$k
   A <- scheme$A; b <- scheme$b; cc <- scheme$c
   s <- length(b)
-  start <- cc == 0 & apply(A == 0, 1L, all)
+  # an explicit tableau of JuMP or CasADi: the stages are expressions of the
+  # state and input at the start of the step (one equality per step and
+  # state), so the nodes are the only points
+  explicit <- isTRUE(scheme$explicit) && !anyNA(ctx$diff_state)
+  start <- if (explicit) rep(TRUE, s) else cc == 0 & apply(A == 0, 1L, all)
   endst <- abs(cc - 1) < 1e-12 & apply(abs(sweep(A, 2L, b)) < 1e-12, 1L, all) & !start
   interior <- !(start | endst)
   ni <- sum(interior)
@@ -741,15 +760,16 @@ print.DynamicOptProblem <- function(x, ...) {
   # inputs held over a step (the JuMP and CasADi transcriptions): the inputs
   # of the interior stages equal the input at the start of the interval, and
   # the stage at the end of an interval is evaluated with that input
-  hold <- isTRUE(scheme$hold) && m > 0L
+  hold <- isTRUE(scheme$hold) && m > 0L && !explicit
   if (hold) {
     ties <- list()
     for (i in which(interior)) for (kk in seq_len(N - 1L))
       ties[[length(ties) + 1L]] <- list(pt = spt[kk, i], sp = node_pt[kk], w = 1)
   }
   ctx$hold <- hold
+  ctx$explicit <- explicit
   ctx$stage_end <- endst
-  ctx$ties <- if (m) ties else list()
+  ctx$ties <- if (m && !explicit) ties else list()
   ctx$scheme <- scheme
   ctx$Npts <- Np; ctx$node_pt <- node_pt; ctx$spt <- spt; ctx$ptau <- ptau; ctx$dtau <- dtau
   ctx$stage_interior <- interior
@@ -763,6 +783,14 @@ print.DynamicOptProblem <- function(x, ...) {
                       numeric(Np)))
   }
   z0 <- c(spread(ctx$X0), spread(ctx$W0), ctx$P0, ctx$T0)
+  # fixed initial states are bounds with equal values, which Ipopt turns
+  # into parameters (fixed_variable_treatment = make_parameter)
+  ctx$u0_fixed <- isTRUE(scheme$fix_u0)
+  if (ctx$u0_fixed && length(ctx$u0_idx)) {
+    iz <- (ctx$u0_idx - 1L) * Np + node_pt[1L]
+    ctx$lower[iz] <- ctx$u0[ctx$u0_idx]
+    ctx$upper[iz] <- ctx$u0[ctx$u0_idx]
+  }
   ctx$z0 <- pmin(pmax(z0, ctx$lower), ctx$upper)
   # point values are interpolated between the collocation points of a
   # collocation method, between the nodes otherwise
@@ -797,8 +825,15 @@ print.DynamicOptProblem <- function(x, ...) {
       stop("the bounds of an integral must be times of the collocation grid; adjust dt", call. = FALSE)
     ks <- seq_len(ctx$N - 1L)
     ks <- ks[ks >= kl[1L] & ks < kh[1L]]
-    pts <- as.integer(ctx$spt[ks, , drop = FALSE])
-    wq <- rep(ctx$dtau * ctx$scheme$b, each = length(ks))
+    if (isTRUE(ctx$explicit)) {
+      # the trapezoidal rule on the supports (InfiniteOpt's default measure
+      # and the lowered_integral of CasADi)
+      pts <- c(ctx$node_pt[ks], ctx$node_pt[ks + 1L])
+      wq <- rep(ctx$dtau / 2, 2L * length(ks))
+    } else {
+      pts <- as.integer(ctx$spt[ks, , drop = FALSE])
+      wq <- rep(ctx$dtau * ctx$scheme$b, each = length(ks))
+    }
     agg <- rowsum(wq, pts)
     it$ints[[q]]$qpts <- as.integer(rownames(agg))
     it$ints[[q]]$qw <- agg[, 1L]
@@ -1057,7 +1092,24 @@ print.DynamicOptProblem <- function(x, ...) {
   cE <- numeric(); keyE <- numeric()
   dyn <- list()                      # (rows, r, stage coefficients) for the Hessian
   row <- 0L
-  for (r in which(!is.na(ctx$diff_state))) {
+  expl <- list()
+  if (isTRUE(ctx$explicit)) {
+    # U_k + dt sum_i alpha_i K_i - U_{k+1}, as MTK's add_solve_constraints!
+    for (kk in seq_len(N - 1L)) {
+      st <- .dopt_explicit_step(ctx, kk, X[nk[kk], ], W[nk[kk], ], P, Tv, level)
+      rows <- row + seq_len(n)
+      cE <- c(cE, st$val - X[nk1[kk], ])
+      keyE <- c(keyE, rep(nk1[kk], n))
+      if (level >= 1L) {
+        cols <- .dopt_point_cols(ctx, nk[kk])
+        add(rep(rows, length(cols)), rep(cols, each = n), as.numeric(st$D))
+        add(rows, (seq_len(n) - 1L) * Np + nk1[kk], rep(-1, n))
+      }
+      expl[[kk]] <- rows
+      row <- row + n
+    }
+  }
+  for (r in if (isTRUE(ctx$explicit)) integer() else which(!is.na(ctx$diff_state))) {
     j <- ctx$diff_state[r]
     sc <- ctx$scale[j]
     eqs <- c(lapply(which(ctx$stage_interior), function(i) list(target = spt[, i], coef = A[i, ])),
@@ -1103,7 +1155,7 @@ print.DynamicOptProblem <- function(x, ...) {
       if (level >= 1L) add(c(row, rep(row, length(tie$sp))), base + c(tie$pt, tie$sp), c(1, -tie$w))
     }
   }
-  for (j in ctx$u0_idx) {
+  for (j in if (isTRUE(ctx$u0_fixed)) integer() else ctx$u0_idx) {
     row <- row + 1L
     cE <- c(cE, X[ctx$node_pt[1L], j] - ctx$u0[j])
     keyE <- c(keyE, 1)
@@ -1189,6 +1241,13 @@ print.DynamicOptProblem <- function(x, ...) {
       g
     }, ptu = hu[i])
   }
+  for (kk in seq_along(expl)) {
+    lr <- lamE[expl[[kk]]]
+    if (all(lr == 0)) next
+    H[[length(H) + 1L]] <- .dopt_point_hess(ctx, nk[kk], X, W, P, Tv, function(x, u, Pp, Tt) {
+      as.numeric(crossprod(.dopt_explicit_step(ctx, kk, x, u, Pp, Tt, 1L)$D, lr))
+    })
+  }
   H <- c(H, .dopt_expr_hess(ctx$cost, cf, obj, ctx, X, W, P, Tv, tt))
   for (q in seq_along(ctx$eqc)) {
     ex <- exE[[q]]
@@ -1201,6 +1260,46 @@ print.DynamicOptProblem <- function(x, ...) {
   out$H <- list(i = unlist(lapply(H, `[[`, "i")), j = unlist(lapply(H, `[[`, "j")),
                 v = unlist(lapply(H, `[[`, "v")))
   out
+}
+
+# One step of an explicit tableau from node kk: the value U_k + dt sum_i
+# alpha_i K_i with K_i = T f(U_k + dt sum_{j<i} A_ij K_j, V_k, P,
+# t_k + c_i dt) and, for level >= 1, its Jacobian over the point variables
+# (state, input, tuned parameters and, for a free final time, T).
+.dopt_explicit_step <- function(ctx, kk, x, u, P, Tv, level = 1L) {
+  n <- ctx$n; m <- ctx$m; k <- ctx$k
+  A <- ctx$scheme$A; b <- ctx$scheme$b; cc <- ctx$scheme$c
+  h <- ctx$dtau
+  rj <- match(seq_len(n), ctx$diff_state)
+  nv <- n + m + k + as.integer(ctx$free)
+  tau0 <- ctx$tau[kk]
+  K <- vector("list", length(b)); dK <- vector("list", length(b))
+  val <- x
+  D <- if (level >= 1L) cbind(diag(n), matrix(0, n, nv - n)) else NULL
+  for (i in seq_along(b)) {
+    Y <- x
+    dY <- if (level >= 1L) cbind(diag(n), matrix(0, n, nv - n)) else NULL
+    for (j in seq_len(i - 1L)) if (A[i, j] != 0) {
+      Y <- Y + h * A[i, j] * K[[j]]
+      if (level >= 1L) dY <- dY + h * A[i, j] * dK[[j]]
+    }
+    ti <- tau0 + cc[i] * h
+    tp <- ctx$t0 + ti * Tv
+    Fv <- ctx$fF(Y, u, P, tp, Tv)[rj]
+    K[[i]] <- Tv * Fv
+    if (level >= 1L) {
+      J <- ctx$fJ(Y, u, P, tp, Tv)[rj, , drop = FALSE]
+      dF <- J[, seq_len(n), drop = FALSE] %*% dY
+      if (m + k) dF[, n + seq_len(m + k)] <- dF[, n + seq_len(m + k)] + J[, n + seq_len(m + k)]
+      dK[[i]] <- Tv * dF
+      if (ctx$free) dK[[i]][, nv] <- dK[[i]][, nv] + Fv + Tv * (J[, n + m + k + 1L] * ti + J[, n + m + k + 2L])
+    }
+    if (b[i] != 0) {
+      val <- val + h * b[i] * K[[i]]
+      if (level >= 1L) D <- D + h * b[i] * dK[[i]]
+    }
+  }
+  list(val = val, D = D)
 }
 
 # ---------------------------------------------------------------------------

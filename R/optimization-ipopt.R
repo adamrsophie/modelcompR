@@ -1,7 +1,7 @@
-# OptimizationIpopt and OptimizationMadNLP: IpoptOptimizer() and
-# MadNLPOptimizer() run the primal dual interior point method of
-# R/dynamic-opt-nlp.R (Waechter and Biegler's filter line search algorithm,
-# the algorithm of Ipopt and of MadNLP) on a general OptimizationProblem.
+# OptimizationIpopt and OptimizationMadNLP: IpoptOptimizer() runs the
+# primal dual interior point method of R/dynamic-opt-nlp.R (Ipopt's
+# algorithm) and MadNLPOptimizer() the port of MadNLP in
+# R/optimization-madnlp.R on a general OptimizationProblem.
 # Derivatives the problem does not supply are taken by finite differences.
 
 .ipm_alg <- function(name, fields) {
@@ -37,10 +37,29 @@
 #' library that Ipopt_jll lacks (the HSL solvers, MC19) ends the solve
 #' before the first iteration, as Ipopt's Invalid_Option does. Options that
 #' only change printing or the linear algebra library are accepted without
-#' effect on the iterates. The penalty line searches of Ipopt
-#' (`line_search_method = "penalty"` or `"cg-penalty"`) are not ported: they
-#' run the filter line search. `MadNLPOptimizer()` runs the same Ipopt
-#' algorithm, not MadNLP's own implementation.
+#' effect on the iterates. `line_search_method = "penalty"` runs Ipopt's
+#' penalty function line search (PenaltyLSAcceptor, whose watchdog ends the
+#' solve as Ipopt's Invalid_Option does) and `"cg-penalty"` the method of
+#' Chen and Goldfarb (Ipopt's contrib/CGPenalty: its search direction,
+#' perturbation handler and line search, without a restoration phase).
+#'
+#' `MadNLPOptimizer()` runs MadNLP 0.11's own interior point method:
+#' fixed variables become parameters, inequalities get slacks, the
+#' problem is scaled by its gradients, and the iterations follow MadNLP's
+#' filter line search with its soft and robust restoration phases.
+#' `barrier` is `"MonotoneUpdate"`, `"QualityFunctionUpdate"` or
+#' `"LOQOUpdate"`, or a list with `type` and that update's fields (for
+#' example `list(type = "MonotoneUpdate", mu_init = 0.5)`).
+#' `hessian_approximation` is `"ExactHessian"` or `"CompactLBFGS"`.
+#' `linear_solver` is `"MumpsSolver"` (the default), `"LapackCPUSolver"`,
+#' `"LDLSolver"` or `"UmfpackSolver"` (which selects the InertiaFree
+#' correction). All of them factorize the KKT system densely.
+#' `additional_options` sets MadNLP's options (for example
+#' `inertia_correction_method`, `fixed_variable_treatment`, `bound_push`,
+#' `kappa_d`) and the Richardson refinement options; MadNLP ignores the
+#' other names with a warning. The status is MadNLP's (for example
+#' `"SOLVE_SUCCEEDED"` or `"INFEASIBLE_PROBLEM_DETECTED"`), mapped to the
+#' return code as in OptimizationMadNLP.jl.
 #'
 #' @param ... Fields of the Julia structs `IpoptOptimizer` (for example
 #'   `acceptable_tol`, `mu_init`, `linear_solver`, `hessian_approximation`,
@@ -114,7 +133,7 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   "nlp_upper_bound_inf", "max_cpu_time", "derivative_test", "skip_finalize_solution_call", "inf_pr_output",
   "mu_oracle", "adaptive_mu_globalization", "limited_memory_max_history", "limited_memory_update_type",
   "mu_strategy", "hessian_approximation", "line_search_method", "warm_start_init_point", "linear_solver",
-  "fixed_variable_treatment", "alpha_for_y", "recalc_y")
+  "fixed_variable_treatment", "alpha_for_y")
 
 # Linear solvers of an Ipopt_jll build without HSL, Pardiso or WSMP: the
 # others make Ipopt stop with Invalid_Option.
@@ -123,20 +142,15 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
 # The options of the native method from the fields of IpoptOptimizer or
 # MadNLPOptimizer and their additional_options; NULL for an option that
 # Ipopt rejects (an invalid value or a library that is not available).
-.ipm_options <- function(alg, ipopt) {
+.ipm_options <- function(alg) {
   ao <- alg$additional_options %||% list()
   get <- function(k) if (!is.null(ao[[k]])) ao[[k]] else alg[[k]]
   yes <- function(v) identical(v, "yes") || isTRUE(v)
   defaults <- .nlp_ip_defaults()
-  o <- list(variant = if (ipopt) "ipopt" else "madnlp")
+  o <- list()
   for (k in c("acceptable_tol", "acceptable_iter", "dual_inf_tol", "constr_viol_tol", "compl_inf_tol",
               "mu_init", "nlp_scaling_max_gradient"))
     if (!is.null(get(k))) o[[k]] <- get(k)
-  if (!ipopt) {
-    o$nlp_scaling_method <- if (isTRUE(alg$nlp_scaling)) "gradient-based" else "none"
-    for (k in intersect(names(ao), names(defaults))) o[[k]] <- ao[[k]]
-    return(o)
-  }
   sm <- get("nlp_scaling_method")
   # equilibration-based scaling needs MC19 of HSL
   if (!sm %in% c("none", "user-scaling", "gradient-based")) return(NULL)
@@ -154,6 +168,7 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   if (!get("adaptive_mu_globalization") %in% c("obj-constr-filter", "kkt-error", "never-monotone-mode"))
     return(NULL)
   o$mu_strategy <- get("mu_strategy")
+  o$line_search_method <- get("line_search_method")
   o$mu_oracle <- get("mu_oracle")
   o$adaptive_mu_globalization <- get("adaptive_mu_globalization")
   o$hessian_approximation <- get("hessian_approximation")
@@ -180,11 +195,11 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   p <- a$p
   x0 <- as.numeric(a$u0)
   n <- length(x0)
-  ipopt <- inherits(alg, "IpoptOptimizer")
+  if (!inherits(alg, "IpoptOptimizer")) return(.madnlp_solve(a, alg, opts))
   ao <- alg$additional_options %||% list()
-  tol <- if (ipopt) ao$tol %||% opts$reltol %||% 1e-8 else opts$abstol %||% 1e-8
-  maxiter <- as.integer(if (ipopt) ao$max_iter %||% opts$maxiters %||% 3000L else opts$maxiters %||% 3000L)
-  io <- .ipm_options(alg, ipopt)
+  tol <- ao$tol %||% opts$reltol %||% 1e-8
+  maxiter <- as.integer(ao$max_iter %||% opts$maxiters %||% 3000L)
+  io <- .ipm_options(alg)
   if (is.null(io)) {
     # Ipopt stops before the first iteration (Invalid_Option)
     original <- list(status = "InvalidOption", iterations = 0L, nit = 0L,
@@ -252,17 +267,10 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   r <- .nlp_interior_point(evalf, x0, lo, hi, rep(0, n), rep(0, length(ie)), rep(0, length(rowsI)), tol = tol,
                            maxiter = maxiter, verbose = isTRUE(opts$verbose), opts = io,
                            rowI_bound = c(uc[iu], lc[il]))
-  # the ReturnCode of OptimizationIpopt.jl for Ipopt's status, and of
-  # OptimizationMadNLP.jl (map_madnlp_status) for MadNLP's
-  retcode <- if (ipopt) {
-    switch(r$status, Success = , Acceptable = , FeasiblePointFound = "Success",
-           Infeasible = , TinyStep = , Diverging = "Infeasible", MaxIters = "MaxIters",
-           MaxTime = "MaxTime", "Failure")
-  } else {
-    switch(r$status, Success = , Acceptable = "Success",
-           Infeasible = , TinyStep = , Diverging = , RestorationFailed = , TooFewDof = "Infeasible",
-           MaxIters = "MaxIters", MaxTime = "MaxTime", "Failure")
-  }
+  # the ReturnCode of OptimizationIpopt.jl for Ipopt's status
+  retcode <- switch(r$status, Success = , Acceptable = , FeasiblePointFound = "Success",
+                    Infeasible = , TinyStep = , Diverging = "Infeasible", MaxIters = "MaxIters",
+                    MaxTime = "MaxTime", "Failure")
   lambda <- numeric(m)
   lambda[ie] <- r$lamE
   if (length(rowsI)) for (k in seq_along(rowsI)) lambda[rowsI[k]] <- lambda[rowsI[k]] + sgnI[k] * r$lamI[k]

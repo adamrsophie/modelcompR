@@ -47,10 +47,29 @@ OptimizationIpopt.jl. The fields of \code{IpoptOptimizer} and Ipopt options in
 library that Ipopt_jll lacks (the HSL solvers, MC19) ends the solve
 before the first iteration, as Ipopt's Invalid_Option does. Options that
 only change printing or the linear algebra library are accepted without
-effect on the iterates. The penalty line searches of Ipopt
-(\code{line_search_method = "penalty"} or \code{"cg-penalty"}) are not ported: they
-run the filter line search. \code{MadNLPOptimizer()} runs the same Ipopt
-algorithm, not MadNLP's own implementation.
+effect on the iterates. \code{line_search_method = "penalty"} runs Ipopt's
+penalty function line search (PenaltyLSAcceptor, whose watchdog ends the
+solve as Ipopt's Invalid_Option does) and \code{"cg-penalty"} the method of
+Chen and Goldfarb (Ipopt's contrib/CGPenalty: its search direction,
+perturbation handler and line search, without a restoration phase).
+
+\code{MadNLPOptimizer()} runs MadNLP 0.11's own interior point method:
+fixed variables become parameters, inequalities get slacks, the
+problem is scaled by its gradients, and the iterations follow MadNLP's
+filter line search with its soft and robust restoration phases.
+\code{barrier} is \code{"MonotoneUpdate"}, \code{"QualityFunctionUpdate"} or
+\code{"LOQOUpdate"}, or a list with \code{type} and that update's fields (for
+example \code{list(type = "MonotoneUpdate", mu_init = 0.5)}).
+\code{hessian_approximation} is \code{"ExactHessian"} or \code{"CompactLBFGS"}.
+\code{linear_solver} is \code{"MumpsSolver"} (the default), \code{"LapackCPUSolver"},
+\code{"LDLSolver"} or \code{"UmfpackSolver"} (which selects the InertiaFree
+correction). All of them factorize the KKT system densely.
+\code{additional_options} sets MadNLP's options (for example
+\code{inertia_correction_method}, \code{fixed_variable_treatment}, \code{bound_push},
+\code{kappa_d}) and the Richardson refinement options; MadNLP ignores the
+other names with a warning. The status is MadNLP's (for example
+\code{"SOLVE_SUCCEEDED"} or \code{"INFEASIBLE_PROBLEM_DETECTED"}), mapped to the
+return code as in OptimizationMadNLP.jl.
 }
 \examples{
 prob <- OptimizationProblem(function(u, p) (u[1] - 2) * (u[1] - 2) + (u[2] - 1) * (u[2] - 1),

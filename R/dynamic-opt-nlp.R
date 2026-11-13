@@ -28,13 +28,17 @@
 # factorized by Gaussian elimination with partial pivoting inside the band,
 # and the global unknowns enter through a Schur complement.
 
-# Solve K x = B for a matrix K whose nonzeros lie within `bw` of the
-# diagonal; partial pivoting widens the upper band to 2 bw.
-.nlp_band_solve <- function(K, B, bw) {
+# Factorize a matrix K whose nonzeros lie within `bw` of the diagonal by
+# Gaussian elimination with partial pivoting inside the band (the upper band
+# widens to 2 bw): the row interchanges, the multipliers of each column and
+# the upper triangle. .nlp_band_apply solves with it; the factor and the
+# solve perform the operations of one elimination of [K, B] in the same
+# order, so the results do not depend on how often the factor is reused.
+.nlp_band_factor <- function(K, bw) {
   n <- nrow(K)
-  B <- as.matrix(B)
-  if (!n) return(B)
   bu <- 2L * bw
+  piv <- seq_len(n)
+  mr <- vector("list", n); ml <- vector("list", n)
   for (j in seq_len(n)) {
     rl <- min(n, j + bw)
     cu <- min(n, j + bu)
@@ -44,7 +48,7 @@
       if (p != j) {
         cols <- j:cu
         tmp <- K[j, cols]; K[j, cols] <- K[p, cols]; K[p, cols] <- tmp
-        tmp <- B[j, ]; B[j, ] <- B[p, ]; B[p, ] <- tmp
+        piv[j] <- p
       }
     }
     # a zero pivot means a singular matrix; the caller regularizes it
@@ -59,9 +63,25 @@
           cols <- (j + 1L):cu
           K[r, cols] <- K[r, cols, drop = FALSE] - outer(l, K[j, cols])
         }
-        B[r, ] <- B[r, , drop = FALSE] - outer(l, B[j, ])
+        mr[[j]] <- r; ml[[j]] <- l
       }
     }
+  }
+  list(K = K, bw = bw, piv = piv, mr = mr, ml = ml)
+}
+
+.nlp_band_apply <- function(f, B) {
+  B <- as.matrix(B)
+  n <- nrow(B)
+  if (!n) return(B)
+  K <- f$K; bu <- 2L * f$bw
+  for (j in seq_len(n)) {
+    p <- f$piv[j]
+    if (p != j) {
+      tmp <- B[j, ]; B[j, ] <- B[p, ]; B[p, ] <- tmp
+    }
+    r <- f$mr[[j]]
+    if (length(r)) B[r, ] <- B[r, , drop = FALSE] - outer(f$ml[[j]], B[j, ])
   }
   for (i in n:1) {
     cu <- min(n, i + bu)
@@ -74,10 +94,18 @@
   B
 }
 
-# Solve the KKT system given as triplets (i, j, v) of a square matrix of
-# dimension `dim` (duplicates are summed) and right-hand side r. `key` is
-# the time position of each index; indices with key Inf form the border.
-.nlp_kkt_solve <- function(ti, tj, tv, dim, r, key) {
+# Solve K x = B for a matrix K whose nonzeros lie within `bw` of the
+# diagonal.
+.nlp_band_solve <- function(K, B, bw) {
+  if (!nrow(K)) return(as.matrix(B))
+  .nlp_band_apply(.nlp_band_factor(K, bw), B)
+}
+
+# Factorize the KKT matrix given as triplets (i, j, v) of a square matrix
+# of dimension `dim` (duplicates are summed); `key` is the time position of
+# each index and indices with key Inf form the border, which enters through
+# a Schur complement. .nlp_kkt_apply solves with the factor.
+.nlp_kkt_factor <- function(ti, tj, tv, dim, key) {
   ord <- order(key, seq_len(dim))
   pos <- integer(dim)
   pos[ord] <- seq_len(dim)
@@ -91,21 +119,35 @@
   lin <- (pj - 1) * dim + pi
   s <- rowsum(tv, lin)
   K[as.numeric(rownames(s))] <- s[, 1L]
+  if (!nb) return(list(pos = pos, nb = 0L, f = .nlp_band_factor(K, bw)))
+  ci <- seq_len(nc); bi <- nc + seq_len(nb)
+  f <- if (nc) .nlp_band_factor(K[ci, ci, drop = FALSE], bw) else NULL
+  Yb <- if (nc) .nlp_band_apply(f, K[ci, bi, drop = FALSE]) else matrix(0, 0L, nb)
+  Kbc <- K[bi, ci, drop = FALSE]
+  S <- K[bi, bi, drop = FALSE] - Kbc %*% Yb
+  list(pos = pos, nb = nb, nc = nc, f = f, Yb = Yb, Kbc = Kbc, S = S)
+}
+
+.nlp_kkt_apply <- function(fac, r) {
+  dim <- length(r)
   rr <- numeric(dim)
-  rr[pos] <- r
-  if (!nb) {
-    x <- .nlp_band_solve(K, rr, bw)[, 1L]
+  rr[fac$pos] <- r
+  if (!fac$nb) {
+    x <- .nlp_band_apply(fac$f, rr)[, 1L]
   } else {
-    ci <- seq_len(nc); bi <- nc + seq_len(nb)
-    Y <- .nlp_band_solve(K[ci, ci, drop = FALSE], cbind(rr[ci], K[ci, bi, drop = FALSE]), bw)
-    x1 <- Y[, 1L]
-    Yb <- Y[, -1L, drop = FALSE]
-    S <- K[bi, bi, drop = FALSE] - K[bi, ci, drop = FALSE] %*% Yb
-    x2 <- tryCatch(solve(S, rr[bi] - K[bi, ci, drop = FALSE] %*% x1), error = function(e) NULL)
+    ci <- seq_len(fac$nc); bi <- fac$nc + seq_len(fac$nb)
+    x1 <- if (fac$nc) .nlp_band_apply(fac$f, rr[ci])[, 1L] else numeric()
+    rb <- rr[bi] - fac$Kbc %*% x1
+    x2 <- tryCatch(solve(fac$S, rb), error = function(e) NULL)
     if (is.null(x2)) stop("singular KKT matrix", call. = FALSE)
-    x <- c(x1 - as.numeric(Yb %*% x2), as.numeric(x2))
+    x <- c(x1 - as.numeric(fac$Yb %*% x2), as.numeric(x2))
   }
-  x[pos]
+  x[fac$pos]
+}
+
+# Solve the KKT system K x = r (see .nlp_kkt_factor).
+.nlp_kkt_solve <- function(ti, tj, tv, dim, r, key) {
+  .nlp_kkt_apply(.nlp_kkt_factor(ti, tj, tv, dim, key), r)
 }
 
 # The inertia of the symmetric matrix given as triplets (duplicates are
@@ -181,8 +223,7 @@
 }
 
 # Ipopt's options of the algorithm with their default values (the names and
-# defaults of Ipopt 3.14's options; `variant` selects the restoration phase
-# of Ipopt or of MadNLP).
+# defaults of Ipopt 3.14's options).
 .nlp_ip_defaults <- function() {
   list(acceptable_tol = 1e-6, acceptable_iter = 15L, dual_inf_tol = 1, constr_viol_tol = 1e-4,
        compl_inf_tol = 1e-4, acceptable_dual_inf_tol = 1e10, acceptable_constr_viol_tol = 1e-2,
@@ -193,7 +234,15 @@
        honor_original_bounds = FALSE, bound_mult_init_val = 1, constr_mult_init_max = 1e3,
        nlp_scaling_method = "gradient-based", nlp_scaling_max_gradient = 100, nlp_scaling_min_value = 1e-8,
        obj_scaling_factor = 1, kappa_d = 1e-5, kappa_sigma = 1e10, s_max = 100, theta_max_fact = 1e4,
-       theta_min_fact = 1e-4, eta_phi = 1e-8, delta = 1, s_phi = 2.3, s_theta = 1.1, gamma_phi = 1e-8,
+       theta_min_fact = 1e-4, line_search_method = "filter", nu_init = 1e-6, nu_inc = 1e-4, rho = 0.1,
+       never_use_piecewise_penalty_ls = FALSE, eta_penalty = 1e-8, penalty_update_infeasibility_tol = 1e-9,
+       eta_min = 1e1, pen_theta_max_fact = 1e4, penalty_update_compl_tol = 1e1, chi_hat = 2, chi_tilde = 5,
+       chi_cup = 1.5, gamma_hat = 0.04, gamma_tilde = 4, epsilon_c = 1e-2, piecewisepenalty_gamma_obj = 1e-13,
+       piecewisepenalty_gamma_infeasi = 1e-13, min_alpha_primal = 1e-13, theta_min = 1e-6,
+       mult_diverg_feasibility_tol = 1e-7, mult_diverg_y_tol = 1e8, penalty_init_max = 1e5, penalty_init_min = 1,
+       penalty_max = 1e30, pen_des_fact = 0.2, kappa_x_dis = 1e2, kappa_y_dis = 1e4, vartheta = 0.5,
+       delta_y_max = 1e12, fast_des_fact = 0.1, pen_init_fac = 50, never_use_fact_cgpen_direction = FALSE,
+       eta_phi = 1e-8, delta = 1, s_phi = 2.3, s_theta = 1.1, gamma_phi = 1e-8,
        gamma_theta = 1e-5, alpha_min_frac = 0.05, max_soc = 4L, kappa_soc = 0.99, obj_max_inc = 5,
        max_filter_resets = 5L, filter_reset_trigger = 5L, alpha_red_factor = 0.5,
        watchdog_shortened_iter_trigger = 10L, watchdog_trial_iter_max = 3L, accept_every_trial_step = FALSE,
@@ -216,7 +265,7 @@
        sigma_max = 100, sigma_min = 1e-6, quality_function_norm_type = "2-norm-squared",
        quality_function_centrality = "none", quality_function_balancing_term = "none",
        quality_function_max_section_steps = 8L, quality_function_section_sigma_tol = 1e-2,
-       quality_function_section_qf_tol = 0, variant = "ipopt")
+       quality_function_section_qf_tol = 0, recalc_y = NA, recalc_y_feas_tol = 1e-6)
 }
 
 # The primal dual interior point method with a filter line search of Ipopt
@@ -244,7 +293,6 @@
   o$max_iter <- as.integer(maxiter)
   start_time <- proc.time()[["elapsed"]]
   inner <- !is.null(resto)
-  madnlp <- identical(o$variant, "madnlp")
   nz <- length(z0)
   lo <- rep_len(as.numeric(lo), nz); hi <- rep_len(as.numeric(hi), nz)
   eps <- .Machine$double.eps
@@ -352,27 +400,34 @@
   }
   # iterative refinement as in Ipopt's PDFullSpaceSolver: at least one and at
   # most ten corrections, until the residual ratio is below 1e-10
+  # the factor of the last matrix is kept for further right-hand sides
+  kf <- NULL
   ksolve <- function(K, r) {
-    x <- .nlp_kkt_solve(K$i, K$j, K$v, dim, r, key)
+    if (is.null(kf) || !identical(kf$K, K)) {
+      kf <<- NULL
+      kf <<- list(K = K, fac = .nlp_kkt_factor(K$i, K$j, K$v, dim, key))
+    }
+    fac <- kf$fac
+    x <- .nlp_kkt_apply(fac, r)
     nr <- max(abs(r), 0)
     for (k in seq_len(10L)) {
       res <- r - .nlp_accum(K$i, K$v * x[K$j], dim)
       ratio <- max(abs(res), 0) / (min(max(abs(x), 0), 1e6 * nr) + nr)
       if (k > 1L && ratio <= 1e-10) break
       if (!is.finite(ratio)) break
-      x <- x + .nlp_kkt_solve(K$i, K$j, K$v, dim, res, key)
+      x <- x + .nlp_kkt_apply(fac, res)
     }
     x
   }
   # least squares multipliers of the constraints (constr_mult_init_max)
-  ls_mult <- function(e, yy, zl, zu, cap) {
-    if (!m || cap <= 0) return(numeric(m))
+  ls_mult <- function(e, yy, zl, zu, cap, fail = numeric(m)) {
+    if (!m || cap <= 0) return(fail)
     J <- ji_of(e)
     gl <- c(e$gf, numeric(nI))
     K <- kkt_triplets(list(i = integer(), j = integer(), v = numeric()), rep(1, ny), 0, J, 0)
     r <- c(ifelse(free, -(gl - zl + zu), 0), numeric(m))
     d <- tryCatch(ksolve(K, r), error = function(err) NULL)
-    if (is.null(d) || !all(is.finite(d))) return(numeric(m))
+    if (is.null(d) || !all(is.finite(d))) return(fail)
     lam <- d[ny + seq_len(m)]
     if (max(abs(lam)) > cap) numeric(m) else lam
   }
@@ -391,14 +446,14 @@
     y <- c(z, s)
     zinit <- if (warm) 1e-3 else o$bound_mult_init_val
     zl <- ifelse(hl, zinit, 0); zu <- ifelse(hu, zinit, 0)
-    lam <- if (madnlp || warm) numeric(m) else ls_mult(ev, y, zl, zu, o$constr_mult_init_max)
+    lam <- if (warm) numeric(m) else ls_mult(ev, y, zl, zu, o$constr_mult_init_max)
     mu <- o$mu_init
   } else {
     y <- resto$y0
     zl <- resto$zl0; zu <- resto$zu0
     mu <- resto$mu0
     ev <- sev(y[ix], 1L)
-    lam <- if (madnlp) numeric(m) else ls_mult(ev, y, zl, zu, o$constr_mult_init_max)
+    lam <- ls_mult(ev, y, zl, zu, o$constr_mult_init_max)
   }
   tau <- max(o$tau_min, 1 - mu)
   # the restoration objective depends on the barrier parameter
@@ -435,7 +490,7 @@
       cmp_le(barr - ref$barr, -o$gamma_phi * ref$theta, ref$barr)
   }
   # CheckAcceptabilityOfTrialPoint of the filter acceptor
-  check_trial <- function(tr, a) {
+  filter_check <- function(tr, a) {
     if (theta_max < 0) theta_max <<- o$theta_max_fact * max(1, ref$theta)
     if (theta_min < 0) theta_min <<- o$theta_min_fact * max(1, ref$theta)
     if (!is.finite(tr$theta) || !is.finite(tr$barr)) return(FALSE)
@@ -463,6 +518,397 @@
     }
     last_rej_filter <<- FALSE
     TRUE
+  }
+  # the acceptor of the line search (line_search_method): the filter
+  # (FilterLSAcceptor), the penalty function (PenaltyLSAcceptor) or Chen and
+  # Goldfarb's penalty function (CGPenaltyLSAcceptor of contrib/CGPenalty)
+  ls_method <- o$line_search_method
+  pen <- identical(ls_method, "penalty")
+  cg <- identical(ls_method, "cg-penalty")
+  check_trial <- function(tr, a) {
+    if (pen) pen_check(tr, a) else if (cg) cg_check(tr, a) else filter_check(tr, a)
+  }
+  # PenaltyLSAcceptor: the exact penalty function barr + nu theta with the
+  # Armijo condition on the predicted reduction of its model
+  nu <- o$nu_init; last_nu <- nu
+  pref <- NULL
+  resto_pred <- -1
+  pen_init <- function(dy, dw) {
+    g <- gaps(y)
+    sig <- ifelse(hl, zl / g$l, 0) + ifelse(hu, zu / g$u, 0)
+    J <- ji_of(ev)
+    hdy <- .nlp_accum(ev$H$i, ev$H$v * dy[ev$H$j], ny)
+    dwd <- sum(dy[ix] * hdy[ix]) + sum((sig * dy^2)[free])
+    if (dw != 0) dwd <- dwd + dw * sum(dy[free]^2)
+    if (dwd <= 0) dwd <- 0
+    pref <<- list(theta = ref$theta, barr = ref$barr, gbd = ref$gbd, dwd = dwd,
+                  jd = if (m) .nlp_accum(J$i, J$v * dy[J$j], m) else numeric(), c = q$c)
+    resto_pred <<- -1
+    last_nu <<- nu
+    if (pref$theta > 0) {
+      nu_plus <- (pref$gbd + dwd / 2) / ((1 - o$rho) * pref$theta)
+      if (nu < nu_plus) nu <<- nu_plus + o$nu_inc
+    }
+  }
+  pen_pred <- function(a) {
+    th2 <- sum(abs(pref$c + a * pref$jd))
+    max(0, -a * pref$gbd - a * a / 2 * pref$dwd + nu * (pref$theta - th2))
+  }
+  pen_check <- function(tr, a) {
+    if (!is.finite(tr$theta) || !is.finite(tr$barr)) return(FALSE)
+    pred <- pen_pred(a)
+    resto_pred <<- pred
+    merit <- pref$barr + nu * pref$theta
+    cmp_le(o$eta_phi * pred, merit - (tr$barr + nu * tr$theta), merit)
+  }
+  # IsAcceptableToCurrentIterate of the penalty acceptor, for the
+  # restoration phase (RestoPenaltyConvergenceCheck)
+  pen_resto_ok <- function(barr, theta) {
+    merit <- pref$barr + nu * pref$theta
+    cmp_le(o$eta_phi * resto_pred, merit - (barr + nu * theta), merit)
+  }
+  # Chen and Goldfarb's penalty method (contrib/CGPenalty of Ipopt 3.14):
+  # the state of CGPenaltyData, CGPenaltyCq and CGPenaltyLSAcceptor
+  cg_pen <- 0; cg_kkt <- o$penalty_init_min; cg_inited <- FALSE
+  cg_pert <- 0; cg_never_pure <- FALSE; cg_restor_iter <- -1L; cg_restor_counter <- 0
+  cg_primal_step <- 1; cg_nonmono <- 0L
+  cg_fast <- NULL; cg_dpen <- NULL; cg_delta <- NULL; cg_have_fast <- FALSE
+  cg_theta_max <- -1; cg_mu <- mu; cg_n1 <- 0L; cg_n2 <- 0L; cg_eta <- -1
+  cg_ls <- 0L; cg_best_kkt <- -1; cg_best <- NULL; cg_armijo <- TRUE; cg_jump <- 0L
+  cg_reset_pw <- FALSE; cg_pw <- matrix(numeric(), 0L, 3L)
+  cg_ref <- NULL; cg_wd <- NULL; cg_ref_inf <- NA_real_
+  cg_inf2 <- function(cc) sqrt(sum(cc^2))
+  cg_pert_fact <- function() cg_inf2(q$c) / cg_kkt
+  cg_scaled_y <- function() max(abs(lam), 0) / max(1, max(abs(ev$gf), 0))
+  # curr_direct_deriv_penalty_function (fast = FALSE, the penalty direction)
+  # and curr_fast_direct_deriv_penalty_function (fast = TRUE)
+  cg_dd <- function(d, fast) {
+    dy <- d[seq_len(ny)]; dl <- d[ny + seq_len(m)]
+    inf <- cg_inf2(q$c)
+    r <- sum(gphi * dy) - cg_pen * inf
+    if (inf != 0) {
+      r1 <- if (fast) sum(q$c * dl) else sum(q$c * lam) + sum(q$c * dl)
+      r <- r + cg_pen * cg_pert / inf * r1
+    }
+    r
+  }
+  # dT_times_barH_times_d of the fast direction
+  cg_dthd <- function(d) {
+    dy <- d[seq_len(ny)]; dl <- d[ny + seq_len(m)]
+    r <- -sum(lam * dl) * cg_pert_fact()
+    r - sum(gphi * dy) + sum(q$c * lam) - sum(q$c * dl) + cg_pen * cg_inf2(q$c)
+  }
+  # compute_curr_cg_penalty; as upstream, the inequality part of the
+  # Hessian term multiplies the step with jac_c^T dy_c in place of
+  # jac_d^T dy_d
+  cg_penalty_of <- function(d) {
+    dy <- d[seq_len(ny)]; dl <- d[ny + seq_len(m)]
+    dx <- dy[ix]; ds <- dy[isl]
+    gbd <- sum(gphi[ix] * dx) + sum(gphi[isl] * ds)
+    iE <- seq_len(nE); iI <- nE + seq_len(nI)
+    jcT <- function(v) .nlp_accum(ev$JE$j, v[ev$JE$i] * ev$JE$v, nz)
+    jdT <- function(v) .nlp_accum(ev$JI$j, v[ev$JI$i] * ev$JI$v, nz)
+    t1 <- sum((jcT(lam[iE]) + jcT(dl[iE])) * dx)
+    t2 <- sum((jdT(lam[iI]) + jcT(dl[iE])) * dx)
+    dhd <- -gbd - (t1 + t2 + sum((lam[iI] + dl[iI]) * ds))
+    dhd <- max(1e-8 * sum(dy^2), dhd)
+    inf <- cg_inf2(q$c)
+    if (inf <= 0) return(0)
+    fac <- cg_pert / inf
+    dinf <- if (cg_have_fast) fac * sum(q$c * cg_fast[ny + seq_len(m)]) - inf else
+      fac * (sum(q$c * cg_dpen[ny + seq_len(m)]) + sum(q$c * lam)) - inf
+    -(gbd + o$pen_des_fact * dhd) / (dinf + o$pen_des_fact * inf)
+  }
+  # compute_curr_cg_penalty_scale; curr_jac_cd_norm(1) skips the first
+  # entry of each Jacobian, as upstream
+  cg_scale <- function() {
+    inf <- cg_inf2(q$c)
+    if (!cg_never_pure) return(min(1e13, inf * 1e9))
+    vc <- abs(ev$JE$v); vd <- abs(ev$JI$v)
+    cnt <- 1 + max(length(vc) - 1, 0) + max(length(vd) - 1, 0)
+    jn <- (sum(vc[-1L]) + sum(vd[-1L])) / cnt
+    refv <- (jn + sum(abs(q$c)) / m) / 2
+    if (cg_restor_iter == it || it == 0L) cg_ref_inf <<- min(1, inf)
+    min(1e4, inf) / (refv * 4e-2 * 10^cg_restor_counter * cg_ref_inf)
+  }
+  # CGSearchDirCalculator before the solve: the penalty parameters
+  cg_begin <- function() {
+    if (!cg_inited) {
+      if (!cg_never_pure) {
+        cg_pen <<- max(o$penalty_init_min, min(max(abs(lam), 0), o$penalty_init_max))
+        cg_kkt <<- o$penalty_init_min
+      } else {
+        p <- min(1e5, max(1e1, 1e2 * cg_inf2(q$c)))
+        cg_pen <<- p; cg_kkt <<- p
+      }
+      cg_inited <<- TRUE
+    } else if (cg_restor_iter == it) {
+      p <- min(1e6, max(1e1, o$pen_init_fac * 0.1^cg_restor_counter))
+      cg_pen <<- p; cg_kkt <<- p
+    }
+    cg_pert <<- 0
+    cg_primal_step <<- 1
+  }
+  # CGSearchDirCalculator after the solve: the fast direction d or the
+  # penalty direction (constraint rows c - delta_c y), and the update of the
+  # penalty parameter; NULL when the second solve fails
+  cg_choose <- function(d, K, rhs) {
+    cg_fast <<- d
+    keep <- TRUE
+    if (cg_pert == 0) {
+      cg_dpen <<- d
+    } else {
+      r2 <- rhs
+      r2[ny + seq_len(m)] <- -(q$c - cg_pert * lam)
+      dp <- tryCatch(ksolve(K, r2), error = function(err) NULL)
+      if (is.null(dp) || !all(is.finite(dp))) return(NULL)
+      cg_dpen <<- dp
+      fy <- d[seq_len(ny)]; py <- dp[seq_len(ny)]
+      tn <- sqrt(sum(fy^2))
+      dn <- sqrt(sum(fy^2) - 2 * sum(py * fy) + sum(py^2))
+      tn <- max(tn, tn^o$vartheta)
+      if (dn > o$kappa_x_dis * tn) keep <- FALSE
+      if (keep) {
+        fl <- d[ny + seq_len(m)]; pl <- dp[ny + seq_len(m)]
+        bar <- sqrt(sum(lam^2) + 2 * sum(lam * pl) + sum(pl^2))
+        if (sqrt(sum(fl^2)) > max(o$delta_y_max, o$kappa_y_dis * bar)) keep <- FALSE
+      }
+      if (keep && cg_dd(d, TRUE) > o$fast_des_fact * cg_dthd(d)) keep <- FALSE
+    }
+    cg_have_fast <<- keep
+    cg_delta <<- if (keep) d else cg_dpen
+    if (!cg_never_pure) {
+      p <- cg_penalty_of(cg_delta)
+      if (p > cg_pen) {
+        p <- max(p, cg_pen + 1)
+      } else if (cg_pen <= cg_kkt || cg_pert == 0) {
+        p <- cg_pen
+      } else {
+        p <- cg_kkt
+        cg_nonmono <<- cg_nonmono + 1L
+      }
+      cg_pen <<- p
+      if (p > cg_kkt && cg_nonmono > 50L) cg_kkt <<- p
+    }
+    cg_delta
+  }
+  # PiecewisePenalty: rows (pen_r, barrier_obj, infeasi)
+  pw_add <- function(L, pr, b, inf) rbind(L, c(if (nrow(L)) pr else 0, b, inf))
+  pw_acceptable <- function(fc, fl) {
+    L <- cg_pw
+    n <- nrow(L)
+    val <- function(k) L[k, 2L] + L[k, 1L] * L[k, 3L] - fc - L[k, 1L] * fl
+    if (n >= 100L) {
+      # upstream dereferences end() here; this takes the last entry
+      if (val(1L) >= 0 && val(2L) <= 0) return(FALSE)
+      vl <- val(n)
+      if (vl <= 0 && fl <= L[n, 3L]) return(FALSE)
+      if (vl >= 0 && fl >= L[n, 3L] && val(n - 1L) <= 0) return(FALSE)
+      for (k in 2L:(n - 1L)) {
+        if (val(k - 1L) <= 0 && val(k) >= 0 && val(k + 1L) <= 0) return(FALSE)
+      }
+    }
+    for (k in seq_len(n)) {
+      if (fc + L[k, 1L] * (fl - L[k, 3L]) - L[k, 2L] < 0) return(TRUE)
+    }
+    fl < L[n, 3L]
+  }
+  pw_update <- function(b, inf) {
+    tl <- cg_pw
+    n <- nrow(tl)
+    L <- matrix(numeric(), 0L, 3L)
+    tp <- 0
+    g1 <- b + tl[1L, 1L] * (inf - tl[1L, 3L]) - tl[1L, 2L]
+    for (k in seq_len(n)) {
+      g2 <- if (n > 1L && k <= n - 1L) b + tl[k + 1L, 1L] * (inf - tl[k + 1L, 3L]) - tl[k + 1L, 2L] else
+        inf - tl[k, 3L]
+      if (g1 < 0 && g2 >= 0) {
+        if (!nrow(L)) L <- pw_add(L, tp, b, inf)
+        if (g2 > 0) {
+          tp <- (tl[k, 2L] - b) / (inf - tl[k, 3L])
+          L <- pw_add(L, tp, tl[k, 2L], tl[k, 3L])
+        }
+      }
+      if (g1 >= 0 && g2 < 0) {
+        if (g1 > 0) L <- pw_add(L, tl[k, 1L], tl[k, 2L], tl[k, 3L])
+        tp <- (tl[k, 2L] - b) / (inf - tl[k, 3L])
+        L <- pw_add(L, tp, b, inf)
+      }
+      if (g1 >= 0 && g2 >= 0) L <- pw_add(L, tl[k, 1L], tl[k, 2L], tl[k, 3L])
+      if (k == n && g1 < 0 && g2 < 0 && !nrow(L)) L <- pw_add(L, 0, b, inf)
+      g1 <- g2
+    }
+    L
+  }
+  cg_reset <- function() {
+    cg_reset_pw <<- TRUE
+    cg_theta_max <<- -1
+    cg_eta <<- -1
+    cg_mu <<- mu
+  }
+  # InitThisLineSearch
+  cg_init_ls <- function() {
+    cg_armijo <<- TRUE
+    cg_ls <<- 0L
+    if (cg_restor_iter == it) cg_reset()
+    if (cg_mu > mu) cg_reset()
+    if (cg_reset_pw) {
+      cg_pw <<- pw_add(cg_pw, 0, phi0, th0)
+      cg_reset_pw <<- FALSE
+    }
+    if (!in_wd) {
+      cg_ref <<- list(pf = phi0 + cg_pen * cg_inf2(q$c), theta = th0,
+                      dd = if (cg_have_fast) cg_dd(cg_fast, TRUE) else cg_dd(cg_dpen, FALSE))
+    } else {
+      cg_ref$pf <<- cg_wd$pf
+      cg_ref$dd <<- cg_wd$dd
+    }
+  }
+  # CheckAcceptabilityOfTrialPoint: Armijo on the penalty function
+  # barr + penalty ||c||_2, else the piecewise penalty
+  cg_check <- function(tr, a) {
+    cg_ls <<- cg_ls + 1L
+    if (cg_ls == 1L) cg_primal_step <<- a
+    if (cg_jump == 1L) {
+      cg_jump <<- 0L
+      cg_reset()
+      return(TRUE)
+    }
+    if (!is.finite(tr$theta) || !is.finite(tr$barr)) return(FALSE)
+    if (!nrow(cg_pw)) cg_pw <<- pw_add(cg_pw, 0, phi0, th0)
+    if (cg_theta_max < 0) cg_theta_max <<- o$pen_theta_max_fact * max(1, cg_ref$theta)
+    if (cg_theta_max > 0 && tr$theta > cg_theta_max) return(FALSE)
+    acc <- cmp_le(tr$barr + cg_pen * cg_inf2(tr$c) - cg_ref$pf, o$eta_penalty * a * cg_ref$dd, cg_ref$pf)
+    if (!acc && !isTRUE(o$never_use_piecewise_penalty_ls)) {
+      acc <- cg_pw_ok(tr, a)
+      if (acc) cg_armijo <<- FALSE
+    }
+    if (a < o$min_alpha_primal && !acc) acc <- TRUE
+    if (acc) {
+      if (cg_ls > 15L && a < 1e-5 && cg_jump == 0L) cg_jump <<- 1L
+      cg_ls <<- 0L
+    }
+    acc
+  }
+  # IsAcceptableToPiecewisePenalty
+  cg_pw_ok <- function(tr, a) {
+    nrm <- sum(cg_delta[seq_len(ny)]^2)
+    if (q$inf_pr < o$theta_min) {
+      big <- if (nrow(cg_pw)) cg_pw[nrow(cg_pw), 2L] else -1e20
+      if (!cmp_le(tr$barr - big, -a * o$piecewisepenalty_gamma_obj * nrm, phi0)) return(FALSE)
+    }
+    pw_acceptable(tr$barr + a * o$piecewisepenalty_gamma_obj * nrm,
+                  tr$theta + a * o$piecewisepenalty_gamma_infeasi * th0)
+  }
+  # UpdateForNextIteration: the best iterate, the piecewise penalty and the
+  # penalty parameter (UpdatePenaltyParameter); NA when the penalty
+  # parameter exceeds penalty_max
+  cg_next <- function(tr) {
+    ch <- "n"
+    if (cg_mu > mu) {
+      cg_mu <<- mu
+      cg_best_kkt <<- -1
+    }
+    kkt <- max(uq$dual, uq$viol, uq$compl)
+    if (kkt < cg_best_kkt || cg_best_kkt < 0) {
+      cg_best_kkt <<- kkt
+      cg_best <<- list(y = y, lam = lam, zl = zl, zu = zu)
+    }
+    if (!cg_armijo) cg_pw <<- pw_update(tr$barr, tr$theta)
+    if (cg_pert != 0) ch <- cg_update_penalty(tr)
+    ch
+  }
+  cg_update_penalty <- function(tr) {
+    ch <- "n"
+    iE <- seq_len(nE); iI <- nE + seq_len(nI)
+    if (cg_eta < 0) cg_eta <<- max(o$eta_min, min(o$gamma_tilde, o$gamma_hat * overall))
+    inc <- cg_inf2(tr$c) >= o$penalty_update_infeasibility_tol
+    if (!inc) ch <- "i"
+    if (inc) {
+      inc <- max(abs(cg_dpen[seq_len(ny)]), 0) <= cg_eta
+      if (!inc) ch <- "d"
+    }
+    if (inc) {
+      cv <- compl_vec(y, zl, zu)
+      inc <- min(mu, cv) >= mu * o$penalty_update_compl_tol && max(mu, cv) <= mu / o$penalty_update_compl_tol
+      if (!inc) ch <- "c"
+    }
+    pl <- cg_dpen[ny + seq_len(m)]
+    if (inc) {
+      pf <- cg_pert_fact()
+      inc <- max(abs(lam[iE] + pl[iE] - q$c[iE] / pf), 0) < cg_eta
+      if (inc) {
+        dl <- cg_delta[ny + seq_len(m)]
+        inc <- max(abs(lam[iI] + dl[iI] - q$c[iI] / pf), 0) < cg_eta
+      }
+      if (!inc) ch <- "m"
+    }
+    if (inc) {
+      cg_n1 <<- cg_n1 + 1L
+      cg_eta <<- max(o$eta_min, cg_eta / 2)
+      p <- cg_kkt
+      yfs <- max(max(abs(lam[iE] + pl[iE]), 0), max(abs(lam[iI] + pl[iI]), 0))
+      if (cg_inf2(q$c) >= o$epsilon_c) {
+        p <- max(o$chi_hat * p, yfs + 1)
+        ch <- "l"
+      } else {
+        p <- max(o$chi_tilde * p, o$chi_cup * yfs)
+        ch <- "s"
+      }
+      if (p > o$penalty_max) return(NA_character_)
+      cg_kkt <<- p
+      if (cg_never_pure) cg_pen <<- p
+    }
+    if (m > 0 && !isTRUE(o$never_use_piecewise_penalty_ls)) {
+      sy <- cg_scaled_y()
+      if (sy <= 1e4 || cg_n2 < 5L) {
+        dl <- cg_delta[ny + seq_len(m)]
+        r <- sum(dl * q$c)
+        if (!cg_have_fast) r <- r + sum(lam * q$c)
+        ci <- cg_inf2(q$c)
+        if (r > 0.5 * cg_kkt * ci || r < -0.5 * cg_kkt * ci) {
+          r <- 5 * sqrt(sum((lam + dl)^2))
+          cg_kkt <<- r
+          if (cg_never_pure) cg_pen <<- r
+          if (sy > 1e4) cg_n2 <<- cg_n2 + 1L
+        }
+      }
+    }
+    ch
+  }
+  # RestoredIterate: back to the best iterate when the multipliers diverge
+  cg_restored <- function(tr) {
+    if (cg_restor_counter >= 3 || is.null(tr$c)) return(FALSE)
+    tol_f <- o$mult_diverg_feasibility_tol
+    if (!(cg_inf2(q$c) > tol_f && cg_inf2(tr$c) > tol_f && q$inf_du > 1e4)) return(FALSE)
+    sy <- cg_scaled_y()
+    div <- (sy > o$mult_diverg_y_tol && (nbnd + nI == 0 || cg_primal_step < 1e-2)) ||
+      (cg_primal_step < 1e-4 && sy > 1e4)
+    if (!div || is.null(cg_best)) return(FALSE)
+    cg_restor_iter <<- it + 1L
+    cg_restor_counter <<- cg_restor_counter + 1
+    cg_never_pure <<- TRUE
+    TRUE
+  }
+  # DoFallback: back to the best iterate when the step computation fails
+  cg_fallback <- function() {
+    if (is.null(cg_best)) return(FALSE)
+    cg_restor_iter <<- it + 1L
+    cg_never_pure <<- TRUE
+    TRUE
+  }
+  # Reset of the acceptor (at a new barrier parameter and when every trial
+  # step is accepted); PrepareRestoPhaseStart, which only the filter uses
+  ls_reset <- function() {
+    filter_reset()
+    nu <<- o$nu_init
+    if (cg) cg_reset()
+  }
+  resto_prepare <- function() if (!pen && !cg) add_filter(ref$theta, ref$barr)
+  # the test of a restoration phase iterate against the original problem
+  orig_progress_ok <- function(barr, theta) {
+    if (pen) return(pen_resto_ok(barr, theta))
+    filter_ok(theta, barr) && ok_to_iterate(barr, theta, TRUE)
   }
   trial_at <- function(yt, level = 0L) {
     et <- tryCatch(sev(yt[ix], level), error = function(err) NULL)
@@ -563,6 +1009,7 @@
   # Lagrangian in the unknowns `lm_idx` (LimMemQuasiNewtonUpdater with the
   # scalar1 initialization), as a dense matrix
   lm <- identical(o$hessian_approximation, "limited-memory")
+  recalc_y <- m > 0 && (if (is.na(o$recalc_y)) lm else isTRUE(o$recalc_y))
   lm_idx <- if (inner) resto$lm_idx else which(!fixed)
   lmS <- list(); lmY <- list(); lm_sigma <- 1; lm_last <- NULL; lm_skipped <- 0L
   lm_update <- function(e, yy, lam) {
@@ -641,6 +1088,7 @@
       pt$dx_last <- 0
       return(FALSE)
     }
+    pt$gw <- TRUE
     TRUE
   }
   pt_finalize <- function() {
@@ -673,7 +1121,9 @@
     invisible()
   }
   pt_new_system <- function() {
+    if (cg) return(pt_new_system_cg())
     pt_finalize()
+    pt$gw <- FALSE
     if (pt$dx > 0) pt$dx_last <- pt$dx
     if (pt$dc > 0) pt$dc_last <- pt$dc
     pt$test <- if (pt$hess == "undetermined" || pt$jac == "undetermined") {
@@ -684,7 +1134,68 @@
     if (pt$hess == "degenerate" && !pt_wrong_deltas()) return(FALSE)
     TRUE
   }
+  # CGPerturbationHandler: delta_c from the penalty parameter of the KKT
+  # system (curr_cg_pert_fact)
+  pt_new_system_cg <- function() {
+    pt_finalize()
+    if (cg_restor_iter == it) {
+      pt$degen_iters <- 0L
+      pt$hess <- "not"; pt$jac <- "not"
+      pt$dx <- 0; pt$dc <- 0; pt$dx_last <- 0; pt$dc_last <- 0
+      pt$test <- "none"
+    }
+    if (pt$dx > 0) pt$dx_last <- pt$dx
+    if (pt$dc > 0) pt$dc_last <- pt$dc
+    pf <- cg_pert_fact()
+    pt$test <- if (pt$hess == "undetermined" || pt$jac == "undetermined") {
+      if (!pt$always_cd || pf < pt_cd() || !cg_never_pure) "c0x0" else "c1x0"
+    } else "none"
+    pt$dc <- if (pt$jac == "degenerate" || cg_never_pure || pt$always_cd) {
+      if (pf < 100 * .Machine$double.eps && pt$jac == "degenerate") 100 * .Machine$double.eps else pf
+    } else 0
+    cg_pert <<- pt$dc
+    pt$dx <- 0
+    if (pt$hess == "degenerate" && !pt_wrong_deltas()) return(FALSE)
+    pt$gw <- FALSE
+    TRUE
+  }
+  pt_singular_cg <- function() {
+    if (pt$hess == "undetermined" || pt$jac == "undetermined") {
+      switch(pt$test,
+        c0x0 = {
+          if (pt$jac == "undetermined") {
+            pt$dc <- pt_cd(); pt$test <- "c1x0"
+          } else {
+            if (!pt_wrong_deltas()) return(FALSE)
+            pt$test <- "c0x1"
+          }
+        },
+        c1x0 = {
+          pt$dc <- max(pt_cd(), cg_pert_fact())
+          if (!pt_wrong_deltas()) return(FALSE)
+          pt$test <- "c0x1"
+        },
+        c0x1 = {
+          pt$dc <- max(pt_cd(), cg_pert_fact())
+          if (!pt_wrong_deltas()) return(FALSE)
+          pt$test <- "c1x1"
+        },
+        c1x1 = {
+          if (!pt_wrong_deltas()) return(FALSE)
+        })
+    } else if (pt$dc > 0 || isTRUE(pt$gw)) {
+      if (!pt_wrong_deltas()) return(FALSE)
+    } else {
+      pt$dc <- pt_cd()
+      if (!cg_never_pure && cg_inf2(q$c) > o$mult_diverg_feasibility_tol) {
+        cg_kkt <<- min(o$penalty_max, max(cg_scale(), cg_kkt))
+        pt$dc <- max(1e3 * .Machine$double.eps, max(cg_pert_fact(), pt_cd()))
+      }
+    }
+    TRUE
+  }
   pt_singular <- function() {
+    if (cg) return(pt_singular_cg())
     if (pt$hess == "undetermined" || pt$jac == "undetermined") {
       switch(pt$test,
         c0x0 = {
@@ -890,11 +1401,12 @@
         })
       du + pr + cm + ad_extra(du, pr, cm, min(cv) / mean(cv))
     }
+    # PerformGoldenSection in the unscaled sigma (ScaleSigma is the identity)
     golden <- function(up_in, q_up, lo_in, q_lo) {
-      up <- log(up_in); lo <- log(lo_in)
+      up <- up_in; lo <- lo_in
       gf <- (3 - sqrt(5)) / 2
       m1 <- lo + gf * (up - lo); m2 <- lo + (1 - gf) * (up - lo)
-      q1 <- qf(exp(m1)); q2 <- qf(exp(m2))
+      q1 <- qf(m1); q2 <- qf(m2)
       rel <- function() 1 - min(q_lo, q_up, q1, q2) / max(q_lo, q_up, q1, q2)
       ns <- 0L
       while ((up - lo) >= o$quality_function_section_sigma_tol * up && rel() >= o$quality_function_section_qf_tol &&
@@ -902,10 +1414,10 @@
         ns <- ns + 1L
         if (q1 > q2) {
           lo <- m1; q_lo <- q1; m1 <- m2; q1 <- q2
-          m2 <- lo + (1 - gf) * (up - lo); q2 <- qf(exp(m2))
+          m2 <- lo + (1 - gf) * (up - lo); q2 <- qf(m2)
         } else {
           up <- m2; q_up <- q2; m2 <- m1; q2 <- q1
-          m1 <- lo + gf * (up - lo); q1 <- qf(exp(m1))
+          m1 <- lo + gf * (up - lo); q1 <- qf(m1)
         }
       }
       if ((up - lo) >= o$quality_function_section_sigma_tol * up && rel() < o$quality_function_section_qf_tol) {
@@ -917,15 +1429,15 @@
         } else {
           s <- m2; qq <- q2
         }
-        if (up == log(up_in)) {
-          qt <- if (q_up < 0) qf(exp(up)) else q_up
+        if (up == up_in) {
+          qt <- if (q_up < 0) qf(up) else q_up
           if (qt < qq) s <- up
-        } else if (lo == log(lo_in)) {
-          qt <- if (q_lo < 0) qf(exp(lo)) else q_lo
+        } else if (lo == lo_in) {
+          qt <- if (q_lo < 0) qf(lo) else q_lo
           if (qt < qq) s <- lo
         }
       }
-      exp(s)
+      s
     }
     q_1 <- qf(1)
     s1m <- 1 - max(1e-4, o$quality_function_section_sigma_tol)
@@ -954,7 +1466,7 @@
     tiny_flag <<- FALSE
     reset_ls <- function() {
       soft <<- FALSE; soft_count <<- 0L
-      filter_reset()
+      ls_reset()
     }
     if (!free_mode) {
       if (ad_progress(nlp_error) && !tflag) {
@@ -1101,7 +1613,7 @@
         }
         if (done && changed) {
           soft <- FALSE; soft_count <- 0L
-          filter_reset()
+          ls_reset()
         }
         tiny_flag <- FALSE
       }
@@ -1121,6 +1633,7 @@
     c0 <- q$c
     rhs <- rhs_at(mu)
     fallback <- FALSE
+    if (cg) cg_begin()
     if (!is.null(ad_kkt)) {
       rs <- ad_kkt
       ad_kkt <- NULL
@@ -1131,8 +1644,19 @@
     }
     d <- rs$d; dw <- rs$dw; K <- rs$K
     info$dw <- dw
+    if (cg && !is.null(d)) d <- cg_choose(d, K, rhs)
     if (is.null(d)) fallback <- TRUE
     if (!fallback) st <- step_of(d, y, zl, zu)
+    # without a restoration phase, cg-penalty falls back to its best iterate
+    cg_fb <- FALSE
+    if (cg && fallback) {
+      if (!m || !cg_fallback()) {
+        status <- "StepComputationFailed"
+        break
+      }
+      cg_fb <- TRUE
+      in_wd <- FALSE; wd <- NULL; wd_shortened <- 0L; count_shortened <- 0L
+    }
     # FindAcceptableTrialPoint of the backtracking line search
     if (mu != last_mu) {
       in_wd <- FALSE; wd <- NULL; wd_shortened <- 0L
@@ -1142,15 +1666,20 @@
     th0 <- q$theta
     is_acceptable_now <- conv == "continue" && acc_count > 0
     if (is_acceptable_now) acceptable_point <- list(y = y, lam = lam, zl = zl, zu = zu)
-    goto_resto <- fallback || start_resto ||
-      (expect_inf && m && max(abs(lam)) > o$expect_infeasible_problem_ytol)
+    goto_resto <- !cg_fb && (fallback || start_resto ||
+      (!cg && expect_inf && m && max(abs(lam)) > o$expect_infeasible_problem_ytol))
     start_resto <- FALSE
     ref <- if (in_wd) wd$ref else list(theta = th0, barr = phi0, gbd = if (fallback) 0 else sum(gphi * st$dy))
+    if (pen && !in_wd) pen_init(if (fallback) numeric(ny) else st$dy, dw)
+    if (cg && !cg_fb) cg_init_ls()
     tiny <- !goto_resto && !fallback &&
       max(abs(st$dy[free]) / (1 + abs(y[free])), 0) <= o$tiny_step_tol && th0 <= 1e-4
     if (in_wd && (goto_resto || tiny)) {
       y <- wd$y; lam <- wd$lam; zl <- wd$zl; zu <- wd$zu; st <- wd$st
       ref <- wd$ref
+      if (cg) {
+        cg_ref$pf <- cg_wd$pf; cg_ref$dd <- cg_wd$dd; cg_dpen <- cg_wd$dpen; cg_delta <- cg_wd$delta
+      }
       in_wd <- FALSE; wd <- NULL; wd_shortened <- 0L
       goto_resto <- FALSE; tiny <- FALSE
       ev <- sev(y[ix], 1L); g <- gaps(y)
@@ -1158,7 +1687,14 @@
     }
     if (o$watchdog_shortened_iter_trigger > 0 && !in_wd && !goto_resto && !tiny && !soft && !expect_inf &&
         wd_shortened >= o$watchdog_shortened_iter_trigger) {
+      # the penalty acceptor has no watchdog (OPTION_INVALID)
+      if (pen) {
+        status <- "InvalidOption"
+        break
+      }
       in_wd <- TRUE
+      if (cg) cg_wd <- list(pf = phi0 + cg_pen * cg_inf2(q$c), dd = cg_dd(cg_dpen, FALSE), dpen = cg_dpen,
+                            delta = cg_delta)
       wd <- list(y = y, lam = lam, zl = zl, zu = zu, st = st, ref = ref, alpha_test = primal_ftb(y, st$dy))
       wd_trial <- 0L
     }
@@ -1192,7 +1728,11 @@
     } else {
       tiny_last <- FALSE
     }
-    if (!goto_resto && !tiny) {
+    if (cg_fb) {
+      accept <- TRUE; dual_done <- TRUE
+      tr <- list(y = cg_best$y); lam <- cg_best$lam; zl <- cg_best$zl; zu <- cg_best$zu
+      info$char <- "X"
+    } else if (!goto_resto && !tiny) {
       if (soft) {
         soft_count <- soft_count + 1L
         if (soft_count <= o$max_soft_resto_iters) {
@@ -1213,7 +1753,7 @@
         repeat {
           # DoBacktrackingLineSearch
           a_max <- primal_ftb(y, st$dy)
-          a_min <- if (in_wd) a_max else {
+          a_min <- if (in_wd) a_max else if (pen) 1e-16 else if (cg) 0 else {
             gbd <- sum(gphi * st$dy)
             am <- o$gamma_theta
             if (gbd < 0) {
@@ -1233,14 +1773,47 @@
             a_test <- alpha
             if (!eval_err && (isTRUE(o$accept_every_trial_step) ||
                               (o$accept_after_max_steps != -1 && n_steps >= o$accept_after_max_steps))) {
-              filter_reset()
+              ls_reset()
               accept <- TRUE
             } else {
               accept <- !eval_err && check_trial(tr, a_test)
             }
             if (accept || in_wd) break
             if (expect_inf && count_shortened >= 5L) break
-            if (!eval_err && alpha == a_max && th0 <= tr$theta && o$max_soc > 0) {
+            if (cg && !eval_err && alpha == a_max && th0 <= tr$theta && o$max_soc > 0) {
+              # the second order corrections of CGPenaltyLSAcceptor
+              csoc <- c0
+              dl <- cg_delta[ny + seq_len(m)]
+              a_soc <- alpha
+              th_trial <- tr$theta; th_trial2 <- cg_inf2(c0)
+              trs <- tr
+              k <- 0L
+              th_old <- 0; th_old2 <- 0
+              while (k < o$max_soc && !accept &&
+                     (k == 0L || th_trial <= o$kappa_soc * th_old || th_trial2 <= o$kappa_soc * th_old2)) {
+                th_old <- th_trial; th_old2 <- th_trial2
+                csoc <- trs$c - cg_pert * dl + a_soc * csoc
+                ds <- tryCatch(ksolve(K, -c(ifelse(free, gphi + JT, 0), csoc)), error = function(err) NULL)
+                if (is.null(ds) || !all(is.finite(ds))) break
+                dl <- ds[ny + seq_len(m)]
+                ss <- step_of(ds, y, zl, zu)
+                a_soc <- primal_ftb(y, ss$dy)
+                trs <- trial_at(y + a_soc * ss$dy)
+                if (is.null(trs$e)) break
+                accept <- check_trial(trs, a_test)
+                if (accept) {
+                  alpha <- a_soc; st <- ss; tr <- trs
+                } else {
+                  k <- k + 1L
+                  th_trial <- trs$theta; th_trial2 <- cg_inf2(trs$c)
+                }
+              }
+              if (accept) {
+                cg_ls <- 0L
+                soc_taken <- TRUE
+                break
+              }
+            } else if (!eval_err && alpha == a_max && th0 <= tr$theta && o$max_soc > 0) {
               # second order corrections
               csoc <- c0
               a_soc <- alpha
@@ -1273,7 +1846,18 @@
             alpha <- alpha * o$alpha_red_factor
             n_steps <- n_steps + 1L
           }
-          if (accept) {
+          if (accept && pen) {
+            info$char <- if (last_nu != nu) "n" else "k"
+            if (soc_taken) info$char <- toupper(info$char)
+          } else if (accept && cg) {
+            info$char <- cg_next(tr)
+            if (is.na(info$char)) {
+              # Ipopt: "Penalty parameter becomes too large." (an exception)
+              status <- "UnrecoverableException"
+              break
+            }
+            if (soc_taken) info$char <- toupper(info$char)
+          } else if (accept) {
             info$char <- if (!is_ftype(a_test) || !armijo(tr$barr, a_test)) {
               add_filter(ref$theta, ref$barr)
               "h"
@@ -1293,6 +1877,9 @@
               # StopWatchDog: back to the reference point and its direction
               y <- wd$y; lam <- wd$lam; zl <- wd$zl; zu <- wd$zu; st <- wd$st
               ref <- wd$ref
+              if (cg) {
+                cg_ref$pf <- cg_wd$pf; cg_ref$dd <- cg_wd$dd; cg_dpen <- cg_wd$dpen; cg_delta <- cg_wd$delta
+              }
               in_wd <- FALSE; wd <- NULL; wd_shortened <- 0L
               ev <- sev(y[ix], 1L); g <- gaps(y)
               q <- measures(ev, y, lam, zl, zu); th0 <- q$theta; c0 <- q$c; phi0 <- ref$barr
@@ -1314,7 +1901,7 @@
     info$ls <- n_steps + 1L
     if (!accept) {
       if (!soft && !goto_resto && !expect_inf) {
-        add_filter(ref$theta, ref$barr)
+        resto_prepare()
         sr <- try_soft()
         if (sr$ok) {
           accept <- TRUE; dual_done <- TRUE
@@ -1327,9 +1914,15 @@
         }
       }
       if (!accept) {
-        if (!soft) add_filter(ref$theta, ref$barr)
+        if (!soft) resto_prepare()
         if (is_acceptable_now) {
           status <- "Acceptable"
+          break
+        }
+        if (cg) {
+          # cg-penalty has no restoration phase ("No Restoration Phase given
+          # to this Backtracking Line Search Object!")
+          status <- "UnrecoverableException"
           break
         }
         if (th0 <= 1e-2 * o$tol && uq$viol <= 1e-1 * o$constr_viol_tol) {
@@ -1389,12 +1982,26 @@
         count_shortened <- count_shortened + 1L
         wd_shortened <- wd_shortened + 1L
       }
+      if (cg && cg_restored(tr)) {
+        tr <- list(y = cg_best$y); lam <- cg_best$lam; zl <- cg_best$zl; zu <- cg_best$zu
+        in_wd <- FALSE; wd <- NULL
+        count_shortened <- 0L; wd_shortened <- 0L
+        info$char <- "r"
+      }
     }
     info$alpha_pr <- alpha
     info$dnorm <- if (exists("st", inherits = FALSE) && !fallback) max(abs(st$dy), 0) else 0
     y <- tr$y
     zc <- clip_z(y, zl, zu)
     zl <- zc$l; zu <- zc$u
+    # recalc_y of IpoptAlgorithm::AcceptTrialPoint (on by default with a
+    # quasi Newton Hessian): least squares multipliers at a nearly feasible
+    # iterate
+    if (recalc_y) {
+      er <- tryCatch(sev(y[ix], 1L), error = function(err) NULL)
+      if (!is.null(er) && sum(abs(cons_of(er, y))) < o$recalc_y_feas_tol)
+        lam <- ls_mult(er, y, zl, zu, Inf, fail = lam)
+    }
     if (expect_inf && !is.null(tr$theta) && tr$theta <= o$expect_infeasible_problem_ctol) expect_inf <- FALSE
     it <- it + 1L
   }
@@ -1504,8 +2111,7 @@
     inf_max <- if (kappa == 0) 0 else max(kappa * orig_inf_start, min(orig_tol, o$constr_viol_tol))
     if (square && oa$inf <= min(orig_tol, o$constr_viol_tol)) return("converged")
     if (oa$inf > inf_max) return("continue")
-    if (!env$filter_ok(oa$theta, oa$barr)) return("continue")
-    if (!env$ok_to_iterate(oa$barr, oa$theta, TRUE)) return("continue")
+    if (!env$orig_progress_ok(oa$barr, oa$theta)) return("continue")
     "converged"
   }
   reset_pn <- function(yR, muR) {
