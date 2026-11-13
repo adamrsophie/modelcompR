@@ -51,8 +51,8 @@
 
 # trrad of BOBYQA
 .bq_trrad <- function(delta_in, dnorm, eta1, eta2, gamma1, gamma2, ratio) {
-  if (ratio <= eta1) .pw_fminnm(gamma1 * delta_in, dnorm)
-  else if (ratio <= eta2) .pw_fmaxnm(gamma1 * delta_in, dnorm)
+  if (isTRUE(ratio <= eta1)) .pw_fminnm(gamma1 * delta_in, dnorm)
+  else if (isTRUE(ratio <= eta2)) .pw_fmaxnm(gamma1 * delta_in, dnorm)
   else .pw_fmaxnm(gamma1 * delta_in, gamma2 * dnorm)
 }
 
@@ -136,7 +136,8 @@
   kd <- seq_len(ndiag)
   xa <- dg(kd + 1L)
   xb <- dg(n + kd + 1L)
-  if (ndiag) gopt[kd] <- .pw_fma(gopt[kd], xb, -(((fval[n + kd + 1L] - fbase) / xb) * xa)) / (xb - xa)
+  tb <- (fval[n + kd + 1L] - fbase) / xb
+  if (ndiag) gopt[kd] <- ifelse(.pw_isvec(ndiag, 0), .pw_fma(-xa, tb, gopt[kd] * xb), .pw_fma(gopt[kd], xb, -(tb * xa))) / (xb - xa)
   hq <- matrix(0, n, n)
   for (k in kd) hq[k, k] <- (2 * ((fval[k + 1L] - fbase) / xa[k] - (fval[n + k + 1L] - fbase) / xb[k])) / (xa[k] - xb[k])
   for (k in seq_len(max(0L, npt - 2L * n - 1L))) {
@@ -261,7 +262,7 @@
     ds <- .pw_inprod(d[free], s[free])
     if (!(isTRUE(stepsq > .pr_eps * delsq) && isTRUE(gredsq * delsq > (ctest * qred) * (ctest * qred)) && !is.nan(ds)))
       break
-    sqrtd <- .uo_maxval(c(sqrt(.pw_fma(stepsq, resid, ds * ds)), sqrt(stepsq * resid), abs(ds)))
+    sqrtd <- .uo_maxval(c(sqrt(.pw_fma(ds, ds, stepsq * resid)), sqrt(stepsq * resid), abs(ds)))
     bstep <- if (ds >= 0) resid / (sqrtd + ds) else (sqrtd - ds) / stepsq
     if (!isTRUE(bstep > 0) || !is.finite(bstep)) break
     hs <- .pw_hess_mul(s, xpt, pq, hq)
@@ -343,7 +344,7 @@
     temp <- .pw_fma(gredsq, dredsq, -(dredg * dredg))
     if (!isTRUE(temp > ((ctest * ctest) * qred) * qred) || is.nan(temp) || is.nan(qred)) break
     temp <- sqrt(temp)
-    s <- .pw_fma(dredg, d, -(dredsq * gnew)) / temp
+    s <- ifelse(.pw_isvec(n, 5), .pw_fma(-dredsq, gnew, dredg * d), .pw_fma(dredg, d, -(dredsq * gnew))) / temp
     s[!free] <- 0
     sredg <- -temp
     ssq <- .pw_fma(d, d, s * s)
@@ -492,7 +493,7 @@
   vlag[is.nan(vlag)] <- 0
   t1 <- (stplen * (1 - stplen)) * rep(distsq, each = 3L)
   betabd <- 0.5 * (t1 * t1)
-  predsq <- (vlag * vlag) * .pw_fma(vlag, vlag, alpha * betabd)
+  predsq <- (vlag * vlag) * .pw_fma(alpha, betabd, vlag * vlag)
   predsq[is.nan(predsq)] <- 0
   ksqs <- apply(predsq, 1L, .pw_maxloc)
   isq <- .pw_maxloc(predsq[cbind(1:3, ksqs)])
@@ -614,10 +615,12 @@
   hcol <- c(zmat[knew, 1L] * zmat[, 1L], bmat[, knew])
   sqrtdn <- sqrt(denom)
   vk <- vlag[seq_len(npt)]
-  zmat[, 1L] <- .pw_fma(tau / sqrtdn, zmat[, 1L], -((zmat[knew, 1L] / sqrtdn) * vk))
+  ta <- tau / sqrtdn
+  tb <- zmat[knew, 1L] / sqrtdn
+  zmat[, 1L] <- ifelse(.pw_isvec(npt, 3), .pw_fma(-tb, vk, zmat[, 1L] * ta), .pw_fma(ta, zmat[, 1L], -(tb * vk)))
   alpha <- hcol[knew]
   jj <- npt + seq_len(n)
-  v1 <- .pw_fma(alpha, vlag[jj], -(tau * hcol[jj])) / denom
+  v1 <- ifelse(.pw_isvec(n, 5), .pw_fma(-tau, hcol[jj], alpha * vlag[jj]), .pw_fma(alpha, vlag[jj], -(tau * hcol[jj]))) / denom
   v2 <- .pw_fma(-beta, hcol[jj], -(tau * vlag[jj])) / denom
   bmat <- (bmat + outer(v1, vlag)) + outer(v2, hcol)
   B <- bmat[, jj, drop = FALSE]
@@ -741,7 +744,7 @@
     den <- numeric(npt)
     pr <- which(ptsid > 0)
     for (r in pr) hdiag[r] <- .pw_inprod(zmat[r, ], zmat[r, ])
-    den[pr] <- .pw_fma(hdiag[pr], beta, vlag[pr] * vlag[pr])
+    den[pr] <- .pw_fma(vlag[pr], vlag[pr], beta * hdiag[pr])
     vk <- vlag[seq_len(npt)]
     if (!(is.finite(sum(abs(vlag))) && any(den > 0.05 * .uo_maxval(vk * vk), na.rm = TRUE))) {
       score[korig] <- -score[korig] - scoreinc
@@ -954,8 +957,8 @@
     close_itpset <- all(distsq <= .pw_fmaxnm(delta * delta, tr2 * tr2))
     adequate_geo <- isTRUE((shortd && accurate_mod) || close_itpset)
     small_trrad <- isTRUE(.pw_fmaxnm(delta, dnorm) <= rho)
-    improve_geo <- (shortd || trfail || !isTRUE(ratio > eta1) || knew_tr == 0L) && !adequate_geo
-    reduce_rho <- (shortd || trfail || !isTRUE(ratio > 0) || knew_tr == 0L) && adequate_geo && small_trrad
+    improve_geo <- (shortd || trfail || isTRUE(ratio <= eta1) || knew_tr == 0L) && !adequate_geo
+    reduce_rho <- (shortd || trfail || isTRUE(ratio <= 0) || knew_tr == 0L) && adequate_geo && small_trrad
     if (improve_geo) {
       knew_geo <- .pw_maxloc(distsq)
       delbar <- .pw_fmaxnm(.pw_fminnm(0.1 * sqrt(.uo_maxval(distsq)), delta), rho)
