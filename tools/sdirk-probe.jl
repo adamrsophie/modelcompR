@@ -7,6 +7,7 @@
 # state and the dense output at t = 0.123. Run from the repository root:
 #   julia --project=tools/julia tools/sdirk-probe.jl > sdirk.tsv
 using OrdinaryDiffEqSDIRK, OrdinaryDiffEqCore, SciMLBase
+using OrdinaryDiffEqNonlinearSolve: NLNewton
 const P = OrdinaryDiffEqSDIRK.Predictor
 const N = 8
 heat(u, p, t) = [p[1] * ((i == 1 ? zero(u[1]) : u[i-1]) - 2u[i] + (i == N ? zero(u[1]) : u[i+1])) * (N + 1)^2 - 0.5 * u[i]^3 + 0.1 * t for i in 1:N]
@@ -118,3 +119,20 @@ end
 for (n, a) in [("ImplicitMidpoint", ImplicitMidpoint()), ("SFSDIRK4", SFSDIRK4()), ("ARS343", ARS343()), ("TRBDF2", TRBDF2()), ("IMEXSSP3433", IMEXSSP3433())]
     probe("mm_" * n, "mmfixed", mprob, a)
 end
+# the nlsolve keyword: NLNewton settings, check_div and a callable stage
+# predictor (apply_predictor! seeds every stage solve with its guess)
+pf(uprev, p, t, dt) = uprev .* (1 - 0.1 * dt) .+ 0.01 * t
+nlk = NLNewton(κ = 1.0e-3, max_iter = 4, new_W_dt_cutoff = 0.5)
+nlpred = NLNewton(predictor = pf)
+nlnodiv = NLNewton(check_div = false)
+for (n, A, c) in [("TRBDF2", TRBDF2, "plain"), ("Kvaerno4", Kvaerno4, "plain"), ("Kvaerno4", Kvaerno4, "fixed"),
+        ("SFSDIRK7", SFSDIRK7, "fixed"), ("SSPSDIRK2", SSPSDIRK2, "fixed"), ("ImplicitEuler", ImplicitEuler, "plain"),
+        ("Trapezoid", Trapezoid, "plain"), ("split_KenCarp4", KenCarp4, "plain"), ("split_ARS343", ARS343, "fixed"),
+        ("mm_Kvaerno3", Kvaerno3, "mm"), ("mm_SFSDIRK4", SFSDIRK4, "mmfixed")]
+    pr = startswith(n, "split_") ? sprob : startswith(n, "mm_") ? mprob : prob
+    for (o, nl) in (("nlk", nlk), ("nlpred", nlpred), ("nlnodiv", nlnodiv))
+        probe(n * "_" * o, c, pr, A(nlsolve = nl))
+    end
+end
+probe("ImplicitEuler", "plain", prob, ImplicitEuler())
+probe("Trapezoid", "plain", prob, Trapezoid())
