@@ -52,6 +52,10 @@
   ns
 }
 
+# integrator.sqdt of OrdinaryDiffEqCore: tdir * sqrt(abs(dt)), the signed
+# square root of the step, so that steps backward in time keep the sign.
+.sqdt <- function(dt) sign(dt) * sqrt(abs(dt))
+
 # Tolerance for comparing times: a few rounding errors of t.
 .noise_tol <- function(t) 8 * .Machine$double.eps * max(1, abs(t))
 
@@ -69,7 +73,7 @@
 
 # A fresh increment over h from the value W (the distribution of the process).
 .noise_fresh <- function(ns, W, h, t) {
-  if (is.null(ns$pe)) return(stats::rnorm(length(W), 0, sqrt(h)))
+  if (is.null(ns$pe)) return(stats::rnorm(length(W), 0, sqrt(abs(h))))
   old <- ns$pe$curW
   ns$pe$curW <- W
   on.exit(ns$pe$curW <- old)
@@ -81,7 +85,7 @@
 .noise_split <- function(ns, e, s, W0 = ns$W, Z0 = ns$Z, t = NULL) {
   frac <- s / e$h
   if (is.null(ns$pe)) {
-    sd <- sqrt(s * (e$h - s) / e$h)
+    sd <- sqrt(abs(s * (e$h - s) / e$h))
     w1 <- stats::rnorm(ns$m, e$dW * frac, sd)
     z1 <- if (ns$needs_dZ) stats::rnorm(length(e$dZ), e$dZ * frac, sd) else NULL
   } else {
@@ -117,7 +121,7 @@
     ns$stack <- c(list(pd[c("h", "dW", "dZ")]), ns$stack)
   } else if (abs(t - (pd$t + pd$h)) <= tol) {
     .noise_commit(ns, pd$t + pd$h, pd$dW, pd$dZ)
-  } else if (t > pd$t && t < pd$t + pd$h) {
+  } else if ((t - pd$t) * pd$h > 0 && (pd$t + pd$h - t) * pd$h > 0) {
     if (identical(ns$kind, "path")) {
       inc <- .noise_path_inc(ns, pd$t, t - pd$t)
       .noise_commit(ns, t, inc$dW, inc$dZ)
@@ -149,17 +153,17 @@
   dW <- numeric(ns$m)
   dZ <- if (ns$needs_dZ) numeric(mz) else NULL
   tol <- 1e-10 * abs(h)
-  while (need > tol && length(ns$stack)) {
+  while (abs(need) > tol && length(ns$stack)) {
     e <- ns$stack[[1L]]
-    if (e$h <= need + tol) {
-      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(e$h))
+    if (abs(e$h) <= abs(need) + tol) {
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(abs(e$h)))
       dW <- dW + e$dW
       if (ns$needs_dZ) dZ <- dZ + e$dZ
       need <- need - e$h
       ns$stack <- ns$stack[-1L]
       ns$pieces[[length(ns$pieces) + 1L]] <- e[c("h", "dW", "dZ")]
     } else {
-      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(e$h))
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(abs(e$h)))
       sp <- .noise_split(ns, e, need, W0 = ns$W + dW, Z0 = if (ns$needs_dZ) ns$Z + dZ, t = t)
       dW <- dW + sp$first$dW
       if (ns$needs_dZ) dZ <- dZ + sp$first$dZ
@@ -168,7 +172,7 @@
       need <- 0
     }
   }
-  if (need > tol) {
+  if (abs(need) > tol) {
     w1 <- .noise_fresh(ns, ns$W + dW, need, t)
     z1 <- if (ns$needs_dZ) .noise_fresh(ns, ns$Z + dZ, need, t)
     dW <- dW + w1
@@ -282,7 +286,7 @@ LambaEM <- function(split = TRUE) {
     L <- if (split) g(u, p, t + dt) else g(K, p, t + dt)
     noise <- .gdw(L, dW, type)
     unew <- K + noise
-    sq <- sqrt(abs(dt))
+    sq <- .sqdt(dt)
     du2 <- f(K, p, t + dt)
     Ed <- dt * (du2 - du1) / 2
     ggprime <- (g(K + noise * sq, p, t) - L) / sq
@@ -296,7 +300,7 @@ LambaEM <- function(split = TRUE) {
 RKMil <- function(interpretation = c("Ito", "Stratonovich")) {
   interpretation <- match.arg(interpretation)
   .new_sde_alg("RKMil", 1, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-    sq <- sqrt(abs(dt))
+    sq <- .sqdt(dt)
     du1 <- f(u, p, t)
     K <- u + dt * du1
     L <- g(u, p, t)
@@ -310,7 +314,7 @@ RKMil <- function(interpretation = c("Ito", "Stratonovich")) {
     unew <- K + L * dW + mil
     du2 <- f(K, p, t + dt)
     Ed <- dt * (du2 - du1) / 2
-    En <- dW^3 * ((du2 - L) / sq)^2 / 6
+    En <- dW^3 * ggprime^2 / 6
     list(u = unew, err = delta * Ed + En, nf = 2L)
   }, noise = c("diagonal", "scalar"), interpretation = interpretation)
 }
@@ -319,7 +323,7 @@ RKMil <- function(interpretation = c("Ito", "Stratonovich")) {
 #' @export
 SRIW1 <- function() {
   .new_sde_alg("SRIW1", 1.5, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-    sq <- sqrt(abs(dt))
+    sq <- .sqdt(dt)
     chi1 <- (dW^2 - abs(dt)) / (2 * sq)
     chi2 <- (dW + dZ / sqrt(3)) / 2
     chi3 <- (dW^3 - 3 * dW * dt) / (6 * dt)
@@ -375,7 +379,7 @@ SOSRI <- function()
 # The four stage SRI step (FourStageSRIConstantCache of sri.jl) of SOSRI and
 # SOSRI2, with the coefficients S.
 .four_stage_sri <- function(S) function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-  sq <- sqrt(abs(dt))
+  sq <- .sqdt(dt)
   chi1 <- (dW^2 - abs(dt)) / (2 * sq)
   chi2 <- (dW + dZ / sqrt(3)) / 2
   chi3 <- (dW^3 - 3 * dW * dt) / (6 * dt)
@@ -415,7 +419,7 @@ LambaEulerHeun <- function() {
     L <- g(u, p, t)
     tmp <- K + .gdw(L, dW, type)
     unew <- u + (dt / 2) * (du1 + f(tmp, p, t + dt)) + .gdw((L + g(tmp, p, t + dt)) / 2, dW, type)
-    sq <- sqrt(abs(dt))
+    sq <- .sqdt(dt)
     if (type == "general") {
       gs <- sqrt(sum(L^2))
       En <- rep((sqrt(sum(g(u + sq * gs, p, t)^2)) - gs) / (2 * sq) * .rms(dW^2), length(u))
@@ -512,7 +516,7 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
   # RKMilCommuteCache of low_order.jl with the commutative iterated
   # integrals J = dW dW' / 2 (IICommutative)
   .new_sde_alg("RKMilCommute", 1, TRUE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-    sq <- sqrt(abs(dt))
+    sq <- .sqdt(dt)
     du1 <- f(u, p, t)
     K <- u + dt * du1
     L <- g(u, p, t)
@@ -570,7 +574,7 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
 .sde_implicit_step <- function(alg, ctx, g, u, t, dt, dW, type, delta, cache) {
   p <- ctx$p
   theta <- alg$theta
-  sq <- sqrt(abs(dt))
+  sq <- .sqdt(dt)
   f0 <- ctx$f(u, p, t)
   L <- g(u, p, t)
   gdw <- .gdw(L, dW, type)
@@ -793,6 +797,13 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   setup$post(.integrate(setup$prob, setup$alg, setup$opts))
 }
 
+# Methods whose upstream step takes sqrt(dt) (the weak Roessler methods,
+# PL1WM and NON, SROCKC2), so that a backward solve stops with a DomainError
+# in Julia (tools/review-tdir-probe.jl); here they stop before the solve
+# instead of returning NaN.
+.sde_forward_only <- c("DRI1", "DRI1NM", "RI1", "RI3", "RI5", "RI6", "RDI1WM", "RDI2WM", "RDI3WM", "RDI4WM",
+                       "RS1", "RS2", "PL1WM", "PL1WMA", "NON", "NON2", "W2Ito1", "IRI1", "SROCKC2")
+
 # The core driver problem, algorithm and options of an SDE solve, and the
 # post processing of its solution (the Brownian path); init() uses it too.
 # `rng` (see .rng_new) is the integrator's own random number generator; the
@@ -807,6 +818,8 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   if (is.function(alg$bind)) alg <- alg$bind(prob, opts)
   if (!(type %in% alg$noise))
     .stopf("%s() requires diagonal or scalar noise; use EM() or LambaEM() for general noise", alg$name)
+  if (prob$tspan[2L] < prob$tspan[1L] && isTRUE(alg$name %in% .sde_forward_only))
+    .stopf("%s() cannot integrate backward in time: its step takes sqrt(dt), a DomainError upstream", alg$name)
   M <- prob$f$mass_matrix
   mm <- !.is_identity_mass(M)
   if (mm) {
@@ -814,7 +827,6 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
     if (is.null(alg$mass_matrix_ok)) stop("This solver is not able to use mass matrices.", call. = FALSE)
     if (!alg$mass_matrix_ok) stop("Algorithm must be set as symplectic or theta=1 for mass matrices", call. = FALSE)
   }
-  if (prob$tspan[2L] <= prob$tspan[1L]) stop("SDE problems need tspan[2] > tspan[1]", call. = FALSE)
   m <- m %||% alg$noise_dim %||% switch(type, diagonal = length(u0), scalar = 1L,
                      general = prob$f$nbrownians %||% ncol(as.matrix(g(u0, prob$p, prob$tspan[1L]))))
   proc <- prob$noise_process

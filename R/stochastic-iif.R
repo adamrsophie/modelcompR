@@ -118,7 +118,7 @@ IIF1Mil <- function(nlsolve = NLSOLVEJL_SETUP()) .iif_alg("IIF1Mil", 1, nlsolve)
   if (!is.matrix(MG)) MG <- matrix(MG, n)
   I <- 0.5 * outer(dW, dW)
   diag(I) <- diag(I) - 0.5 * dt
-  sqdt <- sqrt(abs(dt))
+  sqdt <- .sqdt(dt)
   mil <- numeric(n)
   for (j in seq_len(m)) {
     Kj <- u + sqdt * MG[, j]

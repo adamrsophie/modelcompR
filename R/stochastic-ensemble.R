@@ -96,13 +96,34 @@ EnsembleSolution <- function(u, elapsed = 0, converged = TRUE)
   with_stream <- function(FUN) function(args) {
     RNGkind("L'Ecuyer-CMRG")
     assign(".Random.seed", args$seed, envir = globalenv())
-    FUN(args$i)
+    value <- FUN(args$i)
+    list(value = value, drew = !identical(get(".Random.seed", envir = globalenv()), args$seed))
+  }
+  # Run the trajectories with their streams, then put the session generator
+  # back: the stream setup switches RNGkind to L'Ecuyer-CMRG and back, which
+  # reseeds it, and a map run in this process (one core) leaves the stream
+  # of the last trajectory. When no trajectory drew a number (a
+  # deterministic ensemble) the session stream is left as it was, as with
+  # EnsembleSerial; otherwise it moves on, so the next ensemble draws new
+  # streams.
+  run_streams <- function(I, FUN, mapf) {
+    g <- globalenv()
+    kind <- RNGkind()
+    old <- if (exists(".Random.seed", envir = g, inherits = FALSE)) get(".Random.seed", envir = g)
+    args <- Map(function(i, sd) list(i = i, seed = sd), I, streams(I))
+    post <- get(".Random.seed", envir = g)
+    res <- mapf(args, with_stream(FUN))
+    drew <- any(vapply(res, function(r) is.list(r) && isTRUE(r$drew), logical(1L)))
+    if (!identical(RNGkind(), kind)) do.call(RNGkind, as.list(kind))
+    if (drew) assign(".Random.seed", post, envir = g)
+    else if (is.null(old)) rm(".Random.seed", envir = g)
+    else assign(".Random.seed", old, envir = g)
+    lapply(res, function(r) if (is.list(r)) r$value else r)
   }
   if (name %in% c("EnsembleThreads", "EnsembleGPUKernel", "EnsembleGPUArray")) {
     return(list(map = function(I, FUN) {
-      args <- Map(function(i, sd) list(i = i, seed = sd), I, streams(I))
       cores_ok <- if (.Platform$OS.type == "windows") 1L else cores
-      parallel::mclapply(args, with_stream(FUN), mc.cores = cores_ok, mc.set.seed = FALSE)
+      run_streams(I, FUN, function(args, F) parallel::mclapply(args, F, mc.cores = cores_ok, mc.set.seed = FALSE))
     }, close = function() NULL))
   }
   cl <- alg$cl
@@ -112,8 +133,7 @@ EnsembleSolution <- function(u, elapsed = 0, converged = TRUE)
     parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(modelcompR)))
   }
   list(map = function(I, FUN) {
-    args <- Map(function(i, sd) list(i = i, seed = sd), I, streams(I))
-    parallel::parLapply(cl, args, with_stream(FUN))
+    run_streams(I, FUN, function(args, F) parallel::parLapply(cl, args, F))
   }, close = function() if (own) parallel::stopCluster(cl))
 }
 

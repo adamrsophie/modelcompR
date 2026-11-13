@@ -62,3 +62,24 @@ test_that("SciMLBase types and automatic differentiation choices", {
   expect_error(Rodas5P(autodiff = 1), "autodiff")
   expect_s3_class(PolyesterThreads(), "ThreadingOption")
 })
+
+test_that("parallel mappers leave the session generator of a deterministic ensemble alone", {
+  ens <- EnsembleProblem(ODEProblem(function(u, p, t) -u, 1, c(0, 1)))
+  kind <- RNGkind()
+  for (alg in list(EnsembleThreads(cores = 2), EnsembleThreads(cores = 1))) {
+    set.seed(5)
+    ref <- stats::runif(1)
+    set.seed(5)
+    solve(ens, Tsit5(), alg, trajectories = 2)
+    expect_identical(stats::runif(1), ref)
+    expect_identical(RNGkind(), kind)
+  }
+  # stochastic ensembles still draw new streams on each solve
+  sens <- EnsembleProblem(SDEProblem(function(u, p, t) -u, function(u, p, t) 0.5 + 0 * u, 1, c(0, 1)))
+  fin <- function(sim) vapply(seq_len(length(sim)), function(i) tail(sim[[i]]$u, 1)[[1]], 0)
+  set.seed(6)
+  a <- fin(solve(sens, EM(), EnsembleThreads(cores = 1), trajectories = 3, dt = 0.1))
+  b <- fin(solve(sens, EM(), EnsembleThreads(cores = 1), trajectories = 3, dt = 0.1))
+  expect_false(isTRUE(all.equal(a, b)))
+  expect_identical(RNGkind(), kind)
+})

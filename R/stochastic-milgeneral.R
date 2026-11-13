@@ -164,7 +164,7 @@ RKMilGeneral <- function(interpretation = c("Ito", "Stratonovich"), ii_approx = 
     J <- if (general) .rkmg_J(dt, dW, dZ, ns, t, m)
     if (is.null(J)) J <- get_iterated_I(dt, dW, dZ, cache$Jalg, alg$p, alg$c, alg$order)
     if (ito) J <- if (general) J - diag(abs(dt) / 2, m) else J - abs(dt) / 2
-    sqdt <- sqrt(abs(dt))
+    sqdt <- .sqdt(dt)
     du1 <- f(u, p, t)
     L <- g(u, p, t)
     K <- u + dt * du1

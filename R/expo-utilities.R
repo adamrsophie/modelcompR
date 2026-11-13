@@ -681,6 +681,12 @@
 .eu_phiv_timestep <- function(ts, A, B, tau = 0, m = min(10L, NROW(B)), tol = 1e-7, opnorm = NULL,
                               iop = 0L, correct = FALSE, adaptive = FALSE, delta = 1.2,
                               ishermitian = .eu_ishermitian(A), gamma = 0.8, nnz = 0L) {
+  # upstream steps with `while t < tend` and returns the uninitialized output
+  # for negative times, so EPIRK methods backward in time return garbage
+  # with retcode Success; here that is an error
+  if (any(ts < 0))
+    stop("phiv_timestep needs nonnegative times: the Krylov time stepping cannot integrate backward, ",
+         "so Exp4, the EPIRK methods and EXPRB53s3 cannot solve backward in time", call. = FALSE)
   B <- as.matrix(B)
   single <- length(ts) == 1L
   arnoldi_scale <- is.null(opnorm)

@@ -275,3 +275,14 @@ test_that("exponential methods check their problems", {
   prob <- SplitODEProblem(function(u, p, t) -u, exprk_f2, exprk_u0, c(0, 1))
   expect_error(solve(prob, ETDRK4(), dt = 0.1), "SciML operator")
 })
+
+test_that("EPIRK methods stop backward in time instead of returning garbage", {
+  # upstream (tools/review-tdir-probe.jl) returns u0 unchanged, NaN or other
+  # uninitialized values, varying between runs, often with retcode Success
+  prob <- ODEProblem(function(u, p, t) -u, exp(-1), c(1, 0))
+  for (alg in list(Exp4(), EPIRK4s3A(), EPIRK4s3B(), EPIRK5s3(), EXPRB53s3(), EPIRK5P1(), EPIRK5P2()))
+    expect_error(solve(prob, alg, dt = -0.1), "cannot solve backward in time")
+  expect_error(.eu_phiv_timestep(c(-0.5, -1), diag(2), diag(2)), "nonnegative times")
+  expect_equal(tail(solve(ODEProblem(function(u, p, t) -u, 1, c(0, 1)), Exp4(), dt = 0.1)$u, 1)[[1]],
+               exp(-1), tolerance = 1e-6)
+})

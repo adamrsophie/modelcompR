@@ -561,6 +561,13 @@ NoiseGrid <- function(t, W, Z = NULL, reset = TRUE) {
   if (!is.list(W) && is.null(dim(W))) Wm <- matrix(W, ncol = 1L)
   Zm <- if (!is.null(Z)) { if (is.list(Z)) do.call(rbind, lapply(Z, as.numeric)) else as.matrix(Z) }
   if (nrow(Wm) != length(t)) stop("NoiseGrid needs one value of W per time point", call. = FALSE)
+  # a grid for a backward solve runs from the last time to the first; the
+  # interpolation below needs increasing times
+  rev_grid <- length(t) > 1L && t[1L] > t[length(t)]
+  ta <- if (rev_grid) rev(t) else t
+  ascend <- function(M) if (rev_grid && !is.null(M)) M[rev(seq_len(nrow(M))), , drop = FALSE] else M
+  Wa <- ascend(Wm)
+  Za <- ascend(Zm)
   interp <- function(M, s) {
     if (s > max(t) + 10 * .Machine$double.eps * max(1, abs(s)))
       stop("Solution interpolation cannot extrapolate past the final timepoint. Build a longer NoiseGrid to cover the integration.",
@@ -568,11 +575,11 @@ NoiseGrid <- function(t, W, Z = NULL, reset = TRUE) {
     if (s < min(t) - 10 * .Machine$double.eps * max(1, abs(s)))
       stop("Solution interpolation cannot extrapolate before the first timepoint. Build a longer NoiseGrid to cover the integration.",
            call. = FALSE)
-    apply(M, 2L, function(col) stats::approx(t, col, xout = s, rule = 2, ties = "ordered")$y)
+    apply(M, 2L, function(col) stats::approx(ta, col, xout = s, rule = 2, ties = "ordered")$y)
   }
-  path <- function(s, u = NULL, p = NULL) interp(Wm, s)
+  path <- function(s, u = NULL, p = NULL) interp(Wa, s)
   .np_path(t[1L], Wm[1L, ], path, if (!is.null(Zm)) Zm[1L, ], reset, "NoiseGrid",
-           extra = list(grid_t = t, grid_W = Wm, grid_Z = Zm, zpath = if (!is.null(Zm)) function(s, u, p) interp(Zm, s)))
+           extra = list(grid_t = t, grid_W = Wm, grid_Z = Zm, zpath = if (!is.null(Zm)) function(s, u, p) interp(Za, s)))
 }
 
 #' @rdname noise_processes

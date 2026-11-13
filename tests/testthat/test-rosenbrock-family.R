@@ -916,3 +916,23 @@ test_that("Rosenbrock32 evaluates the next derivative at the accepted solution",
   expect_equal(as.numeric(s$u[[length(s$t)]]), c(0.044461592219330395, 0.06822496712860476, -0.120603515603758),
                tolerance = 1e-4)
 })
+
+test_that("ROS3P, ROS3PR and ROS34PW1a/b take four steps on linear problems, as upstream", {
+  # tools/review-tdir-probe.jl: on linear problems the embedded estimate of
+  # these tableaus is at roundoff level, so upstream never rejects a step and
+  # stops after 4 steps at abstol = reltol = 1e-8 (an inherited defect)
+  osc <- ODEProblem(ODEFunction(function(u, p, t) c(u[2], -u[1]), jac = function(u, p, t) matrix(c(0, -1, 1, 0), 2)),
+                    c(1, 0), c(0, 1))
+  ref <- list(ROS3P = c(0.5397742038775135, -0.8329962673841346), ROS3PR = c(0.540533266902055, -0.8299446490980225),
+              ROS34PW1a = c(0.539562922591549, -0.8389457093804721), ROS34PW1b = c(0.5395456764723496, -0.8387746191543975))
+  dec <- ODEProblem(ODEFunction(function(u, p, t) -u, jac = function(u, p, t) matrix(-1, 1, 1)), 1, c(0, 1))
+  for (nm in names(ref)) {
+    s <- solve(osc, get(nm)(), abstol = 1e-8, reltol = 1e-8)
+    expect_equal(tail(s$u, 1)[[1]], ref[[nm]], tolerance = 1e-14)
+    expect_equal(c(s$stats$naccept, s$stats$nreject), c(4, 0))
+    d <- solve(dec, get(nm)(), abstol = 1e-8, reltol = 1e-8)
+    expect_lte(d$stats$naccept, 4)
+    expect_equal(d$stats$nreject, 0)
+    expect_gt(abs(tail(d$u, 1)[[1]] - exp(-1)), 1e-4)
+  }
+})

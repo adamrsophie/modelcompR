@@ -546,7 +546,7 @@ Discontinuity <- function(t, order = 0L)
 .dde_setup_opts <- function(prob, mos, opts, hs, max_order) {
   lags <- prob$constant_lags %||% numeric()
   t0 <- prob$tspan[1L]; tf <- prob$tspan[2L]
-  if (tf <= t0) stop("delay problems need tspan[2] > tspan[1]", call. = FALSE)
+  if (tf < t0) stop("delay problems need tspan[2] >= tspan[1]", call. = FALSE)
   ds <- .dde_discontinuity_state(prob, max_order, opts)
   opts$tstops <- c(unlist(opts$tstops), ds$stops)
   ds$stops <- numeric()

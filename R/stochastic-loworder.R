@@ -33,7 +33,7 @@ NULL
 SimplifiedEM <- function() {
   .new_sde_alg("SimplifiedEM", 0.5, FALSE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
     K <- u + dt * f(u, p, t)
-    list(u = K + .gdw(g(u, p, t), calc_twopoint_random(sqrt(abs(dt)), dW), type), nf = 1L)
+    list(u = K + .gdw(g(u, p, t), calc_twopoint_random(.sqdt(dt), dW), type), nf = 1L)
   }, weak = TRUE)
 }
 
@@ -67,14 +67,19 @@ PCEuler <- function(ggprime, theta = 1 / 2, eta = 1 / 2) {
 # u + g dW + dW^2/2 (g(u + g sqdt) - g) / sqdt, all at time t.
 .wangli_alg <- function(name, stages) {
   .new_sde_alg(name, 1, FALSE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
-    sqdt <- sqrt(abs(dt))
+    sqdt <- .sqdt(dt)
+    # upstream divides by sqdt in the first diffusion stage and by
+    # abs(sqdt) in the second (explicit_3s_mil_methods.jl)
+    div <- c(sqdt, abs(sqdt))
+    ng <- 0L
     for (s in stages) {
       if (s == "D") {
         u <- u + dt * f(u, p, t)
         next
       }
+      ng <- ng + 1L
       k <- as.numeric(g(u, p, t))
-      k1 <- (as.numeric(g(u + k * sqdt, p, t)) - k) / sqdt
+      k1 <- (as.numeric(g(u + k * sqdt, p, t)) - k) / div[ng]
       u <- if (s == "C") u - (dt / 2) * k1 else u + k * dW + 0.5 * dW^2 * k1
     }
     list(u = u, nf = 1L)

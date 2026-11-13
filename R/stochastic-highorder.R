@@ -123,7 +123,7 @@ checkSRAOrder <- function(tableau, tol = 1e-6) {
 # perform_step! for SRIConstantCache
 .sri_generic_step <- function(tab, error_terms) function(f, g, u, p, t, dt, dW, dZ, type, delta) {
   s <- length(tab$alpha)
-  sq <- sqrt(abs(dt))
+  sq <- .sqdt(dt)
   chi1 <- (dW^2 - abs(dt)) / (2 * sq)
   chi2 <- (dW + dZ / sqrt(3)) / 2
   chi3 <- (dW^3 - 3 * dW * dt) / (6 * dt)
