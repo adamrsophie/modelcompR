@@ -22,7 +22,7 @@ Pkg.add([
     PackageSpec(name = "SciMLBase"),
 ]; io = devnull)
 Pkg.status(; io = stderr)
-using ConvexOptimization, SciMLBase, Clarabel, LinearAlgebra, Printf
+using ConvexOptimization, SciMLBase, Clarabel, LinearAlgebra, Printf, SparseArrays
 using SciMLBase: ConvexOptimizationProblem
 import MathOptInterface as MOI
 import SymbolicAnalysis
@@ -75,9 +75,54 @@ function probe(name, prob; alg = ALG)
         cache = SciMLBase.init(build(prob), alg)
         sol = SciMLBase.solve!(cache)
         report(name, cache, sol)
+        name in TRACE_CASES && trace(name, prob, alg, Int(rawsolver(cache.model).info.iterations))
     catch e
         e isa InterruptException && rethrow()
         errline(name, e)
+    end
+end
+
+# Per iteration trace of the cases whose iterates drift from the R port. The
+# solver loop has no callback, so iterate k is the result of a fresh solve
+# with max_iter = k; Clarabel is deterministic, so this is the k-th iterate of
+# the full solve. Written to the file named by TRACE (default
+# convex-trace.tsv): one DATA line per case with the scaled problem data, then
+# per k the status, mu, sigma, step length, primal and dual cost, primal and
+# dual residuals, absolute and relative gap, ktratio, the infeasibility
+# residuals and the unscaled x, z and s.
+const TRACE_CASES = Set(["pow", "expcon", "geomean", "relentr", "con_explog", "eig_nested", "logdet_con", "logdet",
+    "rootdet_tri_nocd", "rootdet_sq_nocd"])
+const TRACE_PATH = get(ENV, "TRACE", "convex-trace.tsv")
+isfile(TRACE_PATH) && rm(TRACE_PATH)
+function with_max_iter(alg, k)
+    c = alg.optimizer_constructor
+    c isa MOI.OptimizerWithAttributes ||
+        return ConvexMOI(MOI.OptimizerWithAttributes(c, "max_iter" => k))
+    return ConvexMOI(MOI.OptimizerWithAttributes(c.optimizer_constructor, c.params...,
+        MOI.RawOptimizerAttribute("max_iter") => k))
+end
+nz(M) = M isa SparseMatrixCSC ? nonzeros(M) : nonzeros(parent(M))
+function trace(name, prob, alg, iters)
+    open(TRACE_PATH, "a") do io
+        for k in 0:iters
+            try
+                cache = SciMLBase.init(build(prob), with_max_iter(alg, k))
+                SciMLBase.solve!(cache)
+                s = rawsolver(cache.model)
+                d = s.data
+                eq = d.equilibration
+                k == 0 && println(io, join([name, "DATA", hv(d.q), hv(d.b), hv(nz(d.A)), hv(nz(d.P)),
+                    hv(eq.d), hv(eq.e), hx(eq.c[])], "\t"))
+                i = s.info
+                println(io, join([name, string(k), string(i.status),
+                    hv([i.mu, i.sigma, i.step_length, i.cost_primal, i.cost_dual, i.res_primal, i.res_dual,
+                        i.gap_abs, i.gap_rel, i.ktratio, i.res_primal_inf, i.res_dual_inf]),
+                    hv(s.solution.x), hv(s.solution.z), hv(s.solution.s)], "\t"))
+            catch e
+                e isa InterruptException && rethrow()
+                println(io, join([name, string(k), "ERROR", replace(sprint(showerror, e), "\n" => " ", "\t" => " ")], "\t"))
+            end
+        end
     end
 end
 function sweep(name, prob, thetas; alg = ALG)
@@ -315,9 +360,23 @@ function arrowsq(u, n)
     end
     return vec(X)
 end
-for (nm, f, n) in (("band6", bandsq, 6), ("arrow6", arrowsq, 6), ("band9", bandsq, 9))
-    prob = ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(u[i] for i in 1:n)), [ones(n); zeros(n - 1)];
-        constraints = [ConeConstraint((u, p) -> [u[n + k] - 1.0 for k in 1:(n - 1)], MOI.Zeros(n - 1)),
+# band of half width w; the entries of diagonal k follow those of diagonals
+# 1..k-1. Width 3 gives 4-cliques overlapping in 3 (merge weight
+# 64 + 64 - 125 >= 0) and width 4 gives 5-cliques overlapping in 4, so the
+# clique graph merges run, with ties between equal weights
+function wbandsq(u, n, w)
+    X = Matrix{Any}(undef, n, n)
+    for j in 1:n, i in 1:n
+        k = abs(i - j)
+        X[i, j] = k == 0 ? u[i] : k <= w ? u[n + sum(n - t for t in 1:(k - 1); init = 0) + min(i, j)] : 0.0
+    end
+    return vec(X)
+end
+nband(n, w) = sum(n - t for t in 1:w)
+for (nm, f, n, nv) in (("band6", bandsq, 6, 5), ("arrow6", arrowsq, 6, 5), ("band9", bandsq, 9, 8),
+        ("wband8", (u, n) -> wbandsq(u, n, 3), 8, nband(8, 3)), ("wband12", (u, n) -> wbandsq(u, n, 4), 12, nband(12, 4)))
+    prob = ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(u[i] for i in 1:n)), [ones(n); zeros(nv)];
+        constraints = [ConeConstraint((u, p) -> [u[n + k] - 1.0 for k in 1:nv], MOI.Zeros(nv)),
             ConeConstraint((u, p) -> f(u, n), MOI.PositiveSemidefiniteConeSquare(n))])
     probe("chordal_" * nm, prob)
     for (mm, merge) in (("pc", :parent_child), ("nm", :none))

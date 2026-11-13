@@ -56,6 +56,8 @@ jobs:
         shell: bash
         env:
           PROBE: ${{ inputs.probe || 'tools/sdirk-probe.jl' }}
+          # a probe that writes a second file reads its path from TRACE
+          TRACE: probe-out/trace.tsv
         run: |
           case "$PROBE" in
             tools/*.jl) ;;
