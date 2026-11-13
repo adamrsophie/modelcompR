@@ -511,6 +511,9 @@ solve.ODEProblem <- function(a, b, ...) {
   is_dae <- inherits(prob, "DAEProblem")
   algs <- if (inherits(alg, "CompositeAlgorithm")) alg$algs else list(alg)
   adaptive <- (opts$adaptive %||% TRUE) && all(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))
+  # maxiters of OrdinaryDiffEqCore solve.jl: 1e6 for an adaptive algorithm
+  # (anyadaptive, whatever the adaptive option), else no limit
+  if (is.null(opts$maxiters)) maxiters <- if (any(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))) 1e6 else Inf
   saveat <- sort(unique(as.numeric(opts$saveat %||% numeric())), decreasing = tdir < 0)
   if (length(saveat) == 1L && !is.null(opts$saveat) && length(opts$saveat) == 1L) {
     # initialize_saveat: the range (t0 + s):s:tf of Julia, with the start
