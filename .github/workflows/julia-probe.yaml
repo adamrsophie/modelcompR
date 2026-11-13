@@ -1,0 +1,74 @@
+name: julia-probe
+
+# Runs one of the Julia reference probes in tools/ with the environment of
+# tools/julia and uploads its standard output. The probes write the reference
+# values of the tests; macOS on arm64 is the reference platform. A push to a
+# probe/** branch runs the defaults below (a dispatch needs the workflow on the
+# default branch).
+
+on:
+  push:
+    branches: ["probe/**"]
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: "Probe script, relative to the repository root"
+        required: true
+        default: tools/sdirk-probe.jl
+      packages:
+        description: "Extra Julia packages to add to the environment, separated by spaces"
+        required: false
+        default: ""
+      os:
+        description: "Runner"
+        required: false
+        default: macos-latest
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.os || 'macos-latest' }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+        with:
+          version: "1.13.3"
+
+      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+
+      - name: Instantiate the probe environment
+        shell: bash
+        env:
+          EXTRA: ${{ inputs.packages || '' }}
+        run: |
+          julia --project=tools/julia -e '
+            using Pkg
+            Pkg.instantiate()
+            extra = split(ENV["EXTRA"])
+            isempty(extra) || Pkg.add(String.(extra))
+            Pkg.precompile()'
+
+      - name: Run the probe
+        shell: bash
+        env:
+          PROBE: ${{ inputs.probe || 'tools/sdirk-probe.jl' }}
+        run: |
+          case "$PROBE" in
+            tools/*.jl) ;;
+            *) echo "the probe must be a tools/*.jl script"; exit 1 ;;
+          esac
+          mkdir -p probe-out
+          julia --project=tools/julia "$PROBE" > probe-out/probe.tsv 2> probe-out/probe.err || {
+            tail -50 probe-out/probe.err; exit 1; }
+          wc -l probe-out/probe.tsv
+          tail -20 probe-out/probe.err
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: probe-output
+          path: probe-out/
