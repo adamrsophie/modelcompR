@@ -38,8 +38,9 @@
 # adds in loop order. .ipx_madd() marks the multiply adds of the C code.
 .ipx_madd <- function(a, b, c) a * b + c
 
-# ipx::Dot (utils.cc) and loops compiled like it: products added in order
-.ipx_dot <- function(x, y) sum(x * y)
+# ipx::Dot (utils.cc) and loops compiled like it: products added in order in
+# double precision (sum() accumulates in long double, which is 80 bits on x86)
+.ipx_dot <- function(x, y) Reduce(`+`, x * y, 0)
 
 # DotColumn for every column of the dense matrix A, in row order
 .ipx_coldots <- function(A, v) {

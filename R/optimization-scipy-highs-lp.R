@@ -75,7 +75,7 @@
   }
   status <- if (npi) "Infeasible" else if (ndi) "Unbounded" else "Optimal"
   list(status = status, col_value = x, col_dual = cost, row_value = numeric(), row_dual = numeric(),
-       col_status = stat, objective = sum(x * cost), nit = 0L, primal_feasible = npi == 0L)
+       col_status = stat, objective = Reduce(`+`, x * cost, 0), nit = 0L, primal_feasible = npi == 0L)
 }
 
 .hs_new_ekk <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts) {
