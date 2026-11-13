@@ -33,6 +33,20 @@ emit("blsq_default", solve(pb, TrustRegion()))
 emit("rosen_dogleg", solve(pr, TrustRegion(; subproblem = TrustRegionSubproblem.Dogleg)))
 emit("circ_dogleg", solve(pc, TrustRegionDogleg()))
 emit("rosen_robust", solve(pr, TrustRegionRobust()))
+# bounded problems: algorithms without native bounds run through the bounds
+# transform of NonlinearSolveBase (bounds_transform.jl)
+emit("blsq_gaussnewton", solve(pb, GaussNewton()))
+emit("blsq_lm", solve(pb, LevenbergMarquardt()))
+emit("blsq_simpletr", solve(pb, SimpleTrustRegion()))
+emit("blsq_nllspolyalg", solve(pb, FastShortcutNLLSPolyalg()))
+emit("blsq_default_alg", solve(pb))
+sq(u, p) = [u[1] * u[1] - 4]
+sqj(u, p) = reshape([2 * u[1]], 1, 1)
+pbl = NonlinearProblem(NonlinearFunction(sq; jac = sqj), [0.1]; lb = [0.0], ub = [10.0])
+pbu = NonlinearProblem(NonlinearFunction(sq; jac = sqj), [-0.1]; lb = [-10.0], ub = [0.0])
+emit("sq_newton", solve(pbl, NewtonRaphson()))
+emit("sq_tr_upper", solve(pbu, TrustRegion()))
+emit("sq_default_alg", solve(pbl))
 for (nm, s) in (("Simple", RadiusUpdateSchemes.Simple), ("NLsolve", RadiusUpdateSchemes.NLsolve),
                 ("NocedalWright", RadiusUpdateSchemes.NocedalWright), ("Hei", RadiusUpdateSchemes.Hei),
                 ("Yuan", RadiusUpdateSchemes.Yuan), ("More", RadiusUpdateSchemes.More),
