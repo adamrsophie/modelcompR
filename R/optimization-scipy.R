@@ -79,9 +79,10 @@ print.ScipyOptimizer <- function(x, ...) {
 #' Forrest-Tomlin updates) solves them, with
 #' `presolve = FALSE` passed on as in SciPy; `"highs-ipm"` runs IPX with
 #' crossover (`run_crossover = "off"` skips it) and the simplex clean up of
-#' HiGHS, and `ScipyMilp()`
-#' branches and bounds depth first over its LPs without the cuts and
-#' heuristics of the HiGHS MIP solver, so node counts differ. `ScipyCOBYQA()` solves its
+#' HiGHS, and `ScipyMilp()` runs the port of the HiGHS MIP solver
+#' (presolve, cuts, heuristics, symmetry handling and branch and bound) with
+#' the `node_limit`, `mip_rel_gap`, `time_limit` and `presolve` options of
+#' SciPy. `ScipyCOBYQA()` solves its
 #' interpolation systems with R's LAPACK (SciPy uses Accelerate or
 #' OpenBLAS), so its points agree to rounding and a long run can take a
 #' slightly different path to the same solution; it evaluates the nonlinear

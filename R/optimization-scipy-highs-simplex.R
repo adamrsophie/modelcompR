@@ -160,9 +160,50 @@
 }
 
 # the row of the tableau over the nonbasic columns
-.hs_price <- function(ek, row_ep) {
-  ap <- .hs_tight(as.numeric(crossprod(ek$A, row_ep)))
-  ap[ek$nonbasicFlag[seq_len(ek$n)] == 0L] <- 0
+# HighsSparseMatrix::priceByColumn: each column sums its nonzeros times y
+# in ascending row order; sums of magnitude at most kHighsTiny are zero
+.hs_price_col <- function(ek, y) {
+  A <- ek$A
+  ap <- numeric(ek$n)
+  for (i in seq_len(ek$m)) {
+    nz <- A[i, ] != 0
+    ap[nz] <- ap[nz] + y[i] * A[i, nz]
+  }
+  ap[abs(ap) <= 1e-14] <- 0
+  ap
+}
+
+# HEkk::tableauRowPrice with the default kSimplexPriceStrategyRowSwitchColSwitch:
+# HighsSparseMatrix::priceByColumn (rows ascending in each column) when more
+# than 0.75 of row_ep is nonzero, else priceByRowWithSwitch, which adds the
+# rows of the nonbasic columns in the order of the row_ep index list, keeps
+# each partial sum below kHighsTiny at kHighsZero and, after a switch to
+# priceByRowDenseResult, zeroes the final sums below kHighsTiny. index is the
+# HVector index list of row_ep; dens the expected density of the result.
+.hs_price <- function(ek, row_ep, index = which(row_ep != 0), dens = ek$dens$row_ap %||% 0) {
+  n <- ek$n; A <- ek$A
+  nonbasic <- ek$nonbasicFlag[seq_len(n)] != 0L
+  if (length(index) / ek$m > 0.75) {
+    ap <- .hs_price_col(ek, row_ep)
+    ap[!nonbasic] <- 0
+    return(ap)
+  }
+  ap <- numeric(n)
+  cnt <- 0L
+  sparse <- dens <= 0.1
+  for (i in index) {
+    cols <- which(A[i, ] != 0 & nonbasic)
+    if (sparse && (cnt + length(cols) >= n || cnt / n > 0.1)) sparse <- FALSE
+    mult <- row_ep[i]
+    if (sparse) {
+      if (!mult) next
+      cnt <- cnt + sum(ap[cols] == 0)
+    }
+    v <- ap[cols] + mult * A[i, cols]
+    v[abs(v) < 1e-14] <- 1e-50
+    ap[cols] <- v
+  }
+  if (!sparse) ap[abs(ap) < 1e-14] <- 0
   ap
 }
 
@@ -341,7 +382,7 @@
   ek$workDual <- ek$workCost + ek$workShift
   if (any(cb != 0)) {
     y <- .hs_btran(ek, cb, "dual_col")
-    row <- .hs_tight(as.numeric(crossprod(ek$A, y)))
+    row <- .hs_price_col(ek, y)
     ek$workDual <- ek$workDual - c(row, y)
   }
 }

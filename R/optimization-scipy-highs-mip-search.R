@@ -907,7 +907,7 @@
                  sum_primal_infeasibilities = Inf, num_dual_infeasibilities = -1L,
                  max_dual_infeasibility = Inf, sum_dual_infeasibilities = Inf)
 }
-.hmip_b2_highs_clear_ekk <- function(h) { h$ek <- NULL; h$ek_valid <- FALSE; h$iterate <- NULL }
+.hmip_b2_highs_clear_ekk <- function(h) { h$ek <- NULL; h$ek_valid <- FALSE; h$iterate <- NULL; h$rng_carry <- NULL }
 
 .hmip_Highs_setOptionValue <- function(h, name, value) {
   o <- h$options; o[[name]] <- value; h$options <- o
@@ -1002,7 +1002,11 @@
     else basis <- .hmip_accommodate_alien_basis(h, basis)
   }
   h$basis <- list(valid = TRUE, col_status = basis$col_status, row_status = basis$row_status)
+  # HEkk::updateStatus(kNewBasis) only invalidates the basis: the HEkk stays
+  # initialised for the LP, so its random generator is not reseeded
+  rng <- if (is.null(h$ek)) h$rng_carry else h$ek$rng
   .hmip_b2_highs_clear_ekk(h)
+  h$rng_carry <- rng
   .hmip_b2_highs_invalidate(h)
   invisible("Ok")
 }
@@ -1172,11 +1176,13 @@
         opts$ek <- ek
       } else if (isTRUE(h$basis$valid)) {
         opts$basis <- list(col_status = h$basis$col_status, row_status = h$basis$row_status)
+        opts$rng <- h$rng_carry
       }
       sol <- .hs_lp_solve(lp$col_cost_, lp$A, lp$row_lower_, lp$row_upper_, lp$col_lower_, lp$col_upper_, opts)
     }
     if (!is.null(sol$ek)) {
       h$ek <- sol$ek
+      h$rng_carry <- NULL
       h$ek_valid <- !isTRUE(sol$ek$moved_unscaled) && identical(sol$scale, h$scale)
     } else .hmip_b2_highs_clear_ekk(h)
   }
@@ -1275,7 +1281,7 @@
   dual_row <- numeric(n)
   if (any(dual_col != 0)) {
     dual_col <- .hs_btran(ek, dual_col, "dual_col")
-    dual_row <- as.numeric(crossprod(ek$A, dual_col))
+    dual_row <- .hs_price_col(ek, dual_col)
   }
   small <- 1e-9
   obj <- c(0, 0)

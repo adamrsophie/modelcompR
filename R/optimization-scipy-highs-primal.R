@@ -58,7 +58,7 @@
   ek$workDual <- numeric(tot)
   ek$workCost[ek$basicIndex] <- buf
   y <- .hs_btran(ek, buf, "dual_col")
-  row <- .hs_tight(as.numeric(crossprod(ek$A, y)))
+  row <- .hs_price_col(ek, y)
   ek$workDual <- -ek$nonbasicFlag * c(row, y)
 }
 
@@ -287,7 +287,7 @@
     # basicFeasibilityChangeUpdateDual
     if (any(change != 0)) {
       y <- .hs_btran(ek, change, "col_basic_feasibility_change")
-      pr <- .hs_price(ek, y)
+      pr <- .hs_price(ek, y, ek$last_index, ek$dens$row_basic_feasibility_change)
       ek$workDual[seq_len(n)] <- ek$workDual[seq_len(n)] - pr
       ek$workDual[n + seq_len(ek$m)] <- ek$workDual[n + seq_len(ek$m)] - y
     }
@@ -411,7 +411,7 @@
     ps$row_ep <- .hs_btran(ek, e, "row_ep", pack = TRUE)
     ps$row_ep_index <- ek$last_index
     ps$row_ep_tick <- ek$last_tick
-    ps$row_ap <- .hs_price(ek, ps$row_ep)
+    ps$row_ap <- .hs_price(ek, ps$row_ep, ps$row_ep_index)
     vin <- ps$variable_in
     alpha_row <- if (vin <= ek$n) ps$row_ap[vin] else ps$row_ep[vin - ek$n]
     trouble <- abs(abs(ps$alpha_col) - abs(alpha_row)) / min(abs(ps$alpha_col), abs(alpha_row))

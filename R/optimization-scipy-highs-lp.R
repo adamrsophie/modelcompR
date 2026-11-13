@@ -198,12 +198,15 @@
   sc <- if ("fixed_scale" %in% names(opts)) opts$fixed_scale else if (isFALSE(opts$scale)) NULL else .hs_scale(A, cost)
   if (is.null(sc)) {
     ek <- opts$ek %||% .hs_new_ekk(cost, A, row_lower, row_upper, col_lower, col_upper, opts)
+    if (is.null(opts$ek) && !is.null(opts$rng)) ek$rng <- opts$rng
     .hs_ekk_solve(ek, FALSE, opts$strategy %||% "dual")
     sol <- .hs_get_solution(ek)
   } else {
     As <- A * outer(sc$row, sc$col)
     ek <- opts$ek %||% .hs_new_ekk(cost * sc$col, As, row_lower * sc$row, row_upper * sc$row,
                                    col_lower / sc$col, col_upper / sc$col, opts)
+    # a basis set on a HEkk that stays initialised keeps its random generator
+    if (is.null(opts$ek) && !is.null(opts$rng)) ek$rng <- opts$rng
     .hs_ekk_solve(ek, FALSE, opts$strategy %||% "dual")
     sol <- .hs_get_solution(ek)
     status <- ek$model_status

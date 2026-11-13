@@ -251,7 +251,7 @@
 .hs_dual_choose_column <- function(ek, ds) {
   if (ds$rebuild_reason != 0L) return(invisible())
   n <- ek$n
-  row_ap <- .hs_price(ek, ds$row_ep)
+  row_ap <- .hs_price(ek, ds$row_ep, ds$row_ep_index)
   ds$row_ap <- row_ap
   # ponytail: the row_ap count is that of the nonzeros over the nonbasic
   # columns, which priceByRowWithSwitch reports unless it switches to dense

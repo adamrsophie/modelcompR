@@ -1,9 +1,9 @@
 # scipy.optimize.linprog and scipy.optimize.milp as OptimizationSciPy.jl
 # calls them. The HiGHS methods run the native port of the HiGHS LP
 # presolve, postsolve and simplex solver (R/optimization-scipy-highs-*.R);
-# "highs-ipm" runs IPX with crossover and the simplex clean up of HiGHS. milp branches and bounds
-# depth first over node LPs of that solver, without the presolve, cuts and
-# heuristics of the HiGHS MIP solver, so node counts differ. The legacy
+# "highs-ipm" runs IPX with crossover and the simplex clean up of HiGHS. milp
+# runs the port of the HiGHS MIP solver (R/optimization-scipy-highs-mip-*.R)
+# with its presolve, cuts, heuristics and search. The legacy
 # methods use the dense two phase simplex method with Bland's rule below.
 
 # min c'z subject to A z = b, z >= 0. Returns z, the duals y (the derivative
@@ -217,53 +217,7 @@
     A <- matrix(as.numeric(kw$A), ncol = n)
     lc <- rep_len(as.numeric(kw$lb_con), nrow(A)); uc <- rep_len(as.numeric(kw$ub_con), nrow(A))
   }
-  # internal switch: the HiGHS MIP solver port (R/optimization-scipy-highs-mip-*.R)
-  # replaces the depth first search once it matches every probe MILP
-  if (isTRUE(getOption("modelcompR.highs_mip", FALSE)))
-    return(.sp_milp_highs(cvec, A, lc, uc, lo, hi, typ, kw))
-  best <- NULL
-  nodes <- 0L
-  status <- 2L
-  stack <- list(list(lo = lo, hi = hi, typ = typ))
-  while (length(stack)) {
-    nd <- stack[[length(stack)]]
-    stack[[length(stack)]] <- NULL
-    nodes <- nodes + 1L
-    semi <- nd$typ >= 2L
-    rlo <- ifelse(semi, pmin(0, nd$lo), nd$lo)
-    sol <- .hs_lp_solve(cvec, A, lc, uc, rlo, nd$hi)
-    if (sol$status %in% c("Unbounded", "UnboundedOrInfeasible")) {
-      status <- if (any(typ != 0L)) 4L else 3L; best <- NULL; break
-    }
-    if (sol$status != "Optimal") next
-    r <- list(x = sol$col_value, fun = sol$objective)
-    if (!is.null(best) && r$fun >= best$fun - 1e-9 * max(1, abs(best$fun))) next
-    x <- r$x
-    frac <- nd$typ %in% c(1L, 3L) & abs(x - round(x)) > 1e-6
-    gap <- semi & abs(x) > 1e-6 & x < nd$lo - 1e-6
-    j <- which(frac | gap)[1L]
-    if (is.na(j)) { best <- r; status <- 0L; next }
-    up <- nd; down <- nd
-    if (gap[j]) {
-      down$lo[j] <- 0; down$hi[j] <- 0; down$typ[j] <- 0L
-      up$typ[j] <- nd$typ[j] - 2L
-    } else {
-      down$hi[j] <- floor(x[j]); up$lo[j] <- ceiling(x[j])
-      if (semi[j]) up$typ[j] <- 1L
-    }
-    stack[[length(stack) + 1L]] <- up
-    stack[[length(stack) + 1L]] <- down
-  }
-  res <- list(status = status, success = status == 0L, message = .sp_highs_messages[[as.character(status)]])
-  if (status == 0L) {
-    res <- c(list(x = best$x, fun = best$fun), res,
-             list(mip_node_count = nodes, mip_dual_bound = best$fun, mip_gap = 0))
-  } else {
-    res$x <- rep(NaN, n)
-    res$fun <- NaN
-  }
-  res$retcode <- if (res$success) "Success" else "Failure"
-  res
+  .sp_milp_highs(cvec, A, lc, uc, lo, hi, typ, kw)
 }
 
 # scipy.optimize.milp through Highs::callSolveMip (the HiGHS MIP solver port)
