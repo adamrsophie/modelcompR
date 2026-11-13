@@ -115,23 +115,24 @@
   }
   y
 }
-# -A'z (mul!(r, A', z, -1, 0))
+# -A'z (mul!(r, A', z, -1, 0)). The nonsymmetric sparse products of
+# SparseArrays accumulate with muladd, which LLVM fuses (.fma).
 .cl_neg_Atz <- function(A, z) {
   out <- numeric(A$n)
   for (col in seq_len(A$n)) {
     tmp <- 0
-    for (j in .cl_rng(A$colptr[col], A$colptr[col + 1L] - 1L)) tmp <- tmp + A$nzval[j] * z[A$rowval[j]]
-    out[col] <- 0 + tmp * -1
+    for (j in .cl_rng(A$colptr[col], A$colptr[col + 1L] - 1L)) tmp <- .fma(A$nzval[j], z[A$rowval[j]], tmp)
+    out[col] <- -tmp
   }
   out
 }
-# y + A x (mul!(y, A, x, 1, 1))
+# y + A x (mul!(y, A, x, 1, 1)), with muladd as above
 .cl_Ax_add <- function(A, x, y) {
   for (col in seq_len(A$n)) {
-    axj <- x[col] * 1
+    axj <- x[col]
     for (j in .cl_rng(A$colptr[col], A$colptr[col + 1L] - 1L)) {
       r <- A$rowval[j]
-      y[r] <- y[r] + A$nzval[j] * axj
+      y[r] <- .fma(A$nzval[j], axj, y[r])
     }
   }
   y
