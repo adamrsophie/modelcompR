@@ -58,9 +58,9 @@ IIFNLSolveFunc <- function(f) structure(list(f = f), class = "IIFNLSolveFunc")
 
 # SimpleTrustRegion from u0, run until the residual is at rounding level.
 .iif_root <- function(F, u0) {
-  u0 <- as.numeric(u0)
+  u0 <- .as_num(u0)
   tol <- 8 * .Machine$double.eps * max(1, abs(u0))
-  .nl_trust_region(function(x) as.numeric(F(x)), NULL, u0, tol, 100L)$u
+  .nl_trust_region(function(x) .as_num(F(x)), NULL, u0, tol, 100L)$u
 }
 
 #' @rdname iif_methods
@@ -93,8 +93,8 @@ IIF1Mil <- function(nlsolve = NLSOLVEJL_SETUP()) .iif_alg("IIF1Mil", 1, nlsolve)
     p <- ctx$p
     A <- f1(u, p, t)
     scalar <- length(A) == 1L && length(u) == 1L
-    M <- if (scalar) exp(as.numeric(A) * dt) else .expm(as.matrix(A) * dt)
-    Mv <- function(v) if (scalar) M * v else as.numeric(M %*% v)
+    M <- if (scalar) exp(.as_num(A) * dt) else .expm(as.matrix(A) * dt)
+    Mv <- function(v) if (scalar) M * v else .as_num(M %*% v)
     G <- g(u, p, t)
     gdw <- .gdw(G, dW, type)
     tmp <- switch(name,
@@ -113,7 +113,7 @@ IIF1Mil <- function(nlsolve = NLSOLVEJL_SETUP()) .iif_alg("IIF1Mil", 1, nlsolve)
 .iif_milstein <- function(G, g, u, p, t, dt, dW, type, Mv) {
   n <- length(u)
   m <- length(dW)
-  Gm <- switch(type, diagonal = diag(as.numeric(G), n), scalar = matrix(as.numeric(G), n, 1L), as.matrix(G))
+  Gm <- switch(type, diagonal = diag(.as_num(G), n), scalar = matrix(.as_num(G), n, 1L), as.matrix(G))
   MG <- apply(Gm, 2L, Mv)
   if (!is.matrix(MG)) MG <- matrix(MG, n)
   I <- 0.5 * outer(dW, dW)
@@ -123,10 +123,10 @@ IIF1Mil <- function(nlsolve = NLSOLVEJL_SETUP()) .iif_alg("IIF1Mil", 1, nlsolve)
   for (j in seq_len(m)) {
     Kj <- u + sqdt * MG[, j]
     Gj <- g(Kj, p, t)
-    Gjm <- switch(type, diagonal = diag(as.numeric(Gj), n), scalar = matrix(as.numeric(Gj), n, 1L), as.matrix(Gj))
+    Gjm <- switch(type, diagonal = diag(.as_num(Gj), n), scalar = matrix(.as_num(Gj), n, 1L), as.matrix(Gj))
     MGj <- apply(Gjm, 2L, Mv)
     if (!is.matrix(MGj)) MGj <- matrix(MGj, n)
-    mil <- mil + as.numeric(((MGj - MG) / sqdt) %*% I[, j])
+    mil <- mil + .as_num(((MGj - MG) / sqdt) %*% I[, j])
   }
   mil
 }

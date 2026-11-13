@@ -219,8 +219,8 @@ DAEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, du0 = N
       }
     }
     if (is.null(du0)) du0 <- op
-    u0 <- as.numeric(unlist(u0))
-    return(.new_problem("DAEProblem", f = f, du0 = as.numeric(unlist(du0)), u0 = u0,
+    u0 <- .as_num(unlist(u0))
+    return(.new_problem("DAEProblem", f = f, du0 = .as_num(unlist(du0)), u0 = u0,
                         tspan = .as_tspan(tspan), p = if (is.null(p)) numeric() else p, sys = NULL,
                         differential_vars = if (is.null(differential_vars)) NULL else as.logical(differential_vars),
                         kwargs = dots))

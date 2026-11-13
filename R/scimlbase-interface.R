@@ -630,7 +630,36 @@ allows_late_binding_tstops <- function(alg) TRUE
 allows_non_wiener_noise <- function(alg) inherits(alg, "SDEAlgorithm") && (alg$order %||% 0.5) <= 0.5
 #' @rdname function_wrappers
 #' @export
-allowscomplex <- function(alg) FALSE
+# alg_utils.jl of OrdinaryDiffEqCore, StochasticDiffEqCore,
+# OrdinaryDiffEqFunctionMap, ImplicitDiscreteSolve, BoundaryValueDiffEqCore,
+# DelayDiffEq and GlobalDiffEq; FALSE for the other algorithms (SciMLBase).
+allowscomplex <- function(alg) {
+  if (inherits(alg, c("GlobalErrorEstimation", "GlobalAdjoint"))) return(FALSE)
+  if (inherits(alg, c("GlobalRichardson", "MethodOfSteps"))) return(allowscomplex(alg$alg))
+  inherits(alg, c("ODEAlgorithm", "SDEAlgorithm", "RODEAlgorithm", "BVPAlgorithm", "FunctionMap", "IDSolve"))
+}
+
+# The complex checks of check_prob_alg_pairing (DiffEqBase solve.jl): a
+# complex u0 needs an algorithm that allows complex numbers, and no solver
+# takes a complex time span.
+.check_complex <- function(prob, alg) {
+  if (is.complex(prob$u0) && !allowscomplex(alg))
+    stop(.cond("ComplexSupportError", paste0(
+      "Complex number type (i.e. ComplexF32, or ComplexF64)\n",
+      "detected as the element type for the initial condition\n",
+      "with an algorithm that does not support complex numbers.\n",
+      "Please check that the initial condition type is correct.\n",
+      "If complex number support is needed, try different solvers\n",
+      "such as those from OrdinaryDiffEq.jl.\n\nSolver: ", alg$name %||% class(alg)[1L])))
+  if (is.complex(prob$tspan))
+    stop(.cond("ComplexTspanError", paste0(
+      "Complex number type (i.e. ComplexF32, or ComplexF64)\n",
+      "detected as the element type for the independent variable\n",
+      "(i.e. time span). Please check that the tspan type is correct.\n",
+      "No solvers support complex time spans. If this is required,\n",
+      "please open an issue.")))
+  invisible()
+}
 #' @rdname function_wrappers
 #' @export
 requires_additive_noise <- function(alg) (alg$name %||% "") %in% c("SRA1", "SRA2", "SRA3", "SOSRA", "SOSRA2", "SKenCarp")
@@ -671,7 +700,7 @@ supports_opt_cache_interface <- function(alg) TRUE
 is_diagonal_noise <- function(prob) (prob$noise_type %||% prob$f$noise_type %||% "diagonal") == "diagonal"
 #' @rdname function_wrappers
 #' @export
-isconcreteu0 <- function(prob, ...) is.numeric(prob$u0) && all(is.finite(prob$u0))
+isconcreteu0 <- function(prob, ...) (is.numeric(prob$u0) || is.complex(prob$u0)) && all(is.finite(prob$u0))
 #' @rdname function_wrappers
 #' @export
 problem_type <- function(prob) prob$problem_type %||% paste0("Standard", class(prob)[1L])

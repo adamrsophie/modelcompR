@@ -150,7 +150,7 @@ GeneralizedAlpha <- function(alpha_m = NULL, alpha_f = NULL, beta = NULL, gamma 
       a0 <- an
       r0 <- resid(an)
       if (all(is.finite(r0)) && max(abs(r0), 0) <= .nl_default_tol()) {
-        a1 <- an - as.numeric(solve(.nl_jacobian(resid, NULL, an, r0), r0))
+        a1 <- an - .as_num(solve(.nl_jacobian(resid, NULL, an, r0), r0))
         r1 <- resid(a1)
         if (all(is.finite(r1)) && max(abs(r1), 0) < max(abs(r0), 0)) a0 <- a1
       }

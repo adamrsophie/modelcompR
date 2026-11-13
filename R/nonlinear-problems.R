@@ -812,7 +812,7 @@ SCCNonlinearProblem <- function(sys, op = list(), ..., jac = TRUE, guesses = lis
 # .new_solution() so sol[x], sol[expr] and sol$ps work as for ODE solutions.
 .nl_new_solution <- function(cls, prob, alg, u, retcode, resid = NULL, stats = list(), extra = list(),
                              t = 0) {
-  u <- as.numeric(u)
+  u <- .as_num(u)
   U <- matrix(u, nrow = 1L)
   nms <- names(prob$u0)
   if (!is.null(nms) && length(nms) == length(u)) colnames(U) <- nms

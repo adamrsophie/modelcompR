@@ -60,7 +60,7 @@ NULL
 
 # diffusion as an n x m matrix whose columns are the noise channels
 .weak_G <- function(gv, type, n) {
-  switch(type, diagonal = diag(as.numeric(gv), n), scalar = matrix(as.numeric(gv), n, 1L), as.matrix(gv))
+  switch(type, diagonal = diag(.as_num(gv), n), scalar = matrix(.as_num(gv), n, 1L), as.matrix(gv))
 }
 
 .weak_quantile <- -0.9674215661017014
@@ -89,9 +89,9 @@ NULL
   gG <- function(x, tt) .weak_G(g(x, p, tt), type, n)
   k1 <- f(u, p, t)
   G1 <- gG(u, t)
-  H02 <- u + C$a021 * k1 * dt + C$b021 * as.numeric(G1 %*% wdW)
+  H02 <- u + C$a021 * k1 * dt + C$b021 * .as_num(G1 %*% wdW)
   k2 <- f(H02, p, t + C$c02 * dt)
-  H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * as.numeric(G1 %*% wdW)
+  H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * .as_num(G1 %*% wdW)
   k3 <- f(H03, p, t + C$c03 * dt)
   unew <- u + C$alpha1 * k1 * dt + C$alpha2 * k2 * dt + C$alpha3 * k3 * dt
   wdZ <- calc_twopoint_random(sqdt, dZ)
@@ -120,7 +120,7 @@ NULL
     d1 <- delta * (rat - 1); d2 <- -delta * rat
     uhat <- u + ((C$alpha1 + d1) * k1 + (C$alpha2 + delta) * k2 + (C$alpha3 + d2) * k3) * dt
   } else uhat <- u + k1 * dt
-  uhat <- uhat + as.numeric(G1 %*% wdW)
+  uhat <- uhat + .as_num(G1 %*% wdW)
   list(u = unew, err = unew - uhat, nf = 3L)
 }
 
@@ -161,9 +161,9 @@ RDI1WM <- function() {
     wdW <- calc_threepoint_random(sqrt(3 * dt), C$NORMAL_ONESIX_QUANTILE, dW / sqrt(dt))
     k1 <- f(u, p, t)
     G1 <- .weak_G(g(u, p, t), type, n)
-    H02 <- u + C$a021 * k1 * dt + C$b021 * as.numeric(G1 %*% wdW)
+    H02 <- u + C$a021 * k1 * dt + C$b021 * .as_num(G1 %*% wdW)
     k2 <- f(H02, p, t + C$c02 * dt)
-    list(u = u + C$alpha1 * k1 * dt + C$alpha2 * k2 * dt + C$beta11 * as.numeric(G1 %*% wdW), nf = 2L)
+    list(u = u + C$alpha1 * k1 * dt + C$alpha2 * k2 * dt + C$beta11 * .as_num(G1 %*% wdW), nf = 2L)
   })
 }
 
@@ -196,7 +196,7 @@ RDI1WM <- function() {
   })
   G4 <- lapply(seq_len(m), function(k) gG(H14[[k]], t + C$c14 * dt))
   k2 <- f(H02, p, t + C$c02 * dt)
-  H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * as.numeric(G1 %*% wdW)
+  H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * .as_num(G1 %*% wdW)
   for (k in seq_len(m)) H03 <- H03 + C$b032 * G2[[k]][, k] * wdW[k]
   k3 <- f(H03, p, t + C$c03 * dt)
   unew <- u + (C$alpha1 * k1 + C$alpha2 * k2 + C$alpha3 * k3 + C$alpha4 * k1) * dt
@@ -245,7 +245,7 @@ PL1WM <- function() {
     gG <- function(x) .weak_G(g(x, p, t), type, n)
     k1 <- f(u, p, t)
     G1 <- gG(u)
-    Y <- u + k1 * dt + as.numeric(G1 %*% wdW)
+    Y <- u + k1 * dt + .as_num(G1 %*% wdW)
     k2 <- f(Y, p, t)
     unew <- u + (k1 + k2) * dt / 2
     # the auxiliary increments need m (m - 1) / 2 two point variables
@@ -274,7 +274,7 @@ PL1WMA <- function() {
   .weak_alg("PL1WMA", 2, FALSE, function(f, g, u, p, t, dt, dW, dZ, type, delta) {
     wdW <- calc_threepoint_random(sqrt(3 * dt), .weak_quantile, dW / sqrt(abs(dt)))
     k1 <- f(u, p, t)
-    tmp1 <- as.numeric(.weak_G(g(u, p, t), type, length(u)) %*% wdW)
+    tmp1 <- .as_num(.weak_G(g(u, p, t), type, length(u)) %*% wdW)
     k2 <- f(u + k1 * dt + tmp1, p, t)
     list(u = u + (k1 + k2) * dt / 2 + tmp1, nf = 2L)
   })
@@ -377,9 +377,9 @@ W2Ito1 <- function() {
     gG <- function(x) .weak_G(g(x, p, t), type, n)
     k1 <- f(u, p, t)
     G1 <- gG(u)
-    H02 <- u + C$a021 * k1 * dt + C$b021 * as.numeric(G1 %*% wdW)
+    H02 <- u + C$a021 * k1 * dt + C$b021 * .as_num(G1 %*% wdW)
     k2 <- f(H02, p, t)
-    H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * as.numeric(G1 %*% wdW)
+    H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * .as_num(G1 %*% wdW)
     k3 <- f(H03, p, t)
     G2 <- G1 * 0; G3 <- G1 * 0
     for (k in seq_len(m)) {
@@ -390,9 +390,9 @@ W2Ito1 <- function() {
       G3[, k] <- gG(H13)[, k]
     }
     unew <- u + C$alpha1 * k1 * dt + C$alpha2 * k2 * dt + C$alpha3 * k3 * dt +
-      as.numeric(G1 %*% (wdW * C$beta01 + chi1 * C$beta11)) + as.numeric(G2 %*% (wdW * C$beta02)) +
-      as.numeric(G3 %*% (wdW * C$beta03 + chi1 * C$beta13))
-    uhat <- u + k1 * dt + as.numeric(G1 %*% wdW)
+      .as_num(G1 %*% (wdW * C$beta01 + chi1 * C$beta11)) + .as_num(G2 %*% (wdW * C$beta02)) +
+      .as_num(G3 %*% (wdW * C$beta03 + chi1 * C$beta13))
+    uhat <- u + k1 * dt + .as_num(G1 %*% wdW)
     list(u = unew, err = unew - uhat, nf = 3L)
   })
 }
@@ -411,13 +411,13 @@ DRI1NM <- function() {
     wdW <- calc_threepoint_random(sqrt(3 * dt), C$NORMAL_ONESIX_QUANTILE, dW / sqrt(dt))
     chi1 <- (wdW^2 - dt) / 2
     k1 <- f(u, p, t)
-    g1 <- as.numeric(g(u, p, t))
+    g1 <- .as_num(g(u, p, t))
     H02 <- u + C$a021 * k1 * dt + C$b021 * g1 * wdW
     k2 <- f(H02, p, t + C$c02 * dt)
     H03 <- u + C$a032 * k2 * dt + C$a031 * k1 * dt + C$b031 * g1 * wdW
     k3 <- f(H03, p, t + C$c03 * dt)
-    g2 <- as.numeric(g(u + C$a121 * k1 * dt + C$b121 * g1 * sqdt, p, t + C$c12 * dt))
-    g3 <- as.numeric(g(u + C$a131 * k1 * dt + C$b131 * g1 * sqdt, p, t + C$c13 * dt))
+    g2 <- .as_num(g(u + C$a121 * k1 * dt + C$b121 * g1 * sqdt, p, t + C$c12 * dt))
+    g3 <- .as_num(g(u + C$a131 * k1 * dt + C$b131 * g1 * sqdt, p, t + C$c13 * dt))
     unew <- u + (C$alpha1 * k1 + C$alpha2 * k2 + C$alpha3 * k3) * dt +
       (g1 * C$beta11 + g2 * C$beta12 + g3 * C$beta13) * wdW +
       g2 * chi1 * C$beta22 / sqdt + g3 * chi1 * C$beta23 / sqdt
@@ -552,7 +552,7 @@ NON2 <- function() {
         ih[l, j] <- wdW[l] * wdZ[j] / sqdt
       }
       for (j in ms) for (k in ms) {
-        tmp <- as.numeric(G0 %*% ih[k, ]) / (4 * gam)
+        tmp <- .as_num(G0 %*% ih[k, ]) / (4 * gam)
         unew <- unew + gam * sqdt * (gG(u + tmp)[, k] - gG(u - tmp)[, k])
       }
     }
@@ -600,7 +600,7 @@ IRI1 <- function(autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve 
     if (is.null(Y1)) return(c(out, list(fail = TRUE, u = u)))
     k1 <- ctx$f(Y1, p, t)
     G1 <- gG(u, t)
-    gw <- as.numeric(G1 %*% wdW)
+    gw <- .as_num(G1 %*% wdW)
     Y2 <- stage(u + C$a021 * k1 * dt + C$b021 * gw)
     if (is.null(Y2)) return(c(out, list(fail = TRUE, u = u)))
     k2 <- ctx$f(Y2, p, t + C$c02 * dt)
@@ -744,7 +744,7 @@ constructNON <- function() .weak_tab("NON")
 #' @export
 constructNON2 <- function() .weak_tab("NON2")
 
-.wdot <- function(a, b) sum(as.numeric(a) * as.numeric(b))
+.wdot <- function(a, b) sum(.as_num(a) * .as_num(b))
 
 # Order conditions (checkRIOrder, checkRSOrder, checkNONOrder of tableaus.jl)
 

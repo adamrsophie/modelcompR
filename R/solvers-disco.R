@@ -70,15 +70,15 @@ set_discontinuity <- function(integrator) {
   found <- FALSE
   for (cb in cbs$continuous) {
     if (isFALSE(cb$maybe_discontinuity)) next
-    lo <- as.numeric(cb$condition(step$y0, step$t0, integ))
-    hi <- as.numeric(cb$condition(step$y1, step$t0 + step$dt, integ))
+    lo <- .as_num(cb$condition(step$y0, step$t0, integ))
+    hi <- .as_num(cb$condition(step$y1, step$t0 + step$dt, integ))
     for (j in seq_along(lo)) {
       if (!isTRUE(lo[j] * hi[j] < 0)) next
       g <- function(th) {
         if (th == 0) return(lo[j])
         if (th == 1) return(hi[j])
         uth <- interp(th, step$dt, step$y0, step$y1, step$k)
-        as.numeric(cb$condition(uth, step$t0 + th * step$dt, integ))[j]
+        .as_num(cb$condition(uth, step$t0 + th * step$dt, integ))[j]
       }
       if (theta_bp < 1 && !isTRUE(lo[j] * g(theta_bp) < 0)) next
       r <- .br_modab(g, 0, theta_bp, lo[j], g(theta_bp), .nl_default_tol(), 1000L)

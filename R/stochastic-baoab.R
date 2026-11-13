@@ -46,9 +46,9 @@ BAOAB <- function(gamma = 1, scale_noise = TRUE) {
   # initialize!: verify_f2 and the first kick derivative
   a$init <- function(ctx, t, u) {
     v <- u[iv]; q <- u[-iv]
-    if (any(as.numeric(f2(v, q, ctx$p, t)) != v))
+    if (any(.as_num(f2(v, q, ctx$p, t)) != v))
       stop("Algorithm BAOAB is not applicable if f2(p, q, t) != p", call. = FALSE)
-    list(k = as.numeric(f1(v, q, ctx$p, t)), c = NULL)
+    list(k = .as_num(f1(v, q, ctx$p, t)), c = NULL)
   }
   a$step <- function(ctx, g, u, t, dt, dW, type, delta, cache, ...) {
     p <- ctx$p
@@ -62,10 +62,10 @@ BAOAB <- function(gamma = 1, scale_noise = TRUE) {
     du1 <- u[iv]; u1 <- u[-iv]
     du2 <- du1 + half * dt * cache$k
     u2 <- u1 + half * dt * du2
-    noise <- rep_len(as.numeric(gd(du2, u2, p, t + dt * half)), nv) * dW
+    noise <- rep_len(.as_num(gd(du2, u2, p, t + dt * half)), nv) * dW
     du3 <- cache$c[1L] * du2 + cache$c[2L] * noise
     unew <- u2 + half * dt * du3
-    cache$k <- as.numeric(f1(du3, unew, p, t + dt))
+    cache$k <- .as_num(f1(du3, unew, p, t + dt))
     list(u = c(du3 + half * dt * cache$k, unew), err = NULL, k = NULL, cache = cache, nf = 2L)
   }
   a

@@ -76,7 +76,7 @@ DiscreteCallback <- function(condition, affect, initialize = NULL, finalize = NU
 PresetTimeCallback <- function(times, affect, initialize = NULL, filter_tstops = TRUE,
                                save_positions = c(TRUE, TRUE)) {
   if (!is.numeric(times)) stop("tstops must either be a number or a Vector", call. = FALSE)
-  times <- sort(as.numeric(times))
+  times <- sort(.as_num(times))
   # PresetTimeFunction of DiffEqCallbacks: the initialization adds the stops
   # and applies the affect when the initial time is one of the times
   init <- function(integ) {

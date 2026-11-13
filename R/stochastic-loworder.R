@@ -78,8 +78,8 @@ PCEuler <- function(ggprime, theta = 1 / 2, eta = 1 / 2) {
         next
       }
       ng <- ng + 1L
-      k <- as.numeric(g(u, p, t))
-      k1 <- (as.numeric(g(u + k * sqdt, p, t)) - k) / div[ng]
+      k <- .as_num(g(u, p, t))
+      k1 <- (.as_num(g(u + k * sqdt, p, t)) - k) / div[ng]
       u <- if (s == "C") u - (dt / 2) * k1 else u + k * dW + 0.5 * dW^2 * k1
     }
     list(u = u, nf = 1L)

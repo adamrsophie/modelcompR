@@ -78,7 +78,7 @@ NULL
   e <- a$eigen_est
   nf <- 0L
   if (!is.null(e)) {
-    st$eig <- as.numeric(if (is.function(e)) e(u, ctx$p, t) else e)
+    st$eig <- .as_num(if (is.function(e)) e(u, ctx$p, t) else e)
   } else {
     nf <- 1L + .stab_maxeig(ctx, st, t, u, ctx$f(u, ctx$p, t), FALSE, 50L)
   }
@@ -118,10 +118,10 @@ NULL
 
 .srock_g <- function(g, u, p, t, type) {
   G <- g(u, p, t)
-  if (type == "general") as.matrix(G) else as.numeric(G)
+  if (type == "general") as.matrix(G) else .as_num(G)
 }
 
-.srock_mv <- function(G, v) as.numeric(G %*% v)
+.srock_mv <- function(G, v) .as_num(G %*% v)
 
 .srock_alg <- function(name, order, step, interpretation = "Ito", ...) {
   alg <- .new_sde_alg(name, order, FALSE, NULL, interpretation = interpretation, ...)

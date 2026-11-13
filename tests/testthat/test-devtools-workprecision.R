@@ -23,8 +23,8 @@ test_that("WorkPrecisionSet and WorkPrecision of ODEs match DiffEqDevTools", {
   expect_equal(wps[[2]]$errors$l2, c(0.00024379759703634882, 1.3615067246749641e-5, 8.023536739292566e-7),
     tolerance = 1e-9)
   expect_equal(wps[[1]]$tags, c("order_1", "fixed_step", "explicit"))
-  # Julia tags RK4 adaptive; the RK4 of R has no error estimate.
-  expect_equal(wps[[2]]$tags, c("order_4", "fixed_step", "explicit"))
+  # RK4 is adaptive (Shampine's residual estimate), as Julia tags it
+  expect_equal(wps[[2]]$tags, c("order_4", "adaptive", "explicit"))
   expect_equal(available_errors(wps), c("final", "l2", "L2"))
   wp <- WorkPrecision(prob, RK4(), dv_tols, dv_tols, c(1 / 4, 1 / 8, 1 / 16), numruns = 2, error_estimate = "l_inf",
     name = "R", adaptive = FALSE)
@@ -35,7 +35,7 @@ test_that("WorkPrecisionSet and WorkPrecision of ODEs match DiffEqDevTools", {
   expect_equal(wp$errors$final, c(1.9972291112613227e-6, 4.0023480279982593e-7, 7.08805942273294e-8),
     tolerance = 1e-8)
   expect_equal(vapply(wp$stats, function(s) as.numeric(s$naccept), 0), c(5, 6, 8))
-  ref <- solve(prob, RK4(), dt = 1 / 256)
+  ref <- solve(prob, RK4(), dt = 1 / 256, adaptive = FALSE)
   wp <- WorkPrecision(dv_wp_prob(FALSE), Heun(), dv_tols, dv_tols, c(1 / 8, 1 / 16, 1 / 32), numruns = 2,
     appxsol = ref, error_estimate = "L2")
   expect_equal(wp$errors$L2, c(0.0004924589093903681, 6.096040639626874e-5, 6.60937193000892e-6), tolerance = 1e-9)

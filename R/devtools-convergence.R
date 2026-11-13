@@ -103,7 +103,7 @@
   lapply(ts, function(s) {
     hit <- which(W$t == s)
     if (length(hit)) return(Wm[hit[1L], ])
-    apply(Wm, 2L, function(col) stats::approx(W$t, col, xout = s, rule = 2, ties = "ordered")$y)
+    apply(Wm, 2L, function(col) .approx_hold(W$t, col, s))
   })
 }
 

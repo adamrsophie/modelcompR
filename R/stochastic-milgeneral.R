@@ -79,7 +79,7 @@ RKMilGeneral <- function(interpretation = c("Ito", "Stratonovich"), ii_approx = 
 # _unpack_dZ_to_coefficients after scaling: X (m x n), Y (n x m) and the
 # tail ((m^2 + m) / 2), packed one after the other.
 .rkmg_coeffs <- function(dZ, m, h) {
-  z <- .rkmg_scale(as.numeric(dZ), h)
+  z <- .rkmg_scale(.as_num(dZ), h)
   ntail <- (m^2 + m) %/% 2
   n <- (length(z) - ntail) %/% (2L * m)
   if (n <= 0L) return(NULL)
@@ -125,7 +125,7 @@ RKMilGeneral <- function(interpretation = c("Ito", "Stratonovich"), ii_approx = 
   if (is.na(i0) || !length(i1) || i1 - i0 < 2L) return(NULL)
   inner <- lapply((i0 + 1L):i1, function(n)
     list(h = tg[n] - tg[n - 1L], dW = Wg[n, ] - Wg[n - 1L, ], dZ = if (!is.null(Zg)) Zg[n, ] - Zg[n - 1L, ]))
-  W0 <- as.numeric(pe$path(t)); W1 <- as.numeric(pe$path(te))
+  W0 <- .as_num(pe$path(t)); W1 <- .as_num(pe$path(te))
   first <- if (tg[i0] > t + tol) list(list(h = tg[i0] - t, dW = Wg[i0, ] - W0, dZ = NULL))
   last <- if (tg[i1] < te - tol) list(list(h = te - tg[i1], dW = W1 - Wg[i1, ], dZ = NULL))
   .rkmg_chain(.rkmg_grid_ends(first, inner, last), m)
@@ -179,9 +179,9 @@ RKMilGeneral <- function(interpretation = c("Ito", "Stratonovich"), ii_approx = 
       for (i in seq_len(m)) {
         ggprime <- (as.matrix(g(K + sqdt * L[, i], p, t)) - L) / sqdt
         gnorm <- .rkmg_norm_acc(gnorm, .rms(ggprime))
-        mil <- mil + as.numeric(ggprime %*% J[i, ])
+        mil <- mil + .as_num(ggprime %*% J[i, ])
       }
-      unew <- K + as.numeric(L %*% dW) + mil
+      unew <- K + .as_num(L %*% dW) + mil
     }
     du2 <- f(K, p, t + dt)
     err <- if (!general) {

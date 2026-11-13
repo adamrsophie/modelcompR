@@ -37,8 +37,10 @@ An algorithm object.
 \description{
 Algorithms for \code{\link[=solve]{solve()}} on ODE problems, named as in OrdinaryDiffEq.jl.
 \code{Tsit5()} is the Tsitouras 5(4) Runge-Kutta method with its free 4th
-order interpolant, the default for nonstiff problems. \code{Euler()} and
-\code{RK4()} are fixed step methods (pass \code{dt}). \code{BS3()} is the
+order interpolant, the default for nonstiff problems. \code{Euler()} is a
+fixed step method (pass \code{dt}); \code{RK4()} is the classical fourth order
+method, adaptive with Shampine's residual control error estimate (with
+\code{adaptive = FALSE} and \code{dt} it takes fixed steps). \code{BS3()} is the
 Bogacki-Shampine 3(2) method, \code{DP5()} the Dormand-Prince 5(4) method
 with its free dense output, and \code{Vern7()} and \code{Vern9()} are Verner's
 efficient 7(6) and 9(8) methods with their high order interpolants

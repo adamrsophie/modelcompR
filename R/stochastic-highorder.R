@@ -93,8 +93,8 @@ checkSRIOrder <- function(tableau, tol = 1e-6) {
   t <- tableau
   e <- rep(1, length(t$alpha))
   s <- function(b, M) sum(b %*% M)
-  sq <- function(M) as.numeric(M %*% e)^2
-  B1e <- as.numeric(t$B1 %*% e)
+  sq <- function(M) .as_num(M %*% e)^2
+  B1e <- .as_num(t$B1 %*% e)
   c(abs(sum(t$alpha) - 1) < tol, abs(sum(t$beta1) - 1) < tol, abs(sum(t$beta2)) < tol, abs(sum(t$beta3)) < tol,
     abs(sum(t$beta4)) < tol,
     abs(s(t$beta1, t$B1)) < tol, abs(s(t$beta2, t$B1) - 1) < tol, abs(s(t$beta3, t$B1)) < tol,

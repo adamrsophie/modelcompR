@@ -18,7 +18,7 @@
     n <- L$size[2L]
     if (!is.na(n) && length(u) != n && length(u) == n * n) {
       U <- matrix(u, n, n)
-      return(as.numeric(.sop_matrix(update_coefficients(L, U, p, t), n) %*% U))
+      return(.as_num(.sop_matrix(update_coefficients(L, U, p, t), n) %*% U))
     }
     op_apply(L, u, u, p, t)
   }
@@ -47,7 +47,7 @@
 .lin_A <- function(L, u, p, t) .sop_matrix(update_coefficients(L, u, p, t), length(u))
 
 # exponential!(X, ExpMethodGeneric()) * v
-.lin_expmul <- function(X, v) as.numeric(.eu_exp_generic(X) %*% v)
+.lin_expmul <- function(X, v) .as_num(.eu_exp_generic(X) %*% v)
 
 .lie_alg <- function(name, order, core, krylov = FALSE, m = 30L, iop = 0L, adaptive = FALSE, ...) {
   krylov <- isTRUE(krylov)
@@ -57,7 +57,7 @@
   kexpv <- function(t, A, v) .eu_expv(t, A, v, m = min(m, length(v)), iop = iop)
   step <- function(ctx, t, u, dt, cache) {
     L <- .lin_operator(ctx, name)
-    r <- core(ctx, L, t, as.numeric(u), dt, kexpv)
+    r <- core(ctx, L, t, .as_num(u), dt, kexpv)
     fl <- ctx$f(r$u, ctx$p, t + dt)
     res <- list(u = r$u, k = list(cache$fsal, fl), cache = list(fsal = fl), nf = 1L)
     res$err <- r$err
@@ -131,7 +131,7 @@ MagnusLeapfrog <- function(krylov = FALSE, m = 30, iop = 0)
     } else {
       # u_{n+1} = exp(2 dt A(u_n, t_n)) u_{n-1}
       A <- .lin_A(L, u, ctx$p, t)
-      u2 <- as.numeric(ctx$uprev2)
+      u2 <- .as_num(ctx$uprev2)
       list(u = if (krylov) kexpv(2 * dt, A, u2) else .lin_expmul(2 * dt * A, u2))
     }
   }, krylov, m, iop)
@@ -320,7 +320,7 @@ CG2 <- function(krylov = FALSE, m = 30, iop = 0)
   .lie_alg("CG2", 2, function(ctx, L, t, u, dt, kexpv) {
     k1 <- dt * .lin_A(L, u, ctx$p, t)
     k2 <- dt * .lin_A(L, .lin_expmul(k1, u), ctx$p, t)
-    list(u = as.numeric((.eu_exp_generic((1 / 2) * (k1)) %*% .eu_exp_generic((1 / 2) * k2)) %*% u))
+    list(u = .as_num((.eu_exp_generic((1 / 2) * (k1)) %*% .eu_exp_generic((1 / 2) * k2)) %*% u))
   }, krylov, m, iop)
 
 #' @rdname linear_lie_methods
@@ -332,9 +332,9 @@ CG3 <- function(krylov = FALSE, m = 30, iop = 0)
     A <- .lin_A(L, u, p, t)
     v2 <- .lin_expmul((3 / 4) * dt * A, u)
     B <- .lin_A(L, v2, p, t + (3 * dt / 4))
-    v3 <- as.numeric(E((119 / 216) * dt * B) %*% (E((17 / 108) * dt * A) %*% u))
+    v3 <- .as_num(E((119 / 216) * dt * B) %*% (E((17 / 108) * dt * A) %*% u))
     C <- .lin_A(L, v3, p, t + (17 * dt / 24))
-    list(u = as.numeric(((E(dt * (24 / 17) * C) %*% E(dt * (-2 / 3) * B)) %*% E(dt * (13 / 51) * A)) %*% u))
+    list(u = .as_num(((E(dt * (24 / 17) * C) %*% E(dt * (-2 / 3) * B)) %*% E(dt * (13 / 51) * A)) %*% u))
   }, krylov, m, iop)
 
 #' @rdname linear_lie_methods
@@ -346,18 +346,18 @@ CG4a <- function(krylov = FALSE, m = 30, iop = 0)
     A <- .lin_A(L, u, p, t)
     v2 <- .lin_expmul((0.8177227988124852) * dt * A, u)
     B <- .lin_A(L, v2, p, t + (0.8177227988124852 * dt))
-    v3 <- as.numeric(E((0.3199876375476427) * dt * B) %*% (E((0.0659864263556022) * dt * A) %*% u))
+    v3 <- .as_num(E((0.3199876375476427) * dt * B) %*% (E((0.0659864263556022) * dt * A) %*% u))
     C <- .lin_A(L, v3, p, t + (0.3859740639032449 * dt))
-    v4 <- as.numeric(E((0.9214417194464946) * dt * C) %*% (E((0.4997857776773573) * dt * B) %*%
+    v4 <- .as_num(E((0.9214417194464946) * dt * C) %*% (E((0.4997857776773573) * dt * B) %*%
                                                            (E((-1.0969984448371582) * dt * A) %*% u)))
     D <- .lin_A(L, v4, p, t + (0.3242290522866937 * dt))
-    v5 <- as.numeric((((E((0.3552358559023322) * dt * D) %*% E((0.2390958372307326) * dt * C)) %*%
+    v5 <- .as_num((((E((0.3552358559023322) * dt * D) %*% E((0.2390958372307326) * dt * C)) %*%
                         E((1.3918565724203246) * dt * B)) %*% E((-1.1092979392113465) * dt * A)) %*% u)
     F <- .lin_A(L, v5, p, t + (0.8768903263420429 * dt))
     M <- (((E(dt * (0.3322195591068374) * F) %*% E(dt * (-0.1907142565505889) * D)) %*%
              E(dt * (0.739781398537078) * C)) %*% E(dt * (-0.018369853156402) * B)) %*%
       E(dt * (0.1370831520630755) * A)
-    list(u = as.numeric(M %*% u))
+    list(u = .as_num(M %*% u))
   }, krylov, m, iop)
 
 #' @rdname linear_lie_methods
@@ -408,7 +408,7 @@ CayleyEuler <- function()
     I <- diag(n)
     # cay(A) = inv(I - A / 2) (I + A / 2); the step is V (U V') (in place)
     V <- solve(I - (1 / 2) * X) %*% (I + (1 / 2) * X)
-    list(u = as.numeric(V %*% (U %*% t(V))))
+    list(u = .as_num(V %*% (U %*% t(V))))
   })
 
 #' @rdname linear_lie_methods

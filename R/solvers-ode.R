@@ -41,6 +41,41 @@
             class = c(name, "ODEAlgorithm"))
 }
 
+# The initial state of a raw problem, kept as SciMLBase keeps u0: a real or
+# complex vector with its names, or an array (a matrix state) with its dim.
+.as_u0 <- function(u0) {
+  d <- dim(u0)
+  v <- unlist(u0)
+  nm <- names(v)
+  v <- .as_num(v)
+  if (length(d) > 1L && prod(d) == length(v)) {
+    dim(v) <- d
+    return(v)
+  }
+  names(v) <- nm
+  v
+}
+
+# as.numeric() of the steppers that keeps complex values complex (a
+# complex state, as OrdinaryDiffEq allows; allowscomplex()).
+.as_num <- function(x) if (is.complex(x)) as.vector(x) else as.numeric(x)
+
+# The flat state vector of the driver (complex stays complex).
+.state_vec <- function(u0) {
+  v <- .as_num(u0)
+  if (is.null(dim(u0))) names(v) <- names(u0)
+  v
+}
+
+# f(u, p, t) of a problem with an array state: the driver keeps u flat and
+# hands f the array of the shape of u0, as the integrators of OrdinaryDiffEq
+# keep u an array; the result is flattened again.
+.shape_f <- function(f, d) {
+  if (!is.function(f) || length(d) < 2L) return(f)
+  force(d)
+  function(u, p, t, ...) as.vector(f(array(u, d), p, t, ...))
+}
+
 #' @export
 print.ODEAlgorithm <- function(x, ...) {
   cat(x$name, "()\n", sep = "")
@@ -74,8 +109,10 @@ print.ODEAlgorithm <- function(x, ...) {
 #'
 #' Algorithms for [solve()] on ODE problems, named as in OrdinaryDiffEq.jl.
 #' `Tsit5()` is the Tsitouras 5(4) Runge-Kutta method with its free 4th
-#' order interpolant, the default for nonstiff problems. `Euler()` and
-#' `RK4()` are fixed step methods (pass `dt`). `BS3()` is the
+#' order interpolant, the default for nonstiff problems. `Euler()` is a
+#' fixed step method (pass `dt`); `RK4()` is the classical fourth order
+#' method, adaptive with Shampine's residual control error estimate (with
+#' `adaptive = FALSE` and `dt` it takes fixed steps). `BS3()` is the
 #' Bogacki-Shampine 3(2) method, `DP5()` the Dormand-Prince 5(4) method
 #' with its free dense output, and `Vern7()` and `Vern9()` are Verner's
 #' efficient 7(6) and 9(8) methods with their high order interpolants
@@ -170,17 +207,38 @@ Euler <- function() {
 #' @rdname ode_algorithms
 #' @export
 RK4 <- function() {
-  .new_alg("RK4", 4L, adaptive = FALSE,
-    step = function(ctx, t, u, dt, cache) {
-      f <- ctx$f; p <- ctx$p
-      k1 <- cache$fsal
-      k2 <- f(u + dt / 2 * k1, p, t + dt / 2)
-      k3 <- f(u + dt / 2 * k2, p, t + dt / 2)
-      k4 <- f(u + dt * k3, p, t + dt)
-      unew <- u + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
-      k5 <- f(unew, p, t + dt)
-      list(u = unew, err = NULL, k = list(k1, k5), cache = list(fsal = k5), nf = 4L)
-    })
+  .new_alg("RK4", 4L, step = .rk4_step)
+}
+
+# perform_step! of RK4ConstantCache (OrdinaryDiffEqLowOrderRK
+# fixed_timestep_perform_step.jl). Adaptive, the error is Shampine's
+# residual control estimate (Solving ODEs and DDEs with residual control,
+# 2005): the defect of the Hermite interpolant at the two Gauss points,
+# 2.1342 max(e1, e2). Out of place array arithmetic, so @muladd fuses nothing.
+.rk4_step <- function(ctx, t, u, dt, cache) {
+  f <- ctx$f; p <- ctx$p
+  halfdt <- dt / 2
+  k1 <- cache$fsal
+  ttmp <- t + halfdt
+  k2 <- f(u + halfdt * k1, p, ttmp)
+  k3 <- f(u + halfdt * k2, p, ttmp)
+  k4 <- f(u + dt * k3, p, t + dt)
+  unew <- u + (dt / 6) * (2 * (k2 + k3) + (k1 + k4))
+  k5 <- f(unew, p, t + dt)
+  res <- list(u = unew, err = NULL, k = list(k1, k5), cache = list(fsal = k5), nf = 4L)
+  if (isTRUE(ctx$adaptive)) {
+    resid <- function(s) {
+      ps <- (1 - s) * u + s * unew + s * (s - 1) * ((1 - 2 * s) * (unew - u) + (s - 1) * dt * k1 + s * dt * k5)
+      pprime <- k1 + s * (-4 * dt * k1 - 2 * dt * k5 - 6 * u + s * (3 * dt * k1 + 3 * dt * k5 + 6 * u - 6 * unew) +
+                            6 * unew) / dt
+      .err_norm(dt * (f(ps, p, t + s * dt) - pprime), u, unew, ctx$abstol, ctx$reltol)
+    }
+    e1 <- resid(1 / 2 - sqrt(3) / 6)
+    e2 <- resid(1 / 2 + sqrt(3) / 6)
+    res$nf <- 6L
+    res$EEst <- 2.1342 * max(e1, e2)
+  }
+  res
 }
 
 # ---------------------------------------------------------------------------
@@ -199,6 +257,13 @@ RK4 <- function() {
   if (!is.null(.ode_norm$f)) return(.ode_norm$f(x))
   n <- length(x)
   if (n == 0L) return(0)
+  # complex states: the sum of abs2 (re^2 + im^2) of the elements, real(x) / n
+  if (is.complex(x)) {
+    a2 <- Re(x) * Re(x) + Im(x) * Im(x)
+    s <- 0
+    for (v in a2) s <- s + v
+    return(sqrt(s / n))
+  }
   s <- x[1L] * x[1L]
   k <- 2L
   if (n >= 9L) {
@@ -299,9 +364,9 @@ RK4 <- function() {
 # sums of two Float32 values are exact in double precision, so every fused
 # multiply add rounds once, as in Julia. Matching it bit for bit keeps the
 # step sizes equal to Julia's.
-.f32 <- function(x) readBin(writeBin(as.numeric(x), raw(), size = 4L), "double", n = length(x), size = 4L)
+.f32 <- function(x) readBin(writeBin(.as_num(x), raw(), size = 4L), "double", n = length(x), size = 4L)
 
-.f32_bits <- function(x) readBin(writeBin(as.numeric(x), raw(), size = 4L), "integer", n = length(x), size = 4L)
+.f32_bits <- function(x) readBin(writeBin(.as_num(x), raw(), size = 4L), "integer", n = length(x), size = 4L)
 
 .f32_from_bits <- function(b) readBin(writeBin(as.integer(b), raw(), size = 4L), "double", n = length(b), size = 4L)
 
@@ -487,6 +552,7 @@ RK4 <- function() {
 solve.ODEProblem <- function(a, b, ...) {
   alg <- if (missing(b) || is.null(b)) .default_ode_alg(a) else b
   if (!inherits(alg, "ODEAlgorithm")) stop("not an ODE algorithm: ", class(alg)[1L], call. = FALSE)
+  .check_complex(a, alg)
   # algorithms that wrap the solve (GlobalRichardson, the GLEE methods; R/globaldiffeq.R)
   if (is.function(alg$solve_override))
     return(alg$solve_override(a, alg, utils::modifyList(a$kwargs %||% list(), list(...))))
@@ -553,8 +619,8 @@ solve.ODEProblem <- function(a, b, ...) {
   ss <- opts$save_start %||% (se || !length(sa) || length(sa) == 1L || t0 %in% sa)
   send <- opts$save_end %||% TRUE
   ts <- if (!length(sa)) c(if (ss) t0, if (send) tf) else if (length(sa) == 1L) .jl_range(t0, sa, tf)
-        else as.numeric(sa)
-  .new_ode_solution(t = as.numeric(ts), u = matrix(numeric(), length(ts), 0L), prob = prob, alg = alg,
+        else .as_num(sa)
+  .new_ode_solution(t = .as_num(ts), u = matrix(numeric(), length(ts), 0L), prob = prob, alg = alg,
                     retcode = "Success", dense = TRUE)
 }
 
@@ -609,7 +675,7 @@ solve.ODEProblem <- function(a, b, ...) {
   # maxiters of OrdinaryDiffEqCore solve.jl: 1e6 for an adaptive algorithm
   # (anyadaptive, whatever the adaptive option), else no limit
   if (is.null(opts$maxiters)) maxiters <- if (any(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))) 1e6 else Inf
-  saveat <- sort(unique(as.numeric(opts$saveat %||% numeric())), decreasing = tdir < 0)
+  saveat <- sort(unique(.as_num(opts$saveat %||% numeric())), decreasing = tdir < 0)
   if (length(saveat) == 1L && !is.null(opts$saveat) && length(opts$saveat) == 1L) {
     if (!is.finite(tf - t0)) stop("saveat as a step needs a finite time span", call. = FALSE)
     # initialize_saveat: the range (t0 + s):s:tf of Julia, with the start
@@ -623,7 +689,7 @@ solve.ODEProblem <- function(a, b, ...) {
   save_end <- opts$save_end %||% (!length(saveat) || any(saveat == tf | abs(saveat - tf) < 1e-14, na.rm = TRUE))
   # default_linear_interpolation (VerletLeapfrog): no dense output by default
   dense <- opts$dense %||% (!length(saveat) && save_everystep && !isTRUE(alg$linear_interpolation))
-  tstops <- as.numeric(c(unlist(opts$tstops), unlist(opts$sys_tstops)))
+  tstops <- .as_num(c(unlist(opts$tstops), unlist(opts$sys_tstops)))
   # tdir * t comparisons (not (t - tf) * tdir), so infinite times compare
   tstops <- tstops[tdir * tstops > tdir * t0 & tdir * tstops <= tdir * tf]
   tstops <- sort(unique(c(tstops, tf)), decreasing = tdir < 0)
@@ -632,8 +698,9 @@ solve.ODEProblem <- function(a, b, ...) {
   # the driver state, for the integrator interface (R/integrator-interface.R)
   integ$.I <- environment()
   integ$t <- t0
-  integ$u <- as.numeric(prob$u0)
-  names(integ$u) <- names(prob$u0)
+  # the state is a flat vector inside the driver: complex states stay
+  # complex, an array state is passed to f with its shape (.shape_f)
+  integ$u <- .state_vec(prob$u0)
   integ$p <- prob$p
   integ$tprev <- t0
   integ$uprev <- integ$u
@@ -641,10 +708,10 @@ solve.ODEProblem <- function(a, b, ...) {
   integ$u_modified <- FALSE
   integ$prob <- prob
   integ$sol_events <- list()
-  if (is_dae) integ$du <- as.numeric(prob$du0)
+  if (is_dae) integ$du <- .as_num(prob$du0)
   M <- prob$f$mass_matrix
   mm <- !is_dae && !.is_identity_mass(M)
-  ctx <- list(f = prob$f$f, fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
+  ctx <- list(f = .shape_f(prob$f$f, dim(prob$u0)), fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
               p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac,
               tgrad = prob$f$tgrad, abstol = abstol, reltol = reltol, n = length(integ$u),
               adaptive = adaptive, composite = length(algs) > 1L, dae = is_dae,
@@ -694,6 +761,8 @@ solve.ODEProblem <- function(a, b, ...) {
                              events = integ$sol_events, dense = dense)
     env <- .sol_env(sol)
     ctx$lazy_nf$sol_env <- env
+    # an array state: sol$u and sol(t) give the arrays (SciMLBase keeps u0's shape)
+    if (length(dim(prob$u0)) > 1L && ncol(U) == length(prob$u0)) env$u_dim <- dim(prob$u0)
     if (!is.null(opts$save_idxs)) env$save_idxs <- get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
     if (length(integ$param_p) > 1L)
       env$param_history <- list(t = integ$param_t, p = do.call(rbind, integ$param_p))
@@ -712,7 +781,7 @@ solve.ODEProblem <- function(a, b, ...) {
       early <- finish("InitialFailure", t0, list(integ$u), list())
       done <- TRUE
     } else {
-      integ$u[] <- as.numeric(iv$u0)
+      integ$u[] <- .as_num(iv$u0)
       integ$p <- iv$p
       ctx$p <- iv$p
     }
@@ -772,7 +841,7 @@ solve.ODEProblem <- function(a, b, ...) {
   css <- lapply(algs, function(a) .ctrl_state())
   caches[[cur]] <- algs[[cur]]$init(ctx, integ$t, integ$u)
   add_init(caches[[cur]])
-  if (!is_dae && is.null(prob$nv) && is.numeric(caches[[cur]]$fsal))
+  if (!is_dae && is.null(prob$nv) && (is.numeric(caches[[cur]]$fsal) || is.complex(caches[[cur]]$fsal)))
     .check_f_length(caches[[cur]]$fsal, length(integ$u))
   start_dt <- function(a, cache) {
     if (is_dae) return(1e-6 * abs(tf - t0))
@@ -1071,7 +1140,7 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     # (and the parameters), so the FSAL derivative is evaluated again
     limiter <- opts$step_limiter %||% a$step_limiter
     if (!is.null(limiter)) {
-      ul <- as.numeric(limiter(res$u, integ, integ$p, tnew))
+      ul <- .as_num(limiter(res$u, integ, integ$p, tnew))
       if (length(ul) != length(res$u)) stop("step_limiter must return the state vector", call. = FALSE)
       res$u <- ul
       if (!is_dae && isTRUE(res$cache$defer_fsal)) {

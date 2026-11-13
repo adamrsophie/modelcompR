@@ -46,7 +46,8 @@
     u = {
       # save_idxs: the saved components (symbolic indexing keeps them all)
       U <- if (is.null(env$save_idxs)) env$U else env$U[, env$save_idxs, drop = FALSE]
-      lapply(seq_len(nrow(U)), function(i) U[i, ])
+      d <- if (is.null(env$save_idxs)) env$u_dim
+      lapply(seq_len(nrow(U)), function(i) if (is.null(d)) U[i, ] else array(U[i, ], d))
     },
     retcode = env$retcode,
     prob = env$prob,
@@ -220,7 +221,14 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
            "observed variable or using DataInterpolations.jl.", call. = FALSE)
   }
   if (is.null(idxs)) {
-    if (length(tq) == 1L) return(U[1L, ])
+    # save_idxs: the interpolation gives the saved components only
+    if (!is.null(env$save_idxs)) U <- U[, env$save_idxs, drop = FALSE]
+    if (length(tq) == 1L) {
+      v <- U[1L, ]
+      # an array state keeps its shape
+      if (is.null(env$save_idxs) && !is.null(env$u_dim)) v <- array(v, env$u_dim)
+      return(v)
+    }
     return(U)
   }
   if (is.list(idxs) && !is_sym(idxs)) {
@@ -290,9 +298,11 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
   ts <- env$t
   if (isTRUE(env$dense) && length(ts) > 1L) ts <- sort(unique(c(seq(ts[1L], ts[length(ts)], length.out = n), env$t)))
   if (is.null(idxs)) {
-    vals <- if (isTRUE(env$dense)) x(ts) else env$U
-    if (!is.matrix(vals)) vals <- matrix(vals, ncol = ncol(env$U))
-    labs <- colnames(env$U)
+    # the saved components (save_idxs), labeled by name or by state index
+    cols <- env$save_idxs %||% seq_len(ncol(env$U))
+    vals <- if (isTRUE(env$dense)) x(ts) else env$U[, cols, drop = FALSE]
+    if (!is.matrix(vals)) vals <- matrix(vals, ncol = length(cols))
+    labs <- colnames(env$U)[cols] %||% as.character(cols)
   } else {
     idl <- if (is.list(idxs) && !is_sym(idxs)) idxs else if (is.atomic(idxs)) as.list(idxs) else list(idxs)
     vals <- if (isTRUE(env$dense)) x(ts, idxs = idl) else x[idl]
@@ -478,24 +488,104 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
     }))
   if (identical(interp, .sde_linear_interp))
     return(spec(1L, function(theta, dt, y0, y1, k, n) (y1 - y0) / dt))
+  # RadauIIA3, 5, 9 and AdaptiveRadau have only Val{0}: the generic
+  # fallback of _ode_interpolant, the Hermite interpolant of k[1] = f(y0)
+  # and k[2] = f(y1)
+  if (identical(interp, .firk_radau_interp))
+    return(spec(3L, function(theta, dt, y0, y1, k, n) .hermite_dn(theta, dt, y0, y1, k[1:2], n)))
+  if (identical(interp, .nordbdf_interp))
+    return(spec(3L, .nordbdf_dinterp))
+  # the MIRK interpolant has Val{0} and Val{1} (BoundaryValueDiffEqMIRK
+  # interpolation.jl): sum_stages with the derivative weights w'
+  if (identical(interp, .mirk_interp))
+    return(spec(1L, function(theta, dt, y0, y1, k, n) .mirk_eval(k$name, k$K, y0, dt, theta, deriv = TRUE)))
+  if (identical(interp, .dopt_interp))
+    return(spec(1L, .dopt_dinterp))
   NULL
+}
+
+# d^m/dt^m of the Nordsieck polynomial sum_j zn[j] s^j (bdf_interpolants.jl
+# of OrdinaryDiffEqBDF): Horner over j = n, ..., m + 1 with the falling
+# factorial (j - 1) ... (j - m), divided by dt^m. Without columns (before
+# the first step) the interpolant is linear.
+.nordbdf_dinterp <- function(theta, dt, y0, y1, k, n) {
+  kk <- if (is.environment(k)) k$k else NULL
+  if (is.null(kk)) return(if (n == 1L) (y1 - y0) / dt else 0 * y0)
+  s <- theta - 1
+  nk <- length(kk)
+  out <- 0 * kk[[1L]]
+  if (nk > n) for (j in nk:(n + 1L)) {
+    cj <- 1
+    for (r in 0:(n - 1L)) cj <- cj * (j - 1L - r)
+    out <- .fma(out, s, cj * kk[[j]])
+  }
+  out / switch(n, dt, dt * dt, dt * dt * dt)
+}
+
+# The time derivative of the collocation interpolant of a dynamic
+# optimization solution (.dopt_interp): of the Lagrange polynomial through
+# the stage values, of x_k + h sum_l beta_l(theta) f_l for the differential
+# states, or of the cubic Hermite form.
+.dopt_dinterp <- function(theta, dt, y0, y1, k, n) {
+  th <- k$th
+  if (length(unique(round(th, 12))) == length(th)) {
+    dl <- vapply(seq_along(th), function(i) {
+      others <- th[-i]
+      sum(vapply(seq_along(others), function(m)
+        prod((theta - others[-m]) / (th[i] - others[-m])) / (th[i] - others[m]), 0))
+    }, 0)
+    out <- .as_num(crossprod(k$V, dl)) / dt
+  } else {
+    out <- (y1 - y0) / dt
+  }
+  if (length(k$diff)) {
+    j <- k$diff
+    if (!is.null(k$K)) {
+      q <- ncol(k$beta)
+      bt <- .as_num(k$beta %*% (seq_len(q) * theta^(seq_len(q) - 1L)))
+      out[j] <- .as_num(crossprod(k$K, bt))
+    } else {
+      d00 <- 6 * theta^2 - 6 * theta; d10 <- 3 * theta^2 - 4 * theta + 1
+      d01 <- -6 * theta^2 + 6 * theta; d11 <- 3 * theta^2 - 2 * theta
+      out[j] <- (d00 * y0[j] + d01 * y1[j]) / dt + d10 * k$f0 + d11 * k$f1
+    }
+  }
+  names(out) <- names(y0)
+  out
+}
+
+# The generic _ode_interpolant of OrdinaryDiffEqCore for a cache without
+# its own Val{n} method: the linear interpolant (Val{1} only) without two
+# dense output vectors, else the Hermite interpolant of k[1] and k[2] (orders up to 3).
+# NULL when the step's k is not a list of state sized vectors.
+.generic_deriv_spec <- function(step) {
+  k <- step$k
+  n <- length(step$y0)
+  if (!length(k) || (is.list(k) && length(k) < 2L))
+    return(list(max = 1L, f = function(theta, dt, y0, y1, k, n) (y1 - y0) / dt))
+  ok <- is.list(k) && !is.environment(k) && all(vapply(k[1:2], function(v) (is.numeric(v) || is.complex(v)) &&
+                                                         length(v) == n, TRUE))
+  if (!ok) return(NULL)
+  list(max = 3L, f = function(theta, dt, y0, y1, k, n) .hermite_dn(theta, dt, y0, y1, k[1:2], n))
 }
 
 # The n-th derivative of the interpolant of a dense step at time t.
 .step_deriv <- function(step, t, n, dt = step$dt) {
   # dt as in .step_value: sol(t) passes the difference of the saved times
-  sp <- .interp_deriv_spec(step$interp)
+  sp <- .interp_deriv_spec(step$interp) %||% .generic_deriv_spec(step)
   if (is.null(sp)) stop("the interpolant of this method has no derivatives in the port", call. = FALSE)
   if (!is.na(sp$max) && n > sp$max) .deriv_order_error()
   theta <- if (dt == 0) 1 else (t - step$t0) / dt
-  as.numeric(sp$f(theta, dt, step$y0, step$y1, step$k, n))
+  v <- sp$f(theta, dt, step$y0, step$y1, step$k, n)
+  if (is.complex(v)) as.vector(v) else .as_num(v)
 }
 
 # Linear interpolation between the saved points (linear_interpolant), the
 # value or (deriv = 1) the slope, with OrdinaryDiffEq's left continuity
 # ts[i-] < t <= ts[i+] in the direction of integration, so a backward
 # solution and a time saved twice at an event are handled. Outside the
-# saved times the value is held (rule = 2 of approx).
+# saved times the end intervals extrapolate (ode_interpolation does not
+# clamp theta).
 .linear_states <- function(ts, U, tq, deriv) {
   n <- length(ts)
   if (deriv > 1L) .deriv_order_error()
@@ -506,6 +596,5 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
   dt <- ts[hi] - ts[lo]
   if (deriv == 1L) return((U[hi, , drop = FALSE] - U[lo, , drop = FALSE]) / dt)
   theta <- ifelse(dt == 0, 1, (tq - ts[lo]) / dt)
-  theta <- pmin(pmax(theta, 0), 1)
   .fma(theta, U[hi, , drop = FALSE], (1 - theta) * U[lo, , drop = FALSE])
 }

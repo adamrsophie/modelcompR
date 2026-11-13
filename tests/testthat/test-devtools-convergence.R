@@ -38,14 +38,14 @@ test_that("test_convergence of ODEs matches DiffEqDevTools", {
   expect_equal(names(test_convergence(dts, prob, Euler())$errors), c("final", "l2", "l_inf"))
   expect_equal(names(test_convergence(dts, prob, Euler(), save_everystep = FALSE)$errors), "final")
   probs <- lapply(c(0.5, 1), function(T) remake(prob, tspan = c(0, T)))
-  expect_equal(test_convergence(probs, c(0.5, 1), RK4(), dt = 1 / 8)$errors$final,
+  expect_equal(test_convergence(probs, c(0.5, 1), RK4(), dt = 1 / 8, adaptive = FALSE)$errors$final,
     c(1.0032435632301162e-5, 1.4397699634405292e-5), tolerance = 1e-9)
 })
 
 test_that("appxtrue matches DiffEqDevTools", {
   prob <- dv_ode_prob()
   sol <- solve(prob, Euler(), dt = 1 / 16)
-  ref <- solve(prob, RK4(), dt = 1 / 256)
+  ref <- solve(prob, RK4(), dt = 1 / 256, adaptive = FALSE)
   e <- appxtrue(sol, ref)$errors
   expect_equal(e$final, 0.024199233951308685, tolerance = 1e-12)
   expect_equal(e$l2, 0.014856121296003114, tolerance = 1e-12)
@@ -58,15 +58,15 @@ test_that("appxtrue matches DiffEqDevTools", {
   expect_equal(e$final, 0.024199233951308685, tolerance = 1e-12)
   psc <- ODEProblem(function(u, p, t) -u * u, 1, c(0, 1))
   ssc <- solve(psc, Euler(), dt = 1 / 16)
-  rsc <- solve(psc, RK4(), dt = 1 / 16)
+  rsc <- solve(psc, RK4(), dt = 1 / 16, adaptive = FALSE)
   e <- appxtrue(ssc, TestSolution(rsc$t, rsc$u))$errors
   expect_equal(unlist(e[c("final", "l2", "l_inf")]),
     c(final = 0.01119432750443361, l2 = 0.010365268505397391, l_inf = 0.01203355069891865), tolerance = 1e-12)
-  e <- appxtrue(ssc, solve(psc, RK4(), dt = 1 / 16, dense = FALSE))$errors
+  e <- appxtrue(ssc, solve(psc, RK4(), dt = 1 / 16, adaptive = FALSE, dense = FALSE))$errors
   expect_equal(e, list(final = 0.01119432750443361), tolerance = 1e-12)
   # Julia throws a DimensionMismatch for vector states here (probe line
   # appxTSsame); R computes the errors at the common times.
-  e <- appxtrue(sol, TestSolution(sol$t, solve(prob, RK4(), dt = 1 / 16)$u))$errors
+  e <- appxtrue(sol, TestSolution(sol$t, solve(prob, RK4(), dt = 1 / 16, adaptive = FALSE)$u))$errors
   expect_equal(names(e), c("final", "l2", "l_inf"))
 })
 

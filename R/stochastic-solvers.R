@@ -52,6 +52,15 @@
   ns
 }
 
+# Normal draws of the Wiener process; a complex process (the noise of a
+# complex state, whose prototype is complex in DiffEqNoiseProcess) draws
+# randn(ComplexF64): real and imaginary parts each of variance 1 / 2.
+.noise_rnorm <- function(ns, k, mean, sd) {
+  if (!isTRUE(ns$complex)) return(stats::rnorm(k, mean, sd))
+  s <- sd / sqrt(2)
+  complex(real = stats::rnorm(k, Re(mean), s), imaginary = stats::rnorm(k, Im(mean), s))
+}
+
 # integrator.sqdt of OrdinaryDiffEqCore: tdir * sqrt(abs(dt)), the signed
 # square root of the step, so that steps backward in time keep the sign.
 .sqdt <- function(dt) sign(dt) * sqrt(abs(dt))
@@ -73,7 +82,7 @@
 
 # A fresh increment over h from the value W (the distribution of the process).
 .noise_fresh <- function(ns, W, h, t) {
-  if (is.null(ns$pe)) return(stats::rnorm(length(W), 0, sqrt(abs(h))))
+  if (is.null(ns$pe)) return(.noise_rnorm(ns, length(W), 0, sqrt(abs(h))))
   old <- ns$pe$curW
   ns$pe$curW <- W
   on.exit(ns$pe$curW <- old)
@@ -86,8 +95,8 @@
   frac <- s / e$h
   if (is.null(ns$pe)) {
     sd <- sqrt(abs(s * (e$h - s) / e$h))
-    w1 <- stats::rnorm(ns$m, e$dW * frac, sd)
-    z1 <- if (ns$needs_dZ) stats::rnorm(length(e$dZ), e$dZ * frac, sd) else NULL
+    w1 <- .noise_rnorm(ns, ns$m, e$dW * frac, sd)
+    z1 <- if (ns$needs_dZ) .noise_rnorm(ns, length(e$dZ), e$dZ * frac, sd) else NULL
   } else {
     if (is.null(ns$pe$bridge)) stop("this noise process has no bridge, so it cannot be split", call. = FALSE)
     w1 <- .np_call_bridge(ns$pe, e$dW, W0, e$dW, frac, e$h, ns$u, ns$p, t)
@@ -100,10 +109,10 @@
 # The increments of a path noise over [t, t + h].
 .noise_path_inc <- function(ns, t, h) {
   pe <- ns$pe
-  w1 <- as.numeric(pe$path(t + h, ns$u, ns$p))
+  w1 <- .as_num(pe$path(t + h, ns$u, ns$p))
   dZ <- if (ns$needs_dZ) {
     if (is.null(pe$zpath)) stop("this solver needs a second noise path (Z); give the noise a Z", call. = FALSE)
-    as.numeric(pe$zpath(t + h, ns$u, ns$p)) - ns$Z
+    .as_num(pe$zpath(t + h, ns$u, ns$p)) - ns$Z
   }
   list(dW = w1 - ns$W, dZ = dZ)
 }
@@ -156,14 +165,14 @@
   while (abs(need) > tol && length(ns$stack)) {
     e <- ns$stack[[1L]]
     if (abs(e$h) <= abs(need) + tol) {
-      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(abs(e$h)))
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- .noise_rnorm(ns, mz, 0, sqrt(abs(e$h)))
       dW <- dW + e$dW
       if (ns$needs_dZ) dZ <- dZ + e$dZ
       need <- need - e$h
       ns$stack <- ns$stack[-1L]
       ns$pieces[[length(ns$pieces) + 1L]] <- e[c("h", "dW", "dZ")]
     } else {
-      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- stats::rnorm(mz, 0, sqrt(abs(e$h)))
+      if (ns$needs_dZ && is.null(e$dZ)) e$dZ <- .noise_rnorm(ns, mz, 0, sqrt(abs(e$h)))
       sp <- .noise_split(ns, e, need, W0 = ns$W + dW, Z0 = if (ns$needs_dZ) ns$Z + dZ, t = t)
       dW <- dW + sp$first$dW
       if (ns$needs_dZ) dZ <- dZ + sp$first$dZ
@@ -201,7 +210,7 @@ print.SDEAlgorithm <- function(x, ...) {
 }
 
 # g(u) dW for the three noise shapes.
-.gdw <- function(G, dW, type) if (type == "general") as.numeric(G %*% dW) else G * dW
+.gdw <- function(G, dW, type) if (type == "general") .as_num(G %*% dW) else G * dW
 
 .rms <- function(x) sqrt(mean(x^2))
 
@@ -290,7 +299,7 @@ LambaEM <- function(split = TRUE) {
     du2 <- f(K, p, t + dt)
     Ed <- dt * (du2 - du1) / 2
     ggprime <- (g(K + noise * sq, p, t) - L) / sq
-    En <- if (type == "general") as.numeric(ggprime %*% (dW^2 - dt)) / 2 else ggprime * (dW^2 - dt) / 2
+    En <- if (type == "general") .as_num(ggprime %*% (dW^2 - dt)) / 2 else ggprime * (dW^2 - dt) / 2
     list(u = unew, err = delta * Ed + En, nf = 2L)
   })
 }
@@ -529,9 +538,9 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
       for (j in seq_along(dW)) {
         Dgj <- (g(K + sq * L[, j], p, t) - L) / sq
         gnorm <- gnorm + .rms(Dgj)
-        mil <- mil + as.numeric(Dgj %*% J[, j])
+        mil <- mil + .as_num(Dgj %*% J[, j])
       }
-      unew <- K + as.numeric(L %*% dW) + mil
+      unew <- K + .as_num(L %*% dW) + mil
     } else {
       J <- dW^2 / 2
       if (ito) J <- J - abs(dt) / 2
@@ -613,7 +622,7 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
   if (split) unew <- noise_after(unew)
   if (!isTRUE(ctx$adaptive)) return(c(out, list(u = unew)))
   J <- cache$nl$J %||% .calc_J(ctx, u, t, f0)$J
-  Ed <- dt * dt * as.numeric(J %*% f0) / 2
+  Ed <- dt * dt * .as_num(J %*% f0) / 2
   if (alg$kind == "RKMil" && !split) {
     En <- abs(dW^3) * abs(ggprime)^2 / 6
   } else {
@@ -816,6 +825,15 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   # methods that read the parts of a structured problem (BAOAB, the IIF
   # methods) bind to it; noise_dim is the length of their Wiener process
   if (is.function(alg$bind)) alg <- alg$bind(prob, opts)
+  # an array state: g sees the array (a general noise matrix is kept as g returns it)
+  if (length(dim(u0)) > 1L && is.function(g)) {
+    g0 <- g
+    du0 <- dim(u0)
+    g <- function(u, p, t) {
+      r <- g0(array(u, du0), p, t)
+      if (type == "general") r else as.vector(r)
+    }
+  }
   if (!(type %in% alg$noise))
     .stopf("%s() requires diagonal or scalar noise; use EM() or LambaEM() for general noise", alg$name)
   if (prob$tspan[2L] < prob$tspan[1L] && isTRUE(alg$name %in% .sde_forward_only))
@@ -834,6 +852,7 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   # algorithms with a second process of another length (RKMilGeneral) give it
   mz <- if (is.function(alg$z_length)) alg$z_length(m, opts$dt) else m
   ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ, proc = proc, mz = mz)
+  ns$complex <- is.null(proc) && is.complex(u0) && type != "general"
   delta <- opts$delta %||% alg$delta
   adaptive <- alg$adaptive && (opts$adaptive %||% TRUE)
   run_step <- function(a, ctx, t, u, dt, cache) .rng_run(rng, {
@@ -945,7 +964,9 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
 #' @export
 solve.SDEProblem <- function(a, b, ...) {
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
   alg <- if (missing(b) || is.null(b)) .sde_default_alg(a, opts$alg_hints) else b
+  .check_complex(a, alg)
   opts$alg_hints <- NULL
   seed <- opts$seed
   opts$seed <- NULL

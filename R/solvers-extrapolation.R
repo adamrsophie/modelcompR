@@ -75,7 +75,7 @@
 }
 
 .extrap_solve <- function(W, b) {
-  if (nrow(W) <= 16L) .ojl_backslash(W, b) else as.numeric(solve(W, b))
+  if (nrow(W) <= 16L) .ojl_backslash(W, b) else .as_num(solve(W, b))
 }
 
 # timedepentdtmin of DiffEqBase
@@ -332,7 +332,7 @@
     ex$seq <- tab$seq
     ex$tab <- tab
   }
-  S <- cumsum(as.numeric(ex$seq))
+  S <- cumsum(.as_num(ex$seq))
   mo <- ex$min_order
   maxo <- ex$max_order
   st$stage <- switch(ex$stage,
@@ -448,7 +448,7 @@
       if (isTRUE(EEst <= 1)) break
       pass <- if (hw) {
         n_curr < mo + 1L ||
-          EEst <= (if (n_curr + 2L <= win_max + 1L) prod(as.numeric(ex$seq[(n_curr + 2L):(win_max + 1L)])) else 1)
+          EEst <= (if (n_curr + 2L <= win_max + 1L) prod(.as_num(ex$seq[(n_curr + 2L):(win_max + 1L)])) else 1)
       } else {
         # the convergence monitor; Deuflhard's tolerance ||reltol||, the
         # implicit method takes ||utilde - u|| / EEst

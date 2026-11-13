@@ -34,6 +34,7 @@
 # which a NaN shows) go to the exact .pw_fma() (rounding to odd,
 # R/optimization-prima-powell.R).
 .fma <- function(a, b, c) {
+  if (is.complex(a) || is.complex(b) || is.complex(c)) return(.fma_complex(a, b, c))
   p <- a * b
   ta <- a * 134217729; ah <- ta - (ta - a); al <- a - ah
   tb <- b * 134217729; bh <- tb - (tb - b); bl <- b - bh
@@ -61,6 +62,27 @@
   }
   if (length(bad)) r[bad] <- .pw_fma(a, b, rep_len(c, m)[bad])
   r
+}
+
+# muladd of complex numbers (Base complex.jl): a real factor scales both
+# parts, muladd(x, z, w) = complex(muladd(x, re z, re w), muladd(x, im z,
+# im w)), and two complex factors give complex(muladd(re z, re w, -muladd(im z,
+# im w, -re x)), muladd(re z, im w, muladd(im z, re w, im x))).
+.fma_complex <- function(a, b, c) {
+  ca <- is.complex(a); cb <- is.complex(b)
+  if (ca && cb) {
+    re <- .fma(Re(a), Re(b), -.fma(Im(a), Im(b), -Re(c)))
+    im <- .fma(Re(a), Im(b), .fma(Im(a), Re(b), Im(c)))
+  } else if (ca || cb) {
+    x <- if (ca) b else a
+    z <- if (ca) a else b
+    re <- .fma(x, Re(z), Re(c))
+    im <- .fma(x, Im(z), Im(c))
+  } else {
+    re <- .fma(a, b, Re(c))
+    im <- rep_len(Im(c), length(re))
+  }
+  complex(real = re, imaginary = im)
 }
 
 # ---------------------------------------------------------------------------

@@ -123,7 +123,7 @@ RKIP <- function(dtmin = 1e-3, dtmax = 1, nb_of_cache_step = 100, tableau = NULL
   expmv <- function(v, positive, i) {
     k <- c_mapping[i]
     if (positive) return(.exprk_mv(st$pos[[k]], v))
-    if (use_ldiv) return(if (is.matrix(st$pos[[k]])) as.numeric(solve(st$pos[[k]], v)) else v / st$pos[[k]])
+    if (use_ldiv) return(if (is.matrix(st$pos[[k]])) .as_num(solve(st$pos[[k]], v)) else v / st$pos[[k]])
     .exprk_mv(st$neg[[k]], v)
   }
   operator <- function(ctx) {
@@ -135,7 +135,7 @@ RKIP <- function(dtmin = 1e-3, dtmax = 1, nb_of_cache_step = 100, tableau = NULL
   init <- function(ctx, t, u) {
     L <- operator(ctx)
     f2 <- .as_rhs(ctx$fobj$f2)
-    u <- as.numeric(u)
+    u <- .as_num(u)
     list(fsal = .eu_mul(L, u) + f2(u, ctx$p, t), nf20 = 1L)
   }
   A <- tab$A
@@ -145,7 +145,7 @@ RKIP <- function(dtmin = 1e-3, dtmax = 1, nb_of_cache_step = 100, tableau = NULL
     L <- operator(ctx)
     f2 <- .as_rhs(ctx$fobj$f2)
     p <- ctx$p
-    uprev <- as.numeric(u)
+    uprev <- .as_num(u)
     prepare(L, dt)
     unew <- uprev
     kk <- vector("list", s)

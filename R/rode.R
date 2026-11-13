@@ -39,10 +39,10 @@ RODEFunction <- function(f, ...) structure(list(f = f, ...), class = c("RODEFunc
 #' @export
 RODEProblem <- function(f, u0, tspan, p = numeric(), rand_prototype = NULL, noise = NULL, seed = 0L, ...) {
   fn <- if (inherits(f, "RODEFunction")) f else RODEFunction(f)
-  u0 <- as.numeric(unlist(u0))
+  u0 <- .as_num(unlist(u0))
   prob <- .new_problem("RODEProblem", f = fn, u0 = u0, tspan = .as_tspan(tspan), p = p, sys = NULL,
                        kwargs = list(...))
-  prob$rand_prototype <- if (!is.null(rand_prototype)) as.numeric(rand_prototype) else 0 * u0
+  prob$rand_prototype <- if (!is.null(rand_prototype)) .as_num(rand_prototype) else 0 * u0
   prob$noise <- noise
   prob$seed <- seed
   prob
@@ -118,7 +118,7 @@ solve.RODEProblem <- function(a, b = RandomEM(), ...) {
     pe <- .np_env(proc)
     ns <- .noise_new(a$tspan[1L], length(pe$W0), FALSE, proc = proc)
     ff <- a$f$f
-    grid <- if (isTRUE(b$needs_grid)) list(grid_t = pe$grid_t, grid_W = as.numeric(pe$grid_W))
+    grid <- if (isTRUE(b$needs_grid)) list(grid_t = pe$grid_t, grid_W = .as_num(pe$grid_W))
     runner <- .new_alg(b$name, b$order, adaptive = FALSE,
       step = function(ctx, t, u, dt, cache) {
         inc <- .noise_take(ns, t, dt, u, ctx$p)

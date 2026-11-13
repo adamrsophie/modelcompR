@@ -73,6 +73,7 @@ init.default <- function(prob, alg = NULL, ...) {
 init.ODEProblem <- function(prob, alg = NULL, ...) {
   alg <- alg %||% .default_ode_alg(prob)
   if (!inherits(alg, "ODEAlgorithm")) stop("not an ODE algorithm: ", class(alg)[1L], call. = FALSE)
+  .check_complex(prob, alg)
   if (!.is_identity_mass(prob$f$mass_matrix) && !isTRUE(alg$mass_matrix))
     stop(alg$name, "() does not support mass matrices; use a mass matrix solver such as Rodas5P()", call. = FALSE)
   opts <- utils::modifyList(prob$kwargs %||% list(), list(...))
@@ -91,7 +92,9 @@ init.DAEProblem <- function(prob, alg = NULL, ...) {
 #' @export
 init.SDEProblem <- function(prob, alg = NULL, ...) {
   opts <- utils::modifyList(prob$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, names(list(...)))
   alg <- alg %||% .sde_default_alg(prob, opts$alg_hints)
+  .check_complex(prob, alg)
   opts$alg_hints <- NULL
   # its own generator, seeded with `seed` or, as _resolve_rng of
   # StochasticDiffEq does without one, with a seed drawn from the global stream
@@ -194,7 +197,7 @@ solve_integrator <- function(integ) {
 #' @rdname integrator_interface
 #' @export
 set_u <- function(integ, u) {
-  integ$u[] <- as.numeric(u)
+  integ$u[] <- .as_num(u)
   integ$u_modified <- TRUE
   invisible(integ)
 }
@@ -202,7 +205,7 @@ set_u <- function(integ, u) {
 #' @rdname integrator_interface
 #' @export
 set_t <- function(integ, t) {
-  integ$t <- as.numeric(t)
+  integ$t <- .as_num(t)
   integ$u_modified <- TRUE
   invisible(integ)
 }
@@ -220,7 +223,7 @@ derivative_discontinuity <- function(integ, flag = TRUE) {
 set_proposed_dt <- function(integ, dt) {
   I <- .integ_I(integ)
   # inside a callback the driver takes the next step size from dtnew
-  I$dt <- I$dtnew <- abs(as.numeric(dt))
+  I$dt <- I$dtnew <- abs(.as_num(dt))
   invisible(integ)
 }
 
@@ -259,7 +262,7 @@ set_reltol <- function(integ, x) {
 #' @export
 add_saveat <- function(integ, t) {
   I <- .integ_I(integ)
-  sa <- sort(unique(c(I$saveat, as.numeric(t))), decreasing = I$tdir < 0)
+  sa <- sort(unique(c(I$saveat, .as_num(t))), decreasing = I$tdir < 0)
   I$saveat <- sa
   # the next save time is the first one after the current time
   I$next_save <- which((sa - integ$t) * I$tdir > 0)[1L] %|% (length(sa) + 1L)
@@ -283,14 +286,14 @@ reinit <- function(integ, u0 = NULL, t0 = NULL, tf = NULL, erase_sol = TRUE, p =
   # the conic cache rebuilds its cone program at the new p (R/optimization-convex.R)
   if (inherits(integ, "ConvexOptimizationCache")) return(.cvx_reinit(integ, u0 = u0, p = p))
   if (inherits(integ, "OptimizationCache")) {
-    if (!is.null(u0)) integ$prob$u0[] <- as.numeric(u0)
-    if (!is.null(p)) integ$prob$p[] <- as.numeric(p)
+    if (!is.null(u0)) integ$prob$u0[] <- .as_num(u0)
+    if (!is.null(p)) integ$prob$p[] <- .as_num(p)
     integ$sol <- NULL
     return(invisible(integ))
   }
   I <- .integ_I(integ)
   prob <- I$prob
-  if (!is.null(u0)) prob$u0[] <- as.numeric(u0)
+  if (!is.null(u0)) prob$u0[] <- .as_num(u0)
   if (!is.null(t0) || !is.null(tf)) prob$tspan <- c(t0 %||% prob$tspan[1L], tf %||% prob$tspan[2L])
   old_ts <- I$ts; old_us <- I$us
   I$prob <- prob
@@ -321,7 +324,10 @@ get_du <- function(integ) {
   I <- .integ_I(integ)
   if (!is.null(integ$du)) return(integ$du)
   a <- I$algs[[I$cur %||% 1L]] %||% I$alg
-  fu <- function() as.numeric(I$ctx$f(integ$u, integ$p, integ$t))
+  # isdiscretecache: a FunctionMap stepper has no derivative
+  if (inherits(a, "FunctionMap") || identical(a$name, "FunctionMap"))
+    stop("Derivatives are not defined for this stepper.", call. = FALSE)
+  fu <- function() .as_num(I$ctx$f(integ$u, integ$p, integ$t))
   # SciMLBase.get_du of OrdinaryDiffEqCore: fsallast (f at the state, also
   # with a mass matrix) for an FSAL method without a stiff interpolation,
   # otherwise the derivative of the last step's interpolant at t
@@ -330,7 +336,7 @@ get_du <- function(integ) {
   if (is.null(st)) return(fu())
   if (is.null(.interp_deriv_spec(st$interp))) {
     # an interpolant without a derivative in the port: M^-1 f
-    return(as.numeric(.mm_deriv(I$ctx, fu())))
+    return(.as_num(.mm_deriv(I$ctx, fu())))
   }
   .step_deriv(st, integ$t, 1L)
 }

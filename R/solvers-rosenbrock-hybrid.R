@@ -157,7 +157,7 @@ HybridExplicitImplicitRK <- function(tab, order, autodiff = NULL, concrete_jac =
                                     stage_limiter = .rosen_check_limiter(stage_limiter, "stage_limiter"),
                                     concrete_jac = concrete_jac, linsolve = linsolve,
                                     max_jac_age = as.integer(max_jac_age),
-                                    jac_reuse_gamma_tol = as.numeric(jac_reuse_gamma_tol), tab = tab))
+                                    jac_reuse_gamma_tol = .as_num(jac_reuse_gamma_tol), tab = tab))
 }
 
 #' @rdname hybrid_rosenbrock_algorithms

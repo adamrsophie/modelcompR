@@ -79,7 +79,7 @@
 
 # Time derivative of f, calc_tderivative: prob$f$tgrad or forward differences.
 .calc_tgrad <- function(ctx, u, t, f0) {
-  if (!is.null(ctx$tgrad)) return(list(dT = as.numeric(ctx$tgrad(u, ctx$p, t)), nf = 0L))
+  if (!is.null(ctx$tgrad)) return(list(dT = .as_num(ctx$tgrad(u, ctx$p, t)), nf = 0L))
   h <- sqrt(.Machine$double.eps) * max(1, abs(t))
   list(dT = (ctx$f(u, ctx$p, t + h) - f0) / h, nf = 1L)
 }
@@ -92,7 +92,7 @@
 
 .wsolve <- function(Wf, b) .rosen_lusolve(Wf, b)
 
-.mass_mul <- function(M, x) if (is.null(M)) x else as.numeric(M %*% x)
+.mass_mul <- function(M, x) if (is.null(M)) x else .as_num(M %*% x)
 
 # ---------------------------------------------------------------------------
 # NLNewton (type.jl): κ = 1/100, max_iter = 10, fast_convergence_cutoff =
@@ -350,7 +350,7 @@
   if (is.null(M)) return(f)
   d <- diag(M)
   if (all(M[row(M) != col(M)] == 0)) return(ifelse(d != 0, f / d, NA_real_))
-  tryCatch(as.numeric(solve(M, f)), error = function(e) rep(NA_real_, length(f)))
+  tryCatch(.as_num(solve(M, f)), error = function(e) rep(NA_real_, length(f)))
 }
 
 .hermite_dae_interp <- function(theta, dt, y0, y1, k) {

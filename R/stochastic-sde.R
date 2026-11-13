@@ -407,7 +407,7 @@ SDEProblem <- function(sys, ..., noise_rate_prototype = NULL, noise = NULL) {
 .sde_problem_raw <- function(f, g = NULL, u0, tspan, p = numeric(), ..., noise_rate_prototype = NULL,
                              noise = NULL) {
   fn <- if (inherits(f, "SDEFunction")) f else SDEFunction(f, g)
-  u0 <- as.numeric(unlist(u0))
+  u0 <- .as_u0(u0)
   proc <- if (inherits(noise, "AbstractNoiseProcess")) noise
   # a noise process with one component for a larger state is scalar noise
   scalar <- identical(noise, "scalar") || (!is.null(proc) && length(.np_env(proc)$W0) == 1L && length(u0) > 1L)

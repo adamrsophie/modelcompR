@@ -49,9 +49,9 @@ NULL
 #' @rdname rosenbrock_tableaus
 #' @export
 RodasTableau <- function(A, C, gamma, c, d, H, b, btilde)
-  structure(list(A = as.matrix(A), C = as.matrix(C), gamma = as.numeric(gamma), c = as.numeric(c),
-                 d = as.numeric(d), H = as.matrix(H), b = as.numeric(b),
-                 btilde = if (is.null(btilde)) NULL else as.numeric(btilde)),
+  structure(list(A = as.matrix(A), C = as.matrix(C), gamma = .as_num(gamma), c = .as_num(c),
+                 d = .as_num(d), H = as.matrix(H), b = .as_num(b),
+                 btilde = if (is.null(btilde)) NULL else .as_num(btilde)),
             class = "RodasTableau")
 
 #' @rdname rosenbrock_tableaus

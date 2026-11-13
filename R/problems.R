@@ -263,7 +263,8 @@ varmap_to_vars <- function(varmap, vars, defaults = NULL) {
 .as_tspan <- function(tspan, sys = NULL) {
   if (is.null(tspan) && !is.null(sys)) tspan <- .f(sys, "tspan")
   if (is.null(tspan)) stop("a time span c(t0, t1) is needed", call. = FALSE)
-  tspan <- as.numeric(unlist(tspan))
+  # a complex time span stays complex for the ComplexTspanError of solve
+  tspan <- .as_num(unlist(tspan))
   if (length(tspan) == 1L) tspan <- c(0, tspan)
   tspan
 }
@@ -364,8 +365,7 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
       p <- dots[[1L]]
       dots <- dots[-1L]
     }
-    u0 <- unlist(u0)
-    return(.new_problem("ODEProblem", f = f, u0 = stats::setNames(as.numeric(u0), names(u0)),
+    return(.new_problem("ODEProblem", f = f, u0 = .as_u0(u0),
                         tspan = .as_tspan(tspan), p = if (is.null(p)) numeric() else p,
                         sys = NULL, kwargs = dots))
   }

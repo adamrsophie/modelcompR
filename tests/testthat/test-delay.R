@@ -47,7 +47,7 @@ test_that("histories may depend on time and lags may be shorter than steps", {
   k <- Parameter("k", default = 50)
   sysc <- mtkcompile(System(list(D(y) ~ -k * EvalAt(t - tau)(y)), t, name = "dde3"))
   pc <- DDEProblem(sysc, list(y ~ 1), c(0, 1))
-  sc <- suppressWarnings(solve(pc, MethodOfSteps(RK4()), dt = 0.1))
+  sc <- suppressWarnings(solve(pc, MethodOfSteps(RK4()), dt = 0.1, adaptive = FALSE))
   expect_equal(sc$retcode, "ConvergenceFailure")
 })
 

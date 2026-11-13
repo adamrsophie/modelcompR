@@ -66,7 +66,7 @@
   if (is.function(jac)) return(function(x, u, p, t) as.matrix(jac(x, u, p, t)))
   n <- length(prob$u0)
   p <- prob$p
-  fd <- function(x, u, p, t) .jac_central(function(z) as.numeric(f(z, u, p, t)), x)
+  fd <- function(x, u, p, t) .jac_central(function(z) .as_num(f(z, u, p, t)), x)
   if (!is.numeric(p)) return(fd)
   xs <- lapply(seq_len(n), function(i) Symbol(paste0(".sidx", i)))
   us <- lapply(seq_len(n), function(i) Symbol(paste0(".sidu", i)))
@@ -80,7 +80,7 @@
                list(name = "t", vars = list(ts)))
   cj <- tryCatch(.build_closure(J, args, out = "matrix"), error = function(e) NULL)
   if (is.null(cj)) return(fd)
-  function(x, u, p, t) matrix(as.numeric(cj(x, u, p, t)), n, n)
+  function(x, u, p, t) matrix(.as_num(cj(x, u, p, t)), n, n)
 }
 
 #' Simple implicit discrete solver
@@ -123,14 +123,14 @@ SimpleIDSolve <- function() structure(list(name = "SimpleIDSolve"), class = c("S
   p <- prob$p
   J <- .sids_jacobian(prob)
   newton <- function(uprev, t) {
-    .simple_newton_raphson(function(x) as.numeric(f(x, uprev, p, t)), function(x) J(x, uprev, p, t),
+    .simple_newton_raphson(function(x) .as_num(f(x, uprev, p, t)), function(x) J(x, uprev, p, t),
                            uprev, maxiters = 1000L, abstol = 3e-13)
   }
   nm <- names(prob$u0)
-  u0 <- stats::setNames(as.numeric(prob$u0), nm)
+  u0 <- stats::setNames(.as_num(prob$u0), nm)
   t0 <- prob$tspan[1L]
   build <- function(ts, us, retcode) {
-    U <- do.call(rbind, lapply(us, function(u) stats::setNames(as.numeric(u), nm)))
+    U <- do.call(rbind, lapply(us, function(u) stats::setNames(.as_num(u), nm)))
     if (is.null(U)) U <- matrix(numeric(), 0L, length(u0), dimnames = list(NULL, nm))
     .new_ode_solution(t = ts, u = U, prob = prob, alg = SimpleIDSolve(), retcode = retcode)
   }

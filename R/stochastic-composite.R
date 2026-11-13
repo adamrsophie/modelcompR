@@ -92,7 +92,7 @@ StochasticCompositeAlgorithm <- function(algs, choice_function) {
     stop("choice_function is an AutoSwitch() object or a function", call. = FALSE)
   zl <- Filter(Negate(is.null), lapply(algs, `[[`, "z_length"))
   structure(list(name = "StochasticCompositeAlgorithm", algs = algs, choice_function = choice_function,
-                 spec = spec, order = max(vapply(algs, function(a) as.numeric(a$order), 0)),
+                 spec = spec, order = max(vapply(algs, function(a) .as_num(a$order), 0)),
                  adaptive = all(vapply(algs, function(a) isTRUE(a$adaptive), TRUE)),
                  needs_dZ = any(vapply(algs, function(a) isTRUE(a$needs_dZ), TRUE)),
                  noise = unique(unlist(lapply(algs, `[[`, "noise"))), delta = 1,

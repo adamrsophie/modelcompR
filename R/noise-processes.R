@@ -57,9 +57,9 @@ print.AbstractNoiseProcess <- function(x, ...) {
     stop("unknown noise kind", call. = FALSE))
 }
 
-.np_call_dist <- function(e, dW, dt, u, p, t) as.numeric(e$dist(dW, e$self, dt, u, p, t, NULL))
+.np_call_dist <- function(e, dW, dt, u, p, t) .as_num(e$dist(dW, e$self, dt, u, p, t, NULL))
 .np_call_bridge <- function(e, dW, W0, Wh, q, h, u, p, t)
-  as.numeric(e$bridge(dW, e$self, W0, Wh, q, h, u, p, t, NULL))
+  .as_num(e$bridge(dW, e$self, W0, Wh, q, h, u, p, t, NULL))
 
 #' Noise processes
 #'
@@ -177,7 +177,7 @@ RSWM <- function(discard_length = 1e-15, adaptivealg = c("RSwM3", "RSwM2", "RSwM
                         extra = list()) {
   e <- new.env(parent = emptyenv())
   e$kind <- "process"
-  e$t0 <- t0; e$W0 <- as.numeric(W0); e$Z0 <- if (!is.null(Z0)) as.numeric(Z0)
+  e$t0 <- t0; e$W0 <- .as_num(W0); e$Z0 <- if (!is.null(Z0)) .as_num(Z0)
   e$dist <- dist; e$bridge <- bridge
   e$rswm <- rswm; e$save_everystep <- save_everystep; e$covariance <- covariance
   e$reset <- reset; e$reseed <- reseed; e$continuous <- continuous; e$simple <- simple
@@ -248,11 +248,11 @@ SimpleWienerProcess <- function(t0, W0, Z0 = NULL, ...)
 CorrelatedWienerProcess <- function(Gamma, t0, W0, Z0 = NULL, ...) {
   s <- svd(as.matrix(Gamma))
   A <- s$u %*% diag(sqrt(s$d), length(s$d))
-  dist <- function(dW, W, dt, u, p, t, rng) as.numeric(A %*% (sqrt(abs(dt)) * stats::rnorm(ncol(A))))
+  dist <- function(dW, W, dt, u, p, t, rng) .as_num(A %*% (sqrt(abs(dt)) * stats::rnorm(ncol(A))))
   # the bridge of A B for a standard Brownian motion B (DiffEqNoiseProcess
   # has none and forbids adaptive rejections)
   bridge <- function(dW, W, W0, Wh, q, h, u, p, t, rng)
-    as.numeric(A %*% (sqrt((1 - q) * q * abs(h)) * stats::rnorm(ncol(A)))) + q * Wh
+    .as_num(A %*% (sqrt((1 - q) * q * abs(h)) * stats::rnorm(ncol(A)))) + q * Wh
   .np_process(t0, W0, Z0, dist, bridge, ..., covariance = Gamma, cls = "CorrelatedWienerProcess")
 }
 
@@ -294,11 +294,11 @@ CompoundPoissonProcess <- function(rate, t0, W0, computerates = TRUE, rswm = RSW
   cur$rate <- if (is.function(rate)) NULL else rate
   dist <- function(dW, W, dt, u, p, t, rng) {
     if (computerates && is.function(rate)) cur$rate <- rate(u, p, t)
-    r <- rep_len(as.numeric(cur$rate), length(dW))
-    as.numeric(stats::rpois(length(dW), dt * r))
+    r <- rep_len(.as_num(cur$rate), length(dW))
+    .as_num(stats::rpois(length(dW), dt * r))
   }
   bridge <- function(dW, W, W0, Wh, q, h, u, p, t, rng)
-    as.numeric(stats::rbinom(length(Wh), as.integer(round(Wh)), q))
+    .as_num(stats::rbinom(length(Wh), as.integer(round(Wh)), q))
   .np_process(t0, W0, NULL, dist, bridge, rswm = rswm, ..., continuous = FALSE, cls = "CompoundPoissonProcess",
               extra = list(rate = rate, computerates = computerates))
 }
@@ -306,8 +306,8 @@ CompoundPoissonProcess <- function(rate, t0, W0, computerates = TRUE, rswm = RSW
 # A bridge is the process with the increment to the end already on the stack.
 .np_with_end <- function(W, tend, Wend, Zend = NULL) {
   e <- .np_env(W)
-  e$bridge_end <- list(h = tend - e$t0, dW = as.numeric(Wend) - e$W0,
-                       dZ = if (!is.null(Zend)) as.numeric(Zend) - e$Z0)
+  e$bridge_end <- list(h = tend - e$t0, dW = .as_num(Wend) - e$W0,
+                       dZ = if (!is.null(Zend)) .as_num(Zend) - e$Z0)
   e$on_reinit <- function(e) e$S1 <- list(e$bridge_end)
   e$S1 <- list(e$bridge_end)
   W
@@ -390,7 +390,7 @@ CompoundPoissonBridge <- function(rate, t0, tend, W0, Wend, rswm = RSWM(), ...) 
 calculate_step <- function(W, dt, u = NULL, p = NULL) {
   e <- .np_env(W)
   if (e$kind == "path") {
-    e$dW <- as.numeric(e$path(e$curt + dt, u, p)) - e$curW
+    e$dW <- .as_num(e$path(e$curt + dt, u, p)) - e$curW
     e$dt <- dt
     return(invisible(W))
   }
@@ -545,7 +545,7 @@ fill_new_noise_caches <- function(W, i) invisible(W)
 .np_path <- function(t0, W0, path, Z0 = NULL, reset = TRUE, cls, extra = list(), no_reject = FALSE) {
   e <- new.env(parent = emptyenv())
   e$kind <- "path"
-  e$t0 <- t0; e$W0 <- as.numeric(W0); e$Z0 <- if (!is.null(Z0)) as.numeric(Z0)
+  e$t0 <- t0; e$W0 <- .as_num(W0); e$Z0 <- if (!is.null(Z0)) .as_num(Z0)
   e$path <- path
   e$reset <- reset; e$reseed <- FALSE; e$save_everystep <- TRUE
   e$rswm <- RSWM(); e$no_reject <- no_reject
@@ -585,9 +585,9 @@ NoiseGrid <- function(t, W, Z = NULL, reset = TRUE) {
 #' @rdname noise_processes
 #' @export
 NoiseFunction <- function(t0, W, Z = NULL, reset = TRUE) {
-  path <- function(s, u = NULL, p = NULL) as.numeric(W(u, p, s))
+  path <- function(s, u = NULL, p = NULL) .as_num(W(u, p, s))
   .np_path(t0, W(NULL, NULL, t0), path, if (!is.null(Z)) Z(NULL, NULL, t0), reset, "NoiseFunction",
-           extra = list(zpath = if (!is.null(Z)) function(s, u, p) as.numeric(Z(u, p, s))))
+           extra = list(zpath = if (!is.null(Z)) function(s, u, p) .as_num(Z(u, p, s))))
 }
 
 #' @rdname noise_processes
@@ -595,11 +595,11 @@ NoiseFunction <- function(t0, W, Z = NULL, reset = TRUE) {
 NoiseTransport <- function(t0, W, RV, rv = NULL, Z = NULL, reset = TRUE, reseed = TRUE) {
   holder <- new.env(parent = emptyenv())
   holder$rv <- rv %||% RV()
-  path <- function(s, u = NULL, p = NULL) as.numeric(W(u, p, s, holder$rv))
+  path <- function(s, u = NULL, p = NULL) .as_num(W(u, p, s, holder$rv))
   obj <- .np_path(t0, W(NULL, NULL, t0, holder$rv), path, if (!is.null(Z)) Z(NULL, NULL, t0, holder$rv),
                   reset, "NoiseTransport",
                   extra = list(RV = RV, holder = holder,
-                               zpath = if (!is.null(Z)) function(s, u, p) as.numeric(Z(u, p, s, holder$rv))))
+                               zpath = if (!is.null(Z)) function(s, u, p) .as_num(Z(u, p, s, holder$rv))))
   e <- .np_env(obj)
   e$reseed <- reseed
   e$on_reinit <- function(e) if (isTRUE(e$reseed) && !is.null(e$RV)) e$holder$rv <- e$RV()
@@ -640,7 +640,7 @@ NoiseWrapper <- function(source, reset = TRUE, reverse = FALSE, indx = NULL) {
     if (!inside) stop("NoiseWrapper cannot extrapolate past the saved noise", call. = FALSE)
     i <- if (up) findInterval(s, tt) else findInterval(-s, -tt)
     W0 <- M[i, ]; Wh <- M[i + 1L, ] - W0; h <- tt[i + 1L] - tt[i]; q <- (s - tt[i]) / h
-    val <- W0 + as.numeric(bridge(Wh, NULL, W0, Wh, q, h, u, p, tt[i], NULL))
+    val <- W0 + .as_num(bridge(Wh, NULL, W0, Wh, q, h, u, p, tt[i], NULL))
     store$t <- c(store$t, s); store$W <- rbind(store$W, val)
     val
   }
@@ -653,11 +653,11 @@ NoiseWrapper <- function(source, reset = TRUE, reverse = FALSE, indx = NULL) {
 NoiseApproximation <- function(source1, source2 = NULL, reset = TRUE) {
   value_of <- function(integ, s) {
     while (integ$t < s && !isTRUE(.integ_I(integ)$done)) step_integrator(integ)
-    as.numeric(integ$interp(s))
+    .as_num(integ$interp(s))
   }
   path <- function(s, u = NULL, p = NULL) value_of(source1, s)
-  .np_path(source1$t, as.numeric(source1$u), path,
-           if (!is.null(source2)) as.numeric(source2$u), reset, "NoiseApproximation",
+  .np_path(source1$t, .as_num(source1$u), path,
+           if (!is.null(source2)) .as_num(source2$u), reset, "NoiseApproximation",
            extra = list(source1 = source1, source2 = source2,
                         zpath = if (!is.null(source2)) function(s, u, p) value_of(source2, s)))
 }
@@ -668,7 +668,7 @@ VirtualBrownianTree <- function(t0, W0, Z0 = NULL, dist = .white_dist, bridge = 
                                 Zend = NULL, atol = 1e-10, tree_depth = 4L, search_depth = NULL, seed = NULL,
                                 reset = TRUE) {
   tend <- tend %||% (t0 + 1)
-  W0 <- as.numeric(W0)
+  W0 <- .as_num(W0)
   seed <- seed %||% sample.int(.Machine$integer.max, 1L)
   if (is.null(Wend)) Wend <- .with_seed(seed, W0 + dist(W0, NULL, tend - t0, NULL, NULL, t0, NULL))
   search_depth <- search_depth %||% max(tree_depth, ceiling(log2(abs(tend - t0) / atol)))
@@ -686,7 +686,7 @@ VirtualBrownianTree <- function(t0, W0, Z0 = NULL, dist = .white_dist, bridge = 
   }
   path <- function(s, u = NULL, p = NULL) {
     if (s > tend + atol || s < t0 - atol) stop("VirtualBrownianTree is defined on [t0, tend]", call. = FALSE)
-    value(s, t0, tend, W0, as.numeric(Wend), seed, 0L)
+    value(s, t0, tend, W0, .as_num(Wend), seed, 0L)
   }
   .np_path(t0, W0, path, Z0, reset, "VirtualBrownianTree",
            extra = list(tend = tend, Wend = Wend, seed = seed, tree_depth = tree_depth, search_depth = search_depth))
@@ -759,7 +759,7 @@ pCN <- function(source, rho, reset = TRUE, reverse = FALSE, indx = NULL) {
 #' @rdname noise_processes
 #' @export
 NoiseProblem <- function(noise, tspan, seed = 0L, ...)
-  structure(list(noise = noise, tspan = as.numeric(tspan), seed = seed, kwargs = list(...)),
+  structure(list(noise = noise, tspan = .as_num(tspan), seed = seed, kwargs = list(...)),
             class = c("NoiseProblem", "SciMLProblem"))
 
 .np_copy <- function(W) {

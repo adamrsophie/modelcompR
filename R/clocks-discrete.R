@@ -487,7 +487,7 @@ DiscreteProblem <- function(sys, op = list(), tspan = NULL, ..., u0 = NULL, p = 
       p <- dots[[1L]]
       dots <- dots[-1L]
     }
-    return(.new_problem("DiscreteProblem", f = f, u0 = as.numeric(unlist(u0)), tspan = .as_tspan(tspan),
+    return(.new_problem("DiscreteProblem", f = f, u0 = .as_u0(u0), tspan = .as_tspan(tspan),
                         p = if (is.null(p)) numeric() else p, sys = NULL, kwargs = dots))
   }
   .need_complete(sys, "DiscreteProblem")
@@ -582,7 +582,7 @@ solve.DiscreteProblem <- function(a, b, ...) {
   if (length(cbs$continuous)) stop("continuous callbacks need a continuous time problem", call. = FALSE)
   integ <- new.env(parent = emptyenv())
   integ$t <- t0
-  integ$u <- stats::setNames(as.numeric(prob$u0), names(prob$u0))
+  integ$u <- .state_vec(prob$u0)
   integ$p <- prob$p
   integ$prob <- prob
   integ$terminate <- FALSE
@@ -594,10 +594,10 @@ solve.DiscreteProblem <- function(a, b, ...) {
   ph_p[[1L]] <- integ$p
   U <- matrix(NA_real_, length(ts), length(prob$u0))
   U[1L, ] <- integ$u
-  f <- prob$f$f
+  f <- .shape_f(prob$f$f, dim(prob$u0))
   last <- 1L
   for (i in seq_len(length(ts) - 1L)) {
-    integ$u[] <- as.numeric(f(integ$u, integ$p, ts[i]))
+    integ$u[] <- .as_num(f(integ$u, integ$p, ts[i]))
     integ$t <- ts[i + 1L]
     for (cb in cbs$discrete) if (isTRUE(cb$condition(integ$u, integ$t, integ))) cb$affect(integ)
     if (!identical(integ$p, ph_p[[length(ph_p)]])) {
@@ -614,6 +614,7 @@ solve.DiscreteProblem <- function(a, b, ...) {
   sol <- .new_ode_solution(t = ts[seq_len(last)], u = U, prob = prob, alg = FunctionMap(),
                            retcode = if (integ$terminate) "Terminated" else "Success",
                            stats = list(nf = last - 1L), p = integ$p, events = integ$sol_events)
+  if (length(dim(prob$u0)) > 1L) assign("u_dim", dim(prob$u0), envir = .sol_env(sol))
   if (length(ph_p) > 1L) {
     env <- .sol_env(sol)
     env$param_history <- list(t = ph_t, p = do.call(rbind, ph_p))

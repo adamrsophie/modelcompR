@@ -212,6 +212,17 @@ FunctionCallingCallback <- function(func, funcat = numeric(), func_everystep = !
   DiscreteCallback(.true_condition, affect, initialize = init, save_positions = c(FALSE, FALSE))
 }
 
+# Linear interpolation at xout holding the end values outside x, for x in
+# either direction: approx(ties = "ordered") needs increasing x, so a
+# backward (decreasing) series is reversed first.
+.approx_hold <- function(x, y, xout) {
+  if (length(x) > 1L && x[1L] > x[length(x)]) {
+    x <- rev(x)
+    y <- rev(y)
+  }
+  stats::approx(x, y, xout = xout, rule = 2, ties = "ordered")$y
+}
+
 #' @rdname callback_library
 #' @export
 IndependentlyLinearizedSolution <- function(prob, num_derivatives = 0) {
@@ -227,7 +238,7 @@ IndependentlyLinearizedSolution <- function(prob, num_derivatives = 0) {
       ts <- e$ts[[i]]
       us <- if (e$num_derivatives) e$us[[i]][, 1L] else e$us[[i]]
       if (!length(ts)) return(NA_real_)
-      stats::approx(ts, us, xout = t, rule = 2, ties = "ordered")$y
+      .approx_hold(ts, us, t)
     }, 0)
   }
   attr(f, "data") <- e

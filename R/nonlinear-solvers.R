@@ -255,7 +255,7 @@ FastShortcutNLLSPolyalg <- function() {
   tol <- max(dim(J)) * .Machine$double.eps * max(s$d, 0)
   keep <- s$d > tol
   if (!any(keep)) return(numeric(n))
-  as.numeric(s$v[, keep, drop = FALSE] %*% ((t(s$u[, keep, drop = FALSE]) %*% rhs) / s$d[keep]))
+  .as_num(s$v[, keep, drop = FALSE] %*% ((t(s$u[, keep, drop = FALSE]) %*% rhs) / s$d[keep]))
 }
 
 .nl_jacobian <- function(F, J, x, fx) {
@@ -311,42 +311,46 @@ FastShortcutNLLSPolyalg <- function() {
   if (!ls) return(if (max(abs(fx)) <= max(abstol, 1e-9 * max(1, f0norm))) "Success" else "Stalled")
   if (.nl_converged(fx, abstol)) return("Success")
   Jx <- .nl_jacobian(F, J, x, fx)
-  if (all(is.finite(Jx)) && .nl_stationary(as.numeric(crossprod(Jx, fx)), fx, x, lb, ub, rtol = 1e-6)) "Success"
+  if (all(is.finite(Jx)) && .nl_stationary(.as_num(crossprod(Jx, fx)), fx, x, lb, ub, rtol = 1e-6)) "Success"
   else "Stalled"
 }
 
 # Newton and Gauss Newton, with optional backtracking and a postcondition
 # hook applied to every accepted iterate (see limited()).
+# The 2-norm of a residual, real or complex (NonlinearSolve takes complex
+# states; abs is the modulus).
+.nl_l2 <- function(v) sqrt(sum(abs(v)^2))
+
 .nl_newton <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, linesearch = FALSE,
                        post = NULL, ls = FALSE) {
-  x <- .nl_project(as.numeric(x0), lb, ub)
+  x <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   f0norm <- max(abs(fx), 0)
-  best <- list(x = x, fx = fx, n = sqrt(sum(fx^2)))
+  best <- list(x = x, fx = fx, n = .nl_l2(fx))
   stalled <- 0L
   for (it in seq_len(maxiters)) {
     if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", it - 1L))
     Jx <- .nl_jacobian(F, J, x, fx)
     if (!all(is.finite(Jx))) return(.nl_result(best$x, best$fx, "Unstable", it))
-    g <- as.numeric(crossprod(Jx, fx))
+    g <- .as_num(crossprod(Conj(Jx), fx))
     if (ls && .nl_stationary(g, fx, x, lb, ub)) return(.nl_result(x, fx, "Success", it - 1L))
     dx <- .nl_free_step(Jx, -fx, .nl_free(x, g, lb, ub))
-    nf <- sqrt(sum(fx^2))
+    nf <- .nl_l2(fx)
     lam <- 1
     repeat {
       xn <- .nl_project(x + lam * dx, lb, ub)
       if (!is.null(post)) xn <- post(xn, x)
       fn <- F(xn)
       ok <- all(is.finite(fn))
-      if (ok && (!linesearch || sqrt(sum(fn^2)) <= (1 - 1e-4 * lam) * nf)) break
+      if (ok && (!linesearch || .nl_l2(fn) <= (1 - 1e-4 * lam) * nf)) break
       lam <- lam / 2
       if (lam < 1e-10) break
     }
     if (!all(is.finite(fn))) return(.nl_result(best$x, best$fx, "Unstable", it))
     step <- max(abs(xn - x))
     x <- xn; fx <- fn
-    nn <- sqrt(sum(fx^2))
+    nn <- .nl_l2(fx)
     if (nn < best$n) {
       stalled <- if (nn > best$n * (1 - 1e-12)) stalled + 1L else 0L
       best <- list(x = x, fx = fx, n = nn)
@@ -368,7 +372,7 @@ FastShortcutNLLSPolyalg <- function() {
   if (sqrt(sum(dN^2)) <= Delta) return(dN)
   lg <- sqrt(sum(g^2))
   if (lg == 0) return(dN * 0)
-  Jg <- as.numeric(Jx %*% g)
+  Jg <- .as_num(Jx %*% g)
   dc <- lg^3 / sum(Jg^2)
   if (!is.finite(dc) || dc >= Delta) return(-(Delta / lg) * g)
   dsd <- -(dc / lg) * g
@@ -399,7 +403,7 @@ FastShortcutNLLSPolyalg <- function() {
 .nl_trust_region <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, scheme = "Simple",
                              max_radius = NULL, initial_radius = NULL, post = NULL, ls = FALSE) {
   max_shrink <- 32L
-  xo <- .nl_project(as.numeric(x0), lb, ub)
+  xo <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(xo)
   if (!all(is.finite(fx))) return(.nl_result(xo, fx, "InitialFailure", 0L))
   if (.nl_converged(fx, abstol)) return(.nl_result(xo, fx, "Success", 0L))
@@ -410,7 +414,7 @@ FastShortcutNLLSPolyalg <- function() {
   p1 <- k$p[1L]
   Jx <- .nl_jacobian(F, J, xo, fx)
   fk <- sum(fx^2) / 2
-  g <- as.numeric(crossprod(Jx, fx))
+  g <- .as_num(crossprod(Jx, fx))
   shrink <- 0L
   for (it in seq_len(maxiters)) {
     if (ls && .nl_stationary(g, fx, xo, lb, ub)) return(.nl_result(xo, fx, "Success", it - 1L))
@@ -476,7 +480,7 @@ FastShortcutNLLSPolyalg <- function() {
       if (.nl_converged(fx, abstol)) return(.nl_result(xo, fx, "Success", it))
       Jx <- Jnew %||% .nl_jacobian(F, J, xo, fx)
       fk <- fk1
-      g <- as.numeric(crossprod(Jx, fx))
+      g <- .as_num(crossprod(Jx, fx))
     }
     if (shrink > max_shrink) {
       code <- .nl_stall_code(fx, f0norm, abstol, ls, F, J, xo, lb, ub)
@@ -492,7 +496,7 @@ FastShortcutNLLSPolyalg <- function() {
 
 # initial_jacobian_scaling_alpha (NonlinearSolveBase/src/utils.jl)
 .nl_qn_alpha <- function(alpha, x, fx) {
-  if (!is.null(alpha)) return(as.numeric(alpha))
+  if (!is.null(alpha)) return(.as_num(alpha))
   fn <- sqrt(sum(fx^2))
   if (fn < 1e-5) return(1)
   2 * fn / max(sqrt(sum(x^2)), 1)
@@ -536,7 +540,7 @@ FastShortcutNLLSPolyalg <- function() {
 # globalization unless a line search is given, and the reset rules
 # NoChangeInStateReset (Broyden) and IllConditionedJacobianReset (Klement).
 .nl_quasi_newton <- function(F, J, x0, abstol, maxiters, alg, lb = NULL, ub = NULL, post = NULL, ls = FALSE) {
-  x <- .nl_project(as.numeric(x0), lb, ub)
+  x <- .nl_project(.as_num(x0), lb, ub)
   n <- length(x)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
@@ -611,9 +615,9 @@ FastShortcutNLLSPolyalg <- function() {
     }
     # NewtonDescent: the step from the inverse, or a solve with the Jacobian
     du <- if (broyden) {
-      if (full) -as.numeric(M %*% fx) else -M * fx
+      if (full) -.as_num(M %*% fx) else -M * fx
     } else if (full) {
-      tryCatch(-as.numeric(solve(M, fx)), error = function(e) NULL)
+      tryCatch(-.as_num(solve(M, fx)), error = function(e) NULL)
     } else -fx / M
     if (is.null(du) || !all(is.finite(du))) {
       # the linear solve failed: retry with a fresh Jacobian
@@ -647,9 +651,9 @@ FastShortcutNLLSPolyalg <- function() {
     # the Jacobian update with the step actually taken
     dfu <- fx - fprev_rule
     if (broyden && full) {
-      Jdfu <- as.numeric(M %*% dfu)
+      Jdfu <- .as_num(M %*% dfu)
       if (alg$update_rule == "good_broyden") {
-        rmul <- as.numeric(crossprod(M, du))
+        rmul <- .as_num(crossprod(M, du))
         denom <- sum(du * Jdfu)
       } else {
         rmul <- dfu
@@ -662,8 +666,8 @@ FastShortcutNLLSPolyalg <- function() {
       denom <- sum(Jdfu)
       M <- M + (du - Jdfu) * du * M / (if (denom == 0) 1e-5 else denom)
     } else if (full) {
-      Jdu_cache <- as.numeric((t(M)^2) %*% (du^2))
-      Jdu <- as.numeric(M %*% du)
+      Jdu_cache <- .as_num((t(M)^2) %*% (du^2))
+      Jdu <- .as_num(M %*% du)
       r <- (fx - fprev_rule - Jdu) / ifelse(Jdu_cache == 0, 1e-5, Jdu_cache)
       M <- M + (outer(r, du) * M) %*% M
     } else {
@@ -678,7 +682,7 @@ FastShortcutNLLSPolyalg <- function() {
 # Levenberg Marquardt with Nielsen's damping update and column scaling.
 .nl_levenberg_marquardt <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, lambda0 = 1e-3,
                                     post = NULL, ls = TRUE) {
-  x <- .nl_project(as.numeric(x0), lb, ub)
+  x <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   f0norm <- max(abs(fx), 0)
@@ -690,7 +694,7 @@ FastShortcutNLLSPolyalg <- function() {
   small <- 0L
   for (it in seq_len(maxiters)) {
     if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", it - 1L))
-    g <- as.numeric(crossprod(Jx, fx))
+    g <- .as_num(crossprod(Jx, fx))
     if (.nl_stationary(g, fx, x, lb, ub))
       return(.nl_result(x, fx, if (ls) "Success" else .nl_stall_code(fx, f0norm, abstol, FALSE), it - 1L))
     free <- .nl_free(x, g, lb, ub)
@@ -778,7 +782,7 @@ FastShortcutNLLSPolyalg <- function() {
   p <- prob$p
   f <- prob$f$f
   jac <- prob$f$jac
-  list(F = function(x) as.numeric(f(x, p)), J = if (is.null(jac)) NULL else function(x) jac(x, p))
+  list(F = function(x) .as_num(f(x, p)), J = if (is.null(jac)) NULL else function(x) jac(x, p))
 }
 
 .nl_opts <- function(prob, dots) {
@@ -854,7 +858,7 @@ solve.SCCNonlinearProblem <- function(a, b, ...) {
 .nl_scc_run <- function(a, alg, opts) {
   fns <- .nl_problem_fns(a)
   p <- a$p
-  u <- as.numeric(a$u0)
+  u <- .as_num(a$u0)
   abstol <- opts$abstol %||% .nl_default_tol()
   kinds <- a$scc_kinds %||% rep("nonlinear", length(a$var_sccs))
   retcode <- "Success"
@@ -891,7 +895,7 @@ solve.SCCNonlinearProblem <- function(a, b, ...) {
         F = function(z) {
           uu <- u
           uu[vi] <- z
-          as.numeric(hf$f(uu, p, lam))[ei]
+          .as_num(hf$f(uu, p, lam))[ei]
         },
         J = function(z) {
           uu <- u
@@ -924,7 +928,7 @@ solve.LinearProblem <- function(a, b, ...) {
   if (inherits(A, "AbstractSciMLOperator")) A <- concretize(A)
   if (!is.matrix(A)) A <- matrix(A, nrow = length(rhs))
   u <- .nl_lstsq(A, rhs)
-  resid <- as.numeric(A %*% u - rhs)
+  resid <- .as_num(A %*% u - rhs)
   ok <- all(is.finite(u)) && (nrow(A) > ncol(A) || max(abs(resid), 0) <= 1e-8 * max(1, max(abs(rhs), 0)))
   if (!is.null(a$sys)) a$u0 <- stats::setNames(u, .nl_names(unknowns(a$sys)))
   .nl_new_solution(c("LinearSolution", "NonlinearSolution"), a, .nl_alg("QRFactorization", cls = "LinearAlgorithm"),
@@ -970,8 +974,8 @@ solve.SteadyStateProblem <- function(a, b, ...) {
   f <- a$f$f; p <- a$p
   u0 <- a$u0
   if (inherits(alg, "SSRootfind")) {
-    F <- function(x) as.numeric(f(x, p, Inf))
-    f0 <- F(as.numeric(u0))
+    F <- function(x) .as_num(f(x, p, Inf))
+    f0 <- F(.as_num(u0))
     if (!all(is.finite(f0)))
       stop("the right-hand side is not finite at t = Inf; the system depends on time and has no ",
            "steady state to root find. Use DynamicSS().", call. = FALSE)
@@ -1001,7 +1005,7 @@ solve.SteadyStateProblem <- function(a, b, ...) {
   osol <- do.call(solve, args)
   u <- utils::tail(osol$u, 1L)[[1L]]
   tend <- utils::tail(osol$t, 1L)
-  du <- as.numeric(f(u, p, tend))
+  du <- .as_num(f(u, p, tend))
   retcode <- if (identical(osol$retcode, "Terminated")) "Success" else
     if (identical(osol$retcode, "Success")) "Failure" else osol$retcode
   .nl_new_solution(c("SteadyStateSolution", "NonlinearSolution"), a, alg, u, retcode, resid = du,
@@ -1201,7 +1205,7 @@ solve.IntervalNonlinearProblem <- function(a, b, ...) {
   maxiters <- as.integer(opts$maxiters %||% 1000L)
   p <- a$p
   ff <- a$f$f
-  f <- function(x) as.numeric(ff(x, p))
+  f <- function(x) .as_num(ff(x, p))
   left <- min(a$uspan); right <- max(a$uspan)
   fl <- f(left); fr <- f(right)
   res <- if (isTRUE(fl == 0)) .nl_bracket_result(left, fl, left, right, "ExactSolutionLeft")

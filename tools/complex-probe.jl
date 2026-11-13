@@ -12,7 +12,8 @@
 # Every case runs in try/catch; an error prints its message.
 # Run: julia --project=tools/julia --startup-file=no tools/complex-probe.jl
 using OrdinaryDiffEq, StochasticDiffEq, DiffEqNoiseProcess, NonlinearSolve, LinearAlgebra
-using OrdinaryDiffEqBDF, OrdinaryDiffEqFIRK
+using OrdinaryDiffEqBDF, OrdinaryDiffEqFIRK, OrdinaryDiffEqLowOrderRK, OrdinaryDiffEqTsit5
+using OrdinaryDiffEqVerner, OrdinaryDiffEqSDIRK, OrdinaryDiffEqRosenbrock
 using OrdinaryDiffEqDifferentiation: AutoFiniteDiff
 import Pkg
 
@@ -69,11 +70,15 @@ go("SC_Tsit5_tol", () -> solve(ODEProblem((u, p, t) -> (-1 + 2im) * u, 1.0 + 1.0
     abstol = 1e-10, reltol = 1e-10))
 tg = collect(0.0:0.01:1.0)
 Wg = [0.0; cumsum(0.1 .* sin.(1:100))]
-for alg in (SRIW1(), SOSRI(), SRA3(), SOSRA(), EM())
-    name = "SDE_" * string(nameof(typeof(alg)))
-    sf(u, p, t) = 1.01u
-    prob = SDEProblem(sf, sf, 1.0 + 1.0im, (0.0, 1.0); noise = NoiseGrid(tg, Wg))
-    go(name, () -> solve(prob, alg; dt = 0.01, adaptive = false))
+sf(u, p, t) = 1.01u
+try
+    for alg in (SRIW1(), SOSRI(), SRA3(), SOSRA(), EM())
+        name = "SDE_" * string(nameof(typeof(alg)))
+        prob = SDEProblem(sf, sf, 1.0 + 1.0im, (0.0, 1.0); noise = NoiseGrid(tg, Wg))
+        go(name, () -> solve(prob, alg; dt = 0.01, adaptive = false))
+    end
+catch e
+    outs("SDE", "error", replace(first(sprint(showerror, e), 300), '\n' => ' '))
 end
 
 # C. matrix state

@@ -75,7 +75,7 @@
 # counted as one evaluation. f0 is f(u, p, t), returned for the step to use
 # as its first stage value.
 .rosen_tgrad <- function(ctx, u, t) {
-  if (!is.null(ctx$tgrad)) return(list(dT = as.numeric(ctx$tgrad(u, ctx$p, t)), nf = 0L, f0 = NULL))
+  if (!is.null(ctx$tgrad)) return(list(dT = .as_num(ctx$tgrad(u, ctx$p, t)), nf = 0L, f0 = NULL))
   f0 <- ctx$f(u, ctx$p, t)
   ad <- ctx$autodiff
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
@@ -131,7 +131,7 @@
 }
 
 .rosen_lusolve <- function(F, b) {
-  if (is.list(F)) .rosen_getrs(F, b) else as.numeric(Matrix::solve(F, b))
+  if (is.list(F)) .rosen_getrs(F, b) else .as_num(Matrix::solve(F, b))
 }
 
 # OpenBLAS lapack/getf2/getf2.c: column j gets the earlier row swaps, the
@@ -226,6 +226,7 @@
 # result bit for bit up to 8 components; LLVM vectorizes longer loops in an
 # order not reproduced here, which changes the last bits.
 .rosen_ode_norm <- function(x) {
+  if (is.complex(x)) return(.rms_norm(x))
   s <- 0
   for (v in x) s <- .fma(v, v, s)
   sqrt(s / max(length(x), 1L))
@@ -502,7 +503,7 @@
                        residual_control = FALSE, adaptive_order = NULL) {
   tab <- .ROSEN_TABLEAUS[[tab_name]]
   spec <- list(name = name, kind = kind, tab = tab, wmethod = wmethod, fsal = fsal,
-               max_jac_age = as.integer(max_jac_age), jac_reuse_gamma_tol = as.numeric(jac_reuse_gamma_tol),
+               max_jac_age = as.integer(max_jac_age), jac_reuse_gamma_tol = .as_num(jac_reuse_gamma_tol),
                residual_control = residual_control)
   if (kind == "r2332") {
     step <- .rosen_r2332_step(spec, r32 = name == "Rosenbrock32")

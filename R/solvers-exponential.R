@@ -24,13 +24,13 @@
 # "eu_diagonal", whose phi functions are taken entrywise) or a matrix
 .exprk_concrete <- function(L) {
   if (inherits(L, "ScalarOperator")) return(L$value)
-  if (inherits(L, "DiagonalOperator")) return(structure(as.numeric(L$diag), class = "eu_diagonal"))
+  if (inherits(L, "DiagonalOperator")) return(structure(.as_num(L$diag), class = "eu_diagonal"))
   .sop_matrix(L)
 }
 
 # products of the precomputed operators (numbers or matrices)
 .exprk_dense <- function(A) if (inherits(A, "eu_diagonal")) diag(unclass(A), length(A)) else A
-.exprk_mv <- function(X, v) if (is.matrix(X)) as.numeric(X %*% v) else X * v
+.exprk_mv <- function(X, v) if (is.matrix(X)) .as_num(X %*% v) else X * v
 .exprk_mm <- function(X, Y) if (is.matrix(X)) X %*% Y else X * Y
 
 # expRK_operators(alg, dt, A)
@@ -110,7 +110,7 @@
   J <- .calc_J(ctx, u, t)
   A <- J$J
   list(A = A, split = FALSE, njacs = 1L, nfj = J$nf,
-       nl = function(v, tt) ctx$f(v, ctx$p, tt) - as.numeric(A %*% v))
+       nl = function(v, tt) ctx$f(v, ctx$p, tt) - .as_num(A %*% v))
 }
 
 .exprk_alg <- function(name, order, core, krylov = FALSE, m = 30L, iop = 0L, cached = TRUE,
@@ -128,7 +128,7 @@
     cache
   }
   step <- function(ctx, t, u, dt, cache) {
-    u <- as.numeric(u)
+    u <- .as_num(u)
     S <- .exprk_setup(ctx, name, t, u, cache$fsal)
     n <- length(u)
     if (cached && !krylov) {
@@ -407,7 +407,7 @@ ETD2 <- function() {
     list(lin = lin, nl = nl, nlprev = 0 * nl, fsal = lin + nl, nf20 = 1L)
   }
   step <- function(ctx, t, u, dt, cache) {
-    u <- as.numeric(u)
+    u <- .as_num(u)
     L <- .exprk_operator(ctx, name)
     cache <- .exprk_ops_cache(name, cache, dt, L)
     o <- .exprk_ops_for(name, cache, dt, L)
@@ -431,7 +431,7 @@ ETD2 <- function() {
   m <- as.integer(m)
   iop <- as.integer(iop)
   step <- function(ctx, t, u, dt, cache) {
-    u <- as.numeric(u)
+    u <- .as_num(u)
     f0 <- cache$fsal
     J <- .calc_J(ctx, u, t)
     Jm <- J$J
@@ -440,7 +440,7 @@ ETD2 <- function() {
     pts <- function(ts, B) .eu_phiv_timestep(ts, Jm, B, tol = ctx$reltol, iop = iop,
                                              opnorm = .eu_opnorminf, adaptive = adaptive_krylov,
                                              tau = if (adaptive_krylov) 0 else dt, m = min(m, n))
-    Jv <- function(v) as.numeric(Jm %*% v)
+    Jv <- function(v) .as_num(Jm %*% v)
     fe <- function(v, tt) ctx$f(v, ctx$p, tt)
     r <- core(t, u, dt, f0, pts, Jv, fe)
     fl <- ctx$f(r$u, ctx$p, t + dt)
@@ -492,12 +492,12 @@ Exp4 <- function(adaptive_krylov = TRUE, m = 30, iop = 0, autodiff = NULL)
     ts <- c(dt / 3, 2 * dt / 3, dt)
     K1 <- pts(ts, cbind(0 * f0, f0))
     for (i in 1:3) K1[, i] <- K1[, i] / ts[i]
-    w4 <- as.numeric(K1 %*% c(-7 / 300, 97 / 150, -37 / 300))
+    w4 <- .as_num(K1 %*% c(-7 / 300, 97 / 150, -37 / 300))
     u4 <- u + dt * w4
     d4 <- fe(u4, t + dt) - f0 - dt * Jv(w4)
     K2 <- pts(ts, cbind(0 * d4, d4))
     for (i in 1:3) K2[, i] <- K2[, i] / ts[i]
-    w7 <- as.numeric(K1 %*% c(59 / 300, -7 / 75, 269 / 300)) + as.numeric(K2 %*% c(2 / 3, 2 / 3, 2 / 3))
+    w7 <- .as_num(K1 %*% c(59 / 300, -7 / 75, 269 / 300)) + .as_num(K2 %*% c(2 / 3, 2 / 3, 2 / 3))
     u7 <- u + dt * w7
     d7 <- fe(u7, t + dt) - f0 - dt * Jv(w7)
     k7 <- pts(ts[1L], cbind(0 * d7, d7))
@@ -641,7 +641,7 @@ EPIRK5P2 <- function(adaptive_krylov = TRUE, m = 30, iop = 0, autodiff = NULL)
   m <- as.integer(m)
   iop <- as.integer(iop)
   step <- function(ctx, t, u, dt, cache) {
-    u <- as.numeric(u)
+    u <- .as_num(u)
     # the linear part is the Jacobian of the whole right-hand side, also for
     # a split problem, so the remainder is f(u) - J u; upstream takes the
     # second split function as the remainder there, which is inconsistent

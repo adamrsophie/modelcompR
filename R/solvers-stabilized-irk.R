@@ -61,7 +61,7 @@ IRKC <- function(eigen_est = NULL, autodiff = NULL) .with_autodiff(autodiff, {
 .irkc_derivs <- function(ctx, cache, t, u) {
   cache$du1 <- ctx$f1(u, ctx$p, t)
   cache$du2 <- ctx$f2(u, ctx$p, t)
-  cache$du_u <- as.numeric(u)
+  cache$du_u <- .as_num(u)
   cache$du_stale <- FALSE
   cache$fsal <- cache$du1 + cache$du2
 }
@@ -82,7 +82,7 @@ IRKC <- function(eigen_est = NULL, autodiff = NULL) .with_autodiff(autodiff, {
   # du1 and du2 belong to the start of the step: after an event or a step
   # limiter they are evaluated again (OrdinaryDiffEq keeps the values of the
   # last attempt, see PORTING.md)
-  if (isTRUE(cache$du_stale) || !identical(cache$du_u, as.numeric(u))) {
+  if (isTRUE(cache$du_stale) || !identical(cache$du_u, .as_num(u))) {
     .irkc_derivs(ctx, cache, t, u)
     nf <- nf + 1L
     nf2 <- nf2 + 1L
@@ -92,7 +92,7 @@ IRKC <- function(eigen_est = NULL, autodiff = NULL) .with_autodiff(autodiff, {
   st <- cache$st
   e <- eigen_est
   if (!is.null(e)) {
-    st$eig <- as.numeric(if (is.function(e)) e(u, p, t) else e)
+    st$eig <- .as_num(if (is.function(e)) e(u, p, t) else e)
   } else {
     st$disc <- isTRUE(ctx$derivative_discontinuity)
     ctx2 <- ctx
@@ -182,7 +182,7 @@ IRKC <- function(eigen_est = NULL, autodiff = NULL) .with_autodiff(autodiff, {
   if (isTRUE(EEst <= 1)) {
     cache$du1 <- du1n
     cache$du2 <- du2n
-    cache$du_u <- as.numeric(unew)
+    cache$du_u <- .as_num(unew)
     cache$fsal <- fnew
   }
   c(out, list(u = unew, EEst = EEst, k = list(du1 + du2, fnew)))

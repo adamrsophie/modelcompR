@@ -206,7 +206,7 @@ SDDEProblem <- function(sys, ..., constant_lags = NULL, dependent_lags = NULL, n
     stop("dependent_lags must be functions lag(u, p, t)", call. = FALSE)
   o0 <- as.integer(order_discontinuity_t0)
   if (length(o0) != 1L || is.na(o0) || o0 < 0L) stop("order_discontinuity_t0 must be a nonnegative integer", call. = FALSE)
-  list(constant_lags = as.numeric(unlist(constant_lags)), dependent_lags = dl, neutral = isTRUE(neutral),
+  list(constant_lags = .as_num(unlist(constant_lags)), dependent_lags = dl, neutral = isTRUE(neutral),
        order_discontinuity_t0 = o0)
 }
 
@@ -223,7 +223,7 @@ SDDEProblem <- function(sys, ..., constant_lags = NULL, dependent_lags = NULL, n
                             diagonal = length(unlist(u0)))
   }
   lf <- .dde_lag_fields(constant_lags, dependent_lags, neutral, order_discontinuity_t0)
-  .new_problem(type, f = fn, u0 = as.numeric(unlist(u0)), h = h, tspan = .as_tspan(tspan), p = p,
+  .new_problem(type, f = fn, u0 = .as_num(unlist(u0)), h = h, tspan = .as_tspan(tspan), p = p,
                sys = NULL, constant_lags = lf$constant_lags, dependent_lags = lf$dependent_lags,
                neutral = lf$neutral, order_discontinuity_t0 = lf$order_discontinuity_t0, noise_type = ntype,
                kwargs = list(...))
@@ -302,7 +302,7 @@ SDDEProblem <- function(sys, ..., constant_lags = NULL, dependent_lags = NULL, n
     fn$nbrownians <- if (is.matrix(ne)) ncol(ne) else length(ne)
   }
   found <- .dde_lags(sys, vals$p)
-  lf <- .dde_lag_fields(sort(unique(c(as.numeric(unlist(constant_lags)), found$constant))),
+  lf <- .dde_lag_fields(sort(unique(c(.as_num(unlist(constant_lags)), found$constant))),
                         c(found$dependent, if (is.function(dependent_lags)) list(dependent_lags) else dependent_lags),
                         neutral, order_discontinuity_t0)
   prob <- .new_problem(type, f = fn, u0 = u0, h = h, tspan = tspan, p = vals$p, sys = sys,
@@ -362,14 +362,14 @@ print.DDEAlgorithm <- function(x, ...) {
   hs <- new.env(parent = emptyenv())
   hs$steps <- list(); hs$starts <- numeric(); hs$ends <- numeric()
   hs$current <- NULL; hs$inside <- FALSE
-  hs$t0 <- prob$tspan[1L]; hs$u0 <- as.numeric(prob$u0); hs$h <- prob$h
+  hs$t0 <- prob$tspan[1L]; hs$u0 <- .as_num(prob$u0); hs$h <- prob$h
   hs
 }
 
 # History h(p, s) during integration.
 .dde_H <- function(hs) {
   function(p, s) {
-    if (s <= hs$t0) return(as.numeric(hs$h(p, s)))
+    if (s <= hs$t0) return(.as_num(hs$h(p, s)))
     n <- length(hs$starts)
     if (n && s <= hs$ends[n] + 1e-12 * max(1, abs(s))) {
       i <- max(1L, findInterval(s, hs$starts))
@@ -412,7 +412,7 @@ print.DDEAlgorithm <- function(x, ...) {
 #' sol$retcode
 #' @export
 Discontinuity <- function(t, order = 0L)
-  structure(list(t = as.numeric(t), order = as.integer(order)), class = "Discontinuity")
+  structure(list(t = .as_num(t), order = as.integer(order)), class = "Discontinuity")
 
 # The discontinuity state: pending discontinuities (times and orders), the
 # tracked (passed) ones that dependent lags propagate, and the problem's
@@ -433,7 +433,7 @@ Discontinuity <- function(t, order = 0L)
   # user discontinuities: times (order 0) or Discontinuity(t, order)
   dd <- opts$d_discontinuities
   dd <- if (inherits(dd, "Discontinuity")) list(dd) else as.list(dd)
-  extra <- vapply(dd, function(d) if (inherits(d, "Discontinuity")) d$t else as.numeric(d), 0)
+  extra <- vapply(dd, function(d) if (inherits(d, "Discontinuity")) d$t else .as_num(d), 0)
   ords <- vapply(dd, function(d) if (inherits(d, "Discontinuity")) as.integer(d$order) else 0L, 0L)
   keep <- extra > ds$t0 & extra < ds$tf
   extra <- extra[keep]
@@ -501,7 +501,7 @@ Discontinuity <- function(t, order = 0L)
     Td <- ds$tracked_t[j]
     g <- function(th) {
       s <- t + th * dt
-      Td + as.numeric(lag(ustep(th), p, s)) - s
+      Td + .as_num(lag(ustep(th), p, s)) - s
     }
     # discontinuity_interval
     g0 <- g(0)
@@ -558,6 +558,10 @@ Discontinuity <- function(t, order = 0L)
   list(opts = opts, ds = ds)
 }
 
+# The keywords of DelayDiffEq's __init that the port takes from solve (the
+# allowed keywords of SciMLBase do not list them).
+.DDE_KEYWORDS <- c("discontinuity_interp_points", "discontinuity_abstol")
+
 #' @rdname MethodOfSteps
 #' @param a A `DDEProblem`.
 #' @param b `MethodOfSteps(alg)`, or an ODE algorithm (wrapped
@@ -566,10 +570,12 @@ Discontinuity <- function(t, order = 0L)
 #' @export
 solve.DDEProblem <- function(a, b = NULL, ...) {
   mos <- if (is.null(b)) MethodOfSteps(Tsit5()) else if (inherits(b, "MethodOfSteps")) b else MethodOfSteps(b)
+  .check_complex(a, mos)
   inner <- mos$alg
   if (!inherits(inner, "ODEAlgorithm") || inherits(inner, "CompositeAlgorithm"))
     stop("DDE problems need a single ODE algorithm in MethodOfSteps(), such as Tsit5()", call. = FALSE)
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, setdiff(names(list(...)), .DDE_KEYWORDS))
   # build_null_solution for a problem without unknowns
   if (!is.null(ns <- .null_solution(a, mos, opts))) return(ns)
   hs <- .dde_history_store(a)
@@ -648,9 +654,11 @@ solve.DDEProblem <- function(a, b = NULL, ...) {
 #' @export
 solve.SDDEProblem <- function(a, b = NULL, ...) {
   mos <- if (is.null(b)) MethodOfSteps(EM()) else if (inherits(b, "MethodOfSteps")) b else MethodOfSteps(b)
+  .check_complex(a, mos)
   inner <- mos$alg
   if (!inherits(inner, "SDEAlgorithm")) stop("SDDE problems need an SDE algorithm such as EM() in MethodOfSteps()", call. = FALSE)
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
+  .check_solve_kwargs(opts, setdiff(names(list(...)), .DDE_KEYWORDS))
   seed <- opts$seed
   opts$seed <- NULL
   lags <- a$constant_lags %||% numeric()
@@ -688,10 +696,10 @@ solve.SDDEProblem <- function(a, b = NULL, ...) {
   prob <- env$prob
   t0 <- prob$tspan[1L]
   p <- env$p_final
-  S <- function(s) if (s <= t0) as.numeric(prob$h(p, s)) else as.numeric(sol(s))
+  S <- function(s) if (s <= t0) .as_num(prob$h(p, s)) else .as_num(sol(s))
   out <- matrix(NA_real_, length(ts), length(exprs))
   for (i in seq_along(ts)) {
-    u <- as.numeric(sol(ts[i]))
+    u <- .as_num(sol(ts[i]))
     vals <- if (cg$n) .evalat_values(cg$tfun(u, p, ts[i]), cg$idx, S) else numeric()
     out[i, ] <- cg$fn(u, p, ts[i], vals)
   }

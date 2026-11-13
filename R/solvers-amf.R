@@ -135,7 +135,7 @@ SciMLOpFactorization <- function() .lin_alg("SciMLOpFactorization", "sciml_op")
   }
   if (is.null(cache$amf_fact)) stop("SciMLOpFactorization: the operator is singular", call. = FALSE)
   u <- cache$amf_fact(b)
-  list(u = u, resid = as.numeric(A$apply(u)) - b, iters = 1L, alg = alg)
+  list(u = u, resid = .as_num(A$apply(u)) - b, iters = 1L, alg = alg)
 }
 
 # factorize of SciMLOperators: a multiple (ScaledOperator) factorizes as the
@@ -190,14 +190,14 @@ SciMLOpFactorization <- function() .lin_alg("SciMLOpFactorization", "sciml_op")
   d <- diag(M)
   if ((lo || up) && any(d == 0)) return(NULL)
   if (lo && up) return(function(b) b / d)
-  if (lo) return(function(b) as.numeric(forwardsolve(M, b)))
-  if (up) return(function(b) as.numeric(backsolve(M, b)))
+  if (lo) return(function(b) .as_num(forwardsolve(M, b)))
+  if (up) return(function(b) .as_num(backsolve(M, b)))
   if (qr(M)$rank < nrow(M)) return(NULL)
   if (!(lo1 && up1) && all(M == t(M))) {
     bk <- Matrix::BunchKaufman(M)
-    return(function(b) as.numeric(Matrix::solve(bk, b)))
+    return(function(b) .as_num(Matrix::solve(bk, b)))
   }
-  function(b) as.numeric(solve(M, b))
+  function(b) .as_num(solve(M, b))
 }
 
 #' @rdname amf

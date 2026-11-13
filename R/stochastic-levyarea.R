@@ -186,7 +186,7 @@ coefficient_length <- function(m, n, alg) alg$norv(m, n)
 #'   numbers.
 #' @export
 LevyAreaCoefficients <- function(X, Y, tail, m, n)
-  structure(list(X = as.matrix(X), Y = as.matrix(Y), tail = as.numeric(tail), m = as.integer(m), n = as.integer(n)),
+  structure(list(X = as.matrix(X), Y = as.matrix(Y), tail = .as_num(tail), m = as.integer(m), n = as.integer(n)),
             class = "LevyAreaCoefficients")
 
 #' @export
@@ -197,7 +197,7 @@ print.LevyAreaCoefficients <- function(x, ...) {
 
 .la_randn <- function(rng, k) {
   if (is.null(rng)) return(stats::rnorm(k))
-  z <- as.numeric(rng(k))
+  z <- .as_num(rng(k))
   if (length(z) != k) stop("rng(n) must return n numbers", call. = FALSE)
   z
 }
@@ -238,7 +238,7 @@ generate_coefficients <- function(m, n, alg, rng = NULL) {
 
 .la_kernel <- function(W, n, alg, cf) {
   m <- length(W)
-  W <- as.numeric(W)
+  W <- .as_num(W)
   sq2 <- sqrt(2)
   if (alg$name == "MronRoe") {
     Y <- sweep(cf$Y - sq2 * matrix(W, n, m, byrow = TRUE), 1L, seq_len(n), "/")
@@ -265,7 +265,7 @@ generate_coefficients <- function(m, n, alg, rng = NULL) {
       i <- i + 1L
     }
   }
-  A <- A + outer((1 / (1 + sqrt(1 + sum(W * W)))) * as.numeric(G %*% W), W)
+  A <- A + outer((1 / (1 + sqrt(1 + sum(W * W)))) * .as_num(G %*% W), W)
   (1 / (2 * pi)) * (A - t(A))
 }
 
@@ -287,7 +287,7 @@ levyarea <- function(W, n, alg, coeffs = NULL, rng = NULL) {
 #' @export
 iterated_integrals <- function(W, h, eps = NULL, ito_correction = TRUE, error_norm = NULL, alg = NULL,
                                rng = NULL, q_12 = NULL) {
-  W <- as.numeric(W)
+  W <- .as_num(W)
   if (length(W) == 1L) {
     if (!ito_correction) return(0.5 * W^2)
     return(if (is.null(q_12)) 0.5 * W^2 - 0.5 * h else 0.5 * W^2 - 0.5 * h * q_12^2)
@@ -322,7 +322,7 @@ iterated_integrals <- function(W, h, eps = NULL, ito_correction = TRUE, error_no
 #' @param t_points Times in `[0, h]`.
 #' @export
 reconstruct_path <- function(dW, h, coeffs, t_points) {
-  dW <- as.numeric(dW)
+  dW <- .as_num(dW)
   m <- length(dW)
   n <- coeffs$n
   X <- coeffs$X
@@ -449,12 +449,12 @@ JCommute_oop <- function() structure(list(name = "JCommute_oop"), class = c("JCo
 
 #' @rdname iterated_integral_evaluators
 #' @export
-JCommute_iip <- function(dW) .jalg_iip("JCommute_iip", 0 * outer(as.numeric(dW), as.numeric(dW)), c("AbstractJCommute", "AbstractJ"))
+JCommute_iip <- function(dW) .jalg_iip("JCommute_iip", 0 * outer(.as_num(dW), .as_num(dW)), c("AbstractJCommute", "AbstractJ"))
 
 #' @rdname iterated_integral_evaluators
 #' @export
 IteratedIntegralAlgorithm_iip <- function(dW, levyalg)
-  .jalg_iip("IteratedIntegralAlgorithm_iip", 0 * outer(as.numeric(dW), as.numeric(dW)),
+  .jalg_iip("IteratedIntegralAlgorithm_iip", 0 * outer(.as_num(dW), .as_num(dW)),
             c("AbstractIteratedIntegralAlgorithm", "AbstractJ"), levyalg = levyalg)
 
 .levy_J <- function(dt, dW, alg, p, c, gamma, coeffs, rng) {
@@ -466,7 +466,7 @@ IteratedIntegralAlgorithm_iip <- function(dW, levyalg)
 #' @rdname iterated_integral_evaluators
 #' @export
 get_iterated_I <- function(dt, dW, dZ, alg, p = NULL, c = 1, gamma = 1, coeffs = NULL, rng = NULL) {
-  dW <- as.numeric(dW)
+  dW <- .as_num(dW)
   J <- if (inherits(alg, "AbstractJDiagonal")) 0.5 * dW * dW
   else if (inherits(alg, "AbstractJCommute")) 0.5 * outer(dW, dW)
   else if (inherits(alg, "IteratedIntegralAlgorithm_iip")) .levy_J(dt, dW, alg$levyalg, p, c, gamma, coeffs, rng)

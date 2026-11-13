@@ -138,7 +138,7 @@ NULL
   nf <- 0L
   e <- a$eigen_est
   if (!is.null(e)) {
-    st$eig <- as.numeric(if (is.function(e)) e(u, ctx$p, t) else e)
+    st$eig <- .as_num(if (is.function(e)) e(u, ctx$p, t) else e)
   } else if (is.null(a$eigen_est_interval)) {
     nf <- .stab_maxeig(ctx, st, t, u, fsal, !isTRUE(a$generic_maxeig), a$maxeig_iters %||% 50L)
   } else if (st$eig_age >= a$eigen_est_interval || ctx$iter <= 1L || st$disc || ctx$EEst_prev > 1) {

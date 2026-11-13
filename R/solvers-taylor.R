@@ -27,7 +27,7 @@
 .taylor_elems <- function(z) {
   if (is.null(z)) return(list())
   if (inherits(z, "mcr_taylor")) return(unclass(z))
-  if (is.numeric(z) || is.logical(z)) return(as.list(as.numeric(z)))
+  if (is.numeric(z) || is.logical(z)) return(as.list(.as_num(z)))
   if (is.list(z)) return(do.call(c, c(list(list()), lapply(unname(z), .taylor_elems))))
   stop("cannot evaluate a value of class ", class(z)[1L], " in Taylor mode", call. = FALSE)
 }
@@ -256,7 +256,7 @@ Summary.mcr_taylor <- function(..., na.rm = FALSE) {
 # the polynomial so far, divided by index.
 .taylor_jet <- function(ctx, t, u, P) {
   f <- ctx$f; p <- ctx$p; n <- length(u)
-  C <- cbind(as.numeric(u), as.numeric(f(u, p, t)))
+  C <- cbind(.as_num(u), .as_num(f(u, p, t)))
   if (P >= 2L) for (index in 2:P) {
     tT <- .taylor_vec(list(c(t, 1, numeric(index - 2L))))
     uT <- .taylor_vec(lapply(seq_len(n), function(i) C[i, ]), names(u))
@@ -329,7 +329,7 @@ ExplicitTaylor2 <- function(stage_limiter = NULL, step_limiter = NULL, thread = 
 # u = uprev + dt k1 + dt^2 / 2 k2 under @muladd (fused, element by element).
 .taylor2_step <- function(ctx, t, u, dt, cache) {
   f <- ctx$f; p <- ctx$p
-  k1 <- as.numeric(f(u, p, t))
+  k1 <- .as_num(f(u, p, t))
   u1 <- .taylor_vec(lapply(seq_along(u), function(i) c(u[i], k1[i])), names(u))
   k2 <- .taylor_coef(f(u1, p, .taylor_vec(list(c(t, 1)))), 1L, length(u))
   unew <- .fma(dt * dt / 2, k2, .fma(dt, k1, u))

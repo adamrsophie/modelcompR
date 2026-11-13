@@ -509,7 +509,7 @@
   cc[S] <- 1
   bt <- numeric(S)
   for (nm in grep("^btilde_[0-9]+$", names(x), value = TRUE)) bt[as.integer(sub("^btilde_", "", nm))] <- x[[nm]]
-  list(s = S, A = as.numeric(t(A)), b = A[S, ], c = cc, btilde = bt, order = order, adaptive_order = order - 1,
+  list(s = S, A = .as_num(t(A)), b = A[S, ], c = cc, btilde = bt, order = order, adaptive_order = order - 1,
        adaptive = TRUE, nonlinear_est = FALSE, qmax = 10, qmin = 1 / 5, gamma = 0.9,
        beta1 = 7 / (10 * order), beta2 = 2 / (5 * order), controller = "PIController")
 }
@@ -570,8 +570,8 @@ RK6v4 <- function(stage_limiter = NULL, step_limiter = NULL, thread = NULL)
 #' @rdname simd_and_tableau_rk
 #' @export
 ExplicitRKTableau <- function(A, c, alpha, order, alphaEEst = NULL, adaptiveorder = 0, fsal = FALSE)
-  structure(list(A = as.matrix(A), c = as.numeric(c), alpha = as.numeric(alpha),
-                 alphaEEst = if (!is.null(alphaEEst)) as.numeric(alphaEEst), stages = length(c), order = order,
+  structure(list(A = as.matrix(A), c = .as_num(c), alpha = .as_num(alpha),
+                 alphaEEst = if (!is.null(alphaEEst)) .as_num(alphaEEst), stages = length(c), order = order,
                  adaptiveorder = adaptiveorder, fsal = fsal), class = c("ExplicitRKTableau", "Tableau"))
 
 #' @rdname simd_and_tableau_rk
@@ -594,11 +594,11 @@ ExplicitRK <- function(tableau = constructTsit5ExplicitRK()) {
     K <- matrix(0, length(u), s)
     K[, 1L] <- cache$fsal %||% f(u, p, t)
     for (i in seq_len(s)[-1L])
-      K[, i] <- f(u + dt * as.numeric(K[, seq_len(i - 1L), drop = FALSE] %*% A[i, seq_len(i - 1L)]), p, t + cc[i] * dt)
-    unew <- u + dt * as.numeric(K %*% al)
+      K[, i] <- f(u + dt * .as_num(K[, seq_len(i - 1L), drop = FALSE] %*% A[i, seq_len(i - 1L)]), p, t + cc[i] * dt)
+    unew <- u + dt * .as_num(K %*% al)
     fl <- if (fsal) K[, s] else f(unew, p, t + dt)
     res <- list(u = unew, k = list(K[, 1L], fl), cache = list(fsal = fl), nf = s - 1L + (!fsal))
-    if (!is.null(bt)) res$err <- dt * as.numeric(K %*% bt)
+    if (!is.null(bt)) res$err <- dt * .as_num(K %*% bt)
     res
   }
   .new_alg("ExplicitRK", tableau$order, adaptive = !is.null(bt), step = step, interp = .hermite_interp,

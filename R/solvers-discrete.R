@@ -79,7 +79,7 @@ ImplicitDiscreteProblem <- function(sys, op = list(), tspan = NULL, ..., u0 = NU
       p <- dots[[1L]]
       dots <- dots[-1L]
     }
-    return(.new_problem("ImplicitDiscreteProblem", f = f, u0 = as.numeric(unlist(u0)),
+    return(.new_problem("ImplicitDiscreteProblem", f = f, u0 = .as_num(unlist(u0)),
                         tspan = .as_tspan(tspan), p = if (is.null(p)) numeric() else p, sys = NULL,
                         kwargs = dots))
   }
@@ -150,7 +150,7 @@ solve.ImplicitDiscreteProblem <- function(a, b, ...) {
   step <- function(u, t) {
     F <- function(x) {
       nf <<- nf + 1L
-      as.numeric(f(x, u, p, t))
+      .as_num(f(x, u, p, t))
     }
     .safe_newton(F, u, tol = tol)
   }
@@ -159,7 +159,7 @@ solve.ImplicitDiscreteProblem <- function(a, b, ...) {
     colnames(U) <- names(a$u0)
     .new_ode_solution(t = ts, u = U, prob = a, alg = IDSolve(), retcode = retcode, stats = list(nf = nf))
   }
-  u0 <- as.numeric(a$u0)
+  u0 <- .as_num(a$u0)
   names(u0) <- names(a$u0)
   # the initial state is made consistent by one solve at t0, unless the
   # problem's own initialization did it (_initialize_dae!, OverrideInit)
