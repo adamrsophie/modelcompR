@@ -1,7 +1,7 @@
 # scipy.optimize.linprog and scipy.optimize.milp as OptimizationSciPy.jl
 # calls them. The HiGHS methods run the native port of the HiGHS LP
 # presolve, postsolve and simplex solver (R/optimization-scipy-highs-*.R);
-# "highs-ipm" uses the same dual simplex method in place of IPX. milp branches and bounds
+# "highs-ipm" runs IPX with crossover and the simplex clean up of HiGHS. milp branches and bounds
 # depth first over node LPs of that solver, without the presolve, cuts and
 # heuristics of the HiGHS MIP solver, so node counts differ. The legacy
 # methods use the dense two phase simplex method with Bland's rule below.
@@ -184,11 +184,12 @@
     A_ub <- matrix(as.numeric(kw$A_ub %||% numeric()), ncol = n)
     A_eq <- matrix(as.numeric(kw$A_eq %||% numeric()), ncol = n)
     b_ub <- as.numeric(kw$b_ub %||% numeric()); b_eq <- as.numeric(kw$b_eq %||% numeric())
-    sol <- .hs_highs_run(cvec, rbind(A_ub, A_eq), c(rep(-Inf, length(b_ub)), b_eq), c(b_ub, b_eq), lo, hi,
-                        list(iteration_limit = maxiter, presolve = kw$presolve, ptol = kw$primal_feasibility_tolerance,
-                             dtol = kw$dual_feasibility_tolerance,
-                             edge_weight = switch(kw$simplex_dual_edge_weight_strategy %||% "",
-                                                  dantzig = "dantzig", devex = "devex", steepest = "steepest", "dse")))
+    run <- if (alg$method == "highs-ipm") .hs_highs_run_ipm else .hs_highs_run
+    sol <- run(cvec, rbind(A_ub, A_eq), c(rep(-Inf, length(b_ub)), b_eq), c(b_ub, b_eq), lo, hi,
+               list(iteration_limit = maxiter, presolve = kw$presolve, ptol = kw$primal_feasibility_tolerance,
+                    dtol = kw$dual_feasibility_tolerance, run_crossover = kw$run_crossover,
+                    edge_weight = switch(kw$simplex_dual_edge_weight_strategy %||% "",
+                                         dantzig = "dantzig", devex = "devex", steepest = "steepest", "dse")))
     return(.sp_highs_result(sol, n, length(b_ub), b_ub, b_eq, lo, hi))
   }
   res <- .sp_linprog(cvec, kw$A_ub, kw$b_ub, kw$A_eq, kw$b_eq, lo, hi, maxiter)
@@ -216,6 +217,10 @@
     A <- matrix(as.numeric(kw$A), ncol = n)
     lc <- rep_len(as.numeric(kw$lb_con), nrow(A)); uc <- rep_len(as.numeric(kw$ub_con), nrow(A))
   }
+  # internal switch: the HiGHS MIP solver port (R/optimization-scipy-highs-mip-*.R)
+  # replaces the depth first search once it matches every probe MILP
+  if (isTRUE(getOption("modelcompR.highs_mip", FALSE)))
+    return(.sp_milp_highs(cvec, A, lc, uc, lo, hi, typ, kw))
   best <- NULL
   nodes <- 0L
   status <- 2L
@@ -253,6 +258,55 @@
   if (status == 0L) {
     res <- c(list(x = best$x, fun = best$fun), res,
              list(mip_node_count = nodes, mip_dual_bound = best$fun, mip_gap = 0))
+  } else {
+    res$x <- rep(NaN, n)
+    res$fun <- NaN
+  }
+  res$retcode <- if (res$success) "Success" else "Failure"
+  res
+}
+
+# scipy.optimize.milp through Highs::callSolveMip (the HiGHS MIP solver port)
+# with the result checks of _highs_wrapper and SciPy's status and message
+# conversion (_highs_to_scipy_status_message)
+.sp_milp_highs <- function(cvec, A, lc, uc, lo, hi, typ, kw) {
+  n <- length(cvec)
+  lp <- .hmip_HighsLp_from_dense(cvec, A, lc, uc, lo, hi, integrality = typ)
+  opts <- list()
+  if (!is.null(kw$node_limit)) opts$mip_max_nodes <- kw$node_limit
+  if (!is.null(kw$mip_rel_gap)) opts$mip_rel_gap <- kw$mip_rel_gap
+  if (!is.null(kw$time_limit)) opts$time_limit <- kw$time_limit
+  if (isFALSE(kw$presolve)) opts$presolve <- "off"
+  r <- .hmip_callSolveMip(lp, opts)
+  st <- r$model_status
+  code <- c(Notset = 0L, SolveError = 4L, Optimal = 7L, Infeasible = 8L, UnboundedOrInfeasible = 9L,
+            Unbounded = 10L, ObjectiveTarget = 12L, TimeLimit = 13L, IterationLimit = 14L,
+            Unknown = 15L, SolutionLimit = 16L, Interrupt = 17L, MemoryLimit = 18L)[[st]]
+  text <- c(Notset = "Not Set", SolveError = "Solve error", Optimal = "Optimal", Infeasible = "Infeasible",
+            UnboundedOrInfeasible = "Primal infeasible or unbounded", Unbounded = "Unbounded",
+            ObjectiveTarget = "Objective target reached", TimeLimit = "Time limit reached",
+            IterationLimit = "Iteration limit reached", Unknown = "Unknown",
+            SolutionLimit = "Solution limit reached", Interrupt = "Interrupted by user",
+            MemoryLimit = "Memory limit reached")[[st]]
+  lead <- c(Optimal = "Optimization terminated successfully. ", TimeLimit = "Time limit reached. ",
+            IterationLimit = "Iteration limit reached. ", Infeasible = "The problem is infeasible. ",
+            Unbounded = "The problem is unbounded. ",
+            UnboundedOrInfeasible = "The problem is unbounded or infeasible. ")
+  status <- c(Optimal = 0L, TimeLimit = 1L, IterationLimit = 1L, Infeasible = 2L, Unbounded = 3L)[st]
+  if (is.na(status)) status <- 4L
+  ld <- if (st %in% names(lead)) lead[[st]]
+        else if (st %in% c("Notset", "SolveError", "ObjectiveTarget")) ""
+        else "The HiGHS status code was not recognized. "
+  have_sol <- r$objective != Inf
+  fail <- !(st %in% c("Optimal", "TimeLimit", "IterationLimit", "SolutionLimit")) ||
+    (st != "Optimal" && !have_sol)
+  hmsg <- if (fail) paste0("model_status is ", text, "; primal_status is ",
+                           if (have_sol) "Feasible" else "None") else text
+  res <- list(status = unname(status), success = status == 0L,
+              message = paste0(ld, "(HiGHS Status ", code, ": ", hmsg, ")"))
+  if (!fail) {
+    res <- c(list(x = r$col_value, fun = r$objective), res,
+             list(mip_node_count = r$mip_node_count, mip_dual_bound = r$mip_dual_bound, mip_gap = r$mip_gap))
   } else {
     res$x <- rep(NaN, n)
     res$fun <- NaN

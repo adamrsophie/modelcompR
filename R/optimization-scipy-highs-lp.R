@@ -87,6 +87,7 @@
   ek$ptol <- opts$ptol %||% 1e-7
   ek$dtol <- opts$dtol %||% 1e-7
   ek$iteration_limit <- opts$iteration_limit %||% Inf
+  ek$objective_bound <- opts$objective_bound %||% Inf
   ek$dual_edge_weight_strategy <- opts$edge_weight %||% "dse"
   ek$start_basis <- opts$basis
   ek$dual_cost_perturbation_multiplier <- opts$perturb %||% 1
@@ -192,15 +193,17 @@
 .hs_lp_solve <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts = list()) {
   ptol <- opts$ptol %||% 1e-7; dtol <- opts$dtol %||% 1e-7
   if (nrow(A) == 0L) return(.hs_unconstrained(cost, col_lower, col_upper, ptol, dtol))
-  sc <- if (isFALSE(opts$scale)) NULL else .hs_scale(A, cost)
+  # the MIP LP relaxation passes the scale factors HiGHS keeps with its LP
+  # (fixed_scale, NULL for none) and possibly the retained HEkk (ek)
+  sc <- if ("fixed_scale" %in% names(opts)) opts$fixed_scale else if (isFALSE(opts$scale)) NULL else .hs_scale(A, cost)
   if (is.null(sc)) {
-    ek <- .hs_new_ekk(cost, A, row_lower, row_upper, col_lower, col_upper, opts)
+    ek <- opts$ek %||% .hs_new_ekk(cost, A, row_lower, row_upper, col_lower, col_upper, opts)
     .hs_ekk_solve(ek, FALSE, opts$strategy %||% "dual")
     sol <- .hs_get_solution(ek)
   } else {
     As <- A * outer(sc$row, sc$col)
-    ek <- .hs_new_ekk(cost * sc$col, As, row_lower * sc$row, row_upper * sc$row,
-                      col_lower / sc$col, col_upper / sc$col, opts)
+    ek <- opts$ek %||% .hs_new_ekk(cost * sc$col, As, row_lower * sc$row, row_upper * sc$row,
+                                   col_lower / sc$col, col_upper / sc$col, opts)
     .hs_ekk_solve(ek, FALSE, opts$strategy %||% "dual")
     sol <- .hs_get_solution(ek)
     status <- ek$model_status
@@ -224,10 +227,12 @@
       sol$objective <- ek$primal_objective_value
       sol$nit <- ek$iteration_count
       sol$primal_feasible <- npi == 0L
+      sol$ek <- ek; sol$scale <- sc
       return(sol)
     }
     # moveLp: the unscaled LP into the ekk with the basis kept
     ek$A <- A
+    ek$moved_unscaled <- TRUE
     ek$lp <- list(col_cost = cost, col_lower = col_lower, col_upper = col_upper,
                   row_lower = row_lower, row_upper = row_upper)
     .hs_invert(ek)
@@ -252,5 +257,6 @@
   sol$objective <- ek$primal_objective_value
   sol$nit <- ek$iteration_count
   sol$primal_feasible <- ek$num_primal_infeasibilities == 0L
+  sol$ek <- ek; sol$scale <- sc
   sol
 }

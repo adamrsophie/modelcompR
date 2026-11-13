@@ -90,7 +90,7 @@ def raw(name, c, A, lhs, rhs, lb, ub, integrality=None, dev=0, **opts):
     f, lo = logopts(name, dev)
     lo["time_limit"] = 60.0
     lo.update(opts)
-    print("==", name)
+    print("\n==", name)
     try:
         A = np.atleast_2d(np.asarray(A, dtype=float)) if A is not None and len(A) else np.zeros((0, len(c)))
         h = _h._Highs()
@@ -276,6 +276,14 @@ for it in (0, 1, 2, 3, 5):
     lp(f"lp_dense_maxiter{it}_nopresolve", method="highs-ds", maxiter=it, presolve=False, **LPS[6][1])
     lp(f"lp_dense_ipm_maxiter{it}", method="highs-ipm", maxiter=it, **LPS[6][1])
 
+# IPX without crossover, iterate by iterate: the interior point after k IPM
+# iterations, to locate where the port leaves the reference
+for name, kw in (LPS[0], LPS[6]):
+    raw_lp(f"{name}_raw_ipm_nocrossover", dev=3, solver="ipm", run_crossover="off", presolve=False, **kw)
+    for it in range(1, 8):
+        raw_lp(f"{name}_raw_ipm_nocrossover_iter{it}", solver="ipm", run_crossover="off", presolve=False,
+               ipm_iteration_limit=it, **kw)
+
 # MILPs: the problems of the tests, a knapsack, a set cover, an infeasible
 # one, a gap limit, each with the defaults, presolve off, and presolve,
 # heuristics, symmetry detection and restarts off
@@ -381,6 +389,79 @@ for lim in (2, 5):
 milp("milp_mknap_gap", dev=1, mip_rel_gap=0.05, **mk)
 milp("milp_mknap_gap_nopresolve", dev=1, mip_rel_gap=0.05, presolve=False, **mk)
 
+# MILPs for the primal heuristics (group D): MOFF with exactly one heuristic
+# switched back on, so the Src column of the log names it. milp_eqint has
+# equality rows that no trivial heuristic point satisfies, so a J line comes
+# from the feasibility jump alone; the heuristic effort goes back to the
+# default 0.05 where the heuristic needs it (RINS, RENS, root reduced cost).
+rng3 = np.random.default_rng(20261115)
+Ae = rng3.integers(1, 6, (3, 6)).astype(float)
+xe = rng3.integers(0, 4, 6).astype(float)
+MILPS3 = [("milp_eqint", dict(c=rng3.integers(-5, 6, 6).astype(float), integrality=np.ones(6), lb=np.zeros(6),
+                              ub=np.full(6, 5.0), A=Ae, lbc=Ae @ xe, ubc=Ae @ xe))]
+for name, kw in MILPS3:
+    print("== data", name)
+    for k, val in kw.items():
+        if val is not None:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+# symmetry detection (presolve/HighsSymmetry.cpp): presolve, heuristics and
+# restarts off but symmetry detection on, so that the log carries the
+# generator and full orbitope counts. The bin packing cases have identical
+# bins (full orbitopes); milp_symgen has identical general integer columns
+# (generators that are no orbitope).
+MSYM = dict(MOFF)
+MSYM["mip_detect_symmetry"] = True
+def binpack(size, nb, cap):
+    ni = len(size)
+    A = np.zeros((ni + nb, ni * nb + nb))
+    for i in range(ni):
+        A[i, i * nb:(i + 1) * nb] = 1.0
+    for b in range(nb):
+        A[ni + b, b:ni * nb:nb] = size
+        A[ni + b, ni * nb + b] = -cap
+    return dict(c=np.r_[np.zeros(ni * nb), np.ones(nb)], integrality=np.ones(ni * nb + nb),
+                lb=np.zeros(ni * nb + nb), ub=np.ones(ni * nb + nb), A=A,
+                lbc=np.r_[np.ones(ni), np.full(nb, -inf)], ubc=np.r_[np.ones(ni), np.zeros(nb)])
+
+
+MSYMS = [("milp_binpack", dict(MILPS2)["milp_binpack"])]
+# distinct items larger than half a bin: one item per bin, identical bins
+# without equal items (a full orbitope), LP bound far below the optimum
+MSYMS.append(("milp_binpackdist", binpack(np.array([6.5, 6.0, 7.0, 8.0, 5.5, 5.2]), 6, 10.0)))
+MSYMS.append(("milp_binpackdist7", binpack(np.array([5.5, 5.6, 5.7, 5.8, 5.9, 6.1, 6.2]), 7, 10.0)))
+MSYMS.append(("milp_binpackmix", binpack(np.array([4.0, 4.0, 4.0, 4.0, 4.0, 6.0, 6.0, 7.0, 7.0]), 7, 10.0)))
+MSYMS.append(("milp_symgen", dict(c=-np.r_[np.full(6, 8.0), np.full(4, 11.0)], integrality=np.ones(10),
+                                  lb=np.zeros(10), ub=np.full(10, 2.0),
+                                  A=[np.r_[np.full(6, 5.0), np.full(4, 7.0)], np.r_[np.full(6, 3.0), np.full(4, 4.0)]],
+                                  lbc=np.full(2, -inf), ubc=np.array([33.0, 19.0]))))
+for name, kw in MSYMS[1:]:
+    print("== data", name)
+    for k, val in kw.items():
+        if val is not None:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+HEUR = [("fj", {"mip_heuristic_run_feasibility_jump": True}),
+        ("zi", {"mip_heuristic_run_zi_round": True}),
+        ("shift", {"mip_heuristic_run_shifting": True}),
+        ("rens", {"mip_heuristic_run_rens": True, "mip_heuristic_effort": 0.05}),
+        ("rins", {"mip_heuristic_run_rins": True, "mip_heuristic_effort": 0.05}),
+        ("rrc", {"mip_heuristic_run_root_reduced_cost": True, "mip_heuristic_effort": 0.05})]
+allm = dict(MILPS); allm.update(dict(MILPS2)); allm.update(dict(MILPS3))
+for name in ("milp_eqint", "milp_mixed", "milp_int8", "milp_genint", "milp_mknap", "milp_restart"):
+    kw = allm[name]
+    for hname, hopt in HEUR:
+        o = dict(MOFF); o.update(hopt)
+        raw(f"{name}_heur_{hname}", kw["c"], kw.get("A"), kw.get("lbc", []), kw.get("ubc", []), kw["lb"], kw["ub"],
+            integrality=kw["integrality"], dev=1, **o)
+for name, kw in MSYMS:
+    raw(f"{name}_sym", kw["c"], kw.get("A"), kw.get("lbc", []), kw.get("ubc", []), kw["lb"], kw["ub"],
+        integrality=kw["integrality"], dev=1, **MSYM)
+    raw(f"{name}_symdef", kw["c"], kw.get("A"), kw.get("lbc", []), kw.get("ubc", []), kw["lb"], kw["ub"],
+        integrality=kw["integrality"], dev=1, presolve=False)
+
 # LPs for three corners of the simplex port: a larger dense LP whose dual
 # simplex solve runs past 50 basis updates (the synthetic clock reinversion
 # of HEkk), and an LP with duplicate columns that presolve merges and
@@ -431,3 +512,98 @@ for name, kw in LPS3:
             lp(f"{name}_ds_{lname}", method="highs-ds", dev=dev, **kw, **opts)
         else:
             raw_lp(f"{name}_ds_{lname}", dev=dev, solver="simplex", simplex_strategy=1, **kw, **opts)
+
+# The MIP presolve on its own (Highs::presolve runs HighsMipSolver::
+# runMipPresolve for a MIP): the presolved model in hex, its integrality and
+# the presolve log, for the MILPs above and for small MIPs that exercise one
+# rule each (bound rounding, coefficient strengthening, dominated columns,
+# probing on a clique and variable upper bounds, implied integers).
+def raw_presolve(name, c, A, lhs, rhs, lb, ub, integrality, dev=2, **opts):
+    from scipy.optimize._highspy import _core as _h
+    f, lo = logopts(name, dev)
+    lo["time_limit"] = 60.0
+    lo.update(opts)
+    print("==", name)
+    try:
+        A = np.atleast_2d(np.asarray(A, dtype=float)) if A is not None and len(A) else np.zeros((0, len(c)))
+        h = _h._Highs()
+        for k, val in lo.items():
+            h.setOptionValue(k, val)
+        lpm = _h.HighsLp()
+        lpm.num_col_ = len(c)
+        lpm.num_row_ = A.shape[0]
+        lpm.col_cost_ = np.asarray(c, dtype=float)
+        lpm.col_lower_ = np.asarray(lb, dtype=float)
+        lpm.col_upper_ = np.asarray(ub, dtype=float)
+        lpm.row_lower_ = np.asarray(lhs, dtype=float)
+        lpm.row_upper_ = np.asarray(rhs, dtype=float)
+        lpm.a_matrix_.format_ = _h.MatrixFormat.kColwise
+        lpm.a_matrix_.num_col_ = len(c)
+        lpm.a_matrix_.num_row_ = A.shape[0]
+        start = [0]; index = []; value = []
+        for j in range(len(c)):
+            for i in range(A.shape[0]):
+                if A[i, j] != 0:
+                    index.append(i); value.append(A[i, j])
+            start.append(len(index))
+        lpm.a_matrix_.start_ = np.asarray(start, dtype=np.int32)
+        lpm.a_matrix_.index_ = np.asarray(index, dtype=np.int32)
+        lpm.a_matrix_.value_ = np.asarray(value, dtype=float)
+        lpm.integrality_ = [_h.HighsVarType(int(t)) for t in integrality]
+        h.passModel(lpm)
+        h.presolve()
+        try:
+            print("presolve_status", str(h.getModelPresolveStatus()).split(".")[-1])
+        except Exception as err:
+            print("presolve_status_error", repr(err))
+        p = h.getPresolvedLp()
+        print("num_col", p.num_col_, "num_row", p.num_row_)
+        print("offset", hx(p.offset_))
+        print("cost", hx(p.col_cost_))
+        print("col_lower", hx(p.col_lower_))
+        print("col_upper", hx(p.col_upper_))
+        print("row_lower", hx(p.row_lower_))
+        print("row_upper", hx(p.row_upper_))
+        print("integrality", [int(t) for t in p.integrality_])
+        m = p.a_matrix_
+        print("a_format", str(m.format_).split(".")[-1])
+        print("a_start", list(m.start_))
+        print("a_index", list(m.index_))
+        print("a_value", hx(m.value_))
+    except Exception as err:
+        print("error", repr(err))
+    sys.stdout.flush()
+    if os.path.exists(f):
+        with open(f) as fh:
+            for line in fh:
+                print("log|", line.rstrip())
+    sys.stdout.flush()
+
+
+MPRE = []
+MPRE.append(("mpre_round", dict(c=[1.0, -1.0, 2.0], integrality=[1, 1, 0], lb=[0.2, -1.5, 0.0], ub=[3.7, 4.2, 10.0],
+                                A=[[1.0, 1.0, 1.0], [2.0, -1.0, 1.0]], lbc=[-inf, 1.0], ubc=[5.5, inf])))
+MPRE.append(("mpre_coefstr", dict(c=[-5.0, -3.0, -2.0, -1.0], integrality=[1, 1, 1, 1], lb=[0.0] * 4, ub=[1.0] * 4,
+                                  A=[[10.0, 3.0, 2.0, 1.0], [1.0, 1.0, 1.0, 1.0]], lbc=[-inf, -inf], ubc=[12.0, 3.0])))
+MPRE.append(("mpre_domcol", dict(c=[-2.0, -1.0, -3.0, -1.0], integrality=[1, 1, 1, 0], lb=[0.0] * 4, ub=[1.0, 1.0, 1.0, 4.0],
+                                 A=[[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 1.0, 0.0], [1.0, 1.0, 3.0, 2.0]],
+                                 lbc=[-inf] * 3, ubc=[2.5, 3.0, 4.0])))
+MPRE.append(("mpre_probe", dict(c=[-3.0, -2.0, -4.0, -1.0, -1.0], integrality=[1, 1, 1, 0, 0], lb=[0.0] * 5,
+                                ub=[1.0, 1.0, 1.0, 10.0, 10.0],
+                                A=[[1.0, 1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 1.0, 0.0, 0.0], [-5.0, 0.0, 0.0, 1.0, 0.0],
+                                   [0.0, 0.0, -6.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 1.0, 0.0, 0.0]],
+                                lbc=[-inf] * 6, ubc=[1.0, 1.0, 0.0, 0.0, 7.0, 1.5])))
+MPRE.append(("mpre_implint", dict(c=[-1.0, -2.0, 0.5, 0.25], integrality=[1, 1, 0, 0], lb=[0.0] * 4, ub=[6.0, 6.0, inf, inf],
+                                  A=[[1.0, 2.0, 1.0, 0.0], [3.0, 1.0, 0.0, -1.0]], lbc=[9.0, 2.0], ubc=[9.0, 2.0])))
+for name, kw in MPRE:
+    print("== data", name)
+    for k, val in kw.items():
+        if val is not None:
+            a = np.atleast_2d(np.asarray(val, dtype=float))
+            print(k, a.shape[0], a.shape[1], hx(a.ravel()))
+sys.stdout.flush()
+for name, kw in MILPS + MILPS2 + MPRE:
+    raw_presolve(f"{name}_presolved", kw["c"], kw.get("A"), kw.get("lbc", []), kw.get("ubc", []), kw["lb"], kw["ub"],
+                 kw["integrality"])
+for name, kw in MPRE:
+    milp(f"{name}_default", dev=1, **kw)

@@ -471,6 +471,9 @@
     .hs_dual_rebuild(ek, ds)
     if (ds$solve_phase %in% c(0L, -5L)) return(invisible())
     if (.hs_bailout(ek)) break
+    # HEkkDual::bailoutOnDualObjective (the MIP LP relaxation sets a bound)
+    if (phase2 && is.finite(ek$objective_bound %||% Inf) &&
+        exists(".hs_bailout_on_dual_objective") && .hs_bailout_on_dual_objective(ek, ds)) break
     if (phase2 && ds$dualInfeasCount > 0L) break
     repeat {
       .hs_dual_iterate(ek, ds)

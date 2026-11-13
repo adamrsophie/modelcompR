@@ -250,6 +250,9 @@
   .hs_lsb_add(pr, "r", row, col, pr$Avalue[pos])
   .hs_lsb_add(pr, "d", col, row, pr$Avalue[pos])
   pr$rowsize[row] <- pr$rowsize[row] + 1L
+  it <- pr$integrality[col]
+  if (it == 1L) pr$rowsizeInteger[row] <- pr$rowsizeInteger[row] + 1L
+  else if (it == 4L) pr$rowsizeImplInt[row] <- pr$rowsizeImplInt[row] + 1L
 }
 .hs_unlink <- function(pr, pos) {
   col <- pr$Acol[pos]; row <- pr$Arow[pos]
@@ -263,12 +266,16 @@
   }
   .hs_splay_unlink_at(pr, pos, pr$rowroot[row], function(v) pr$rowroot[row] <- v)
   pr$rowsize[row] <- pr$rowsize[row] - 1L
+  it <- pr$integrality[col]
+  if (it == 1L) pr$rowsizeInteger[row] <- pr$rowsizeInteger[row] - 1L
+  else if (it == 4L) pr$rowsizeImplInt[row] <- pr$rowsizeImplInt[row] - 1L
   if (!pr$rowDeleted[row]) {
     if (pr$rowsize[row] == 1L) pr$singletonRows <- c(pr$singletonRows, row) else .hs_mark_row(pr, row)
     .hs_lsb_add(pr, "r", row, col, pr$Avalue[pos], -1L)
   }
   .hs_reset_row_dual_from_col(pr, col)
   .hs_reset_col_impl_from_row(pr, row)
+  if (length(pr$liftingOpportunities)) .hs_clear_lifting(pr, row)
   pr$Avalue[pos] <- 0
   pr$freeslots <- c(pr$freeslots, pos)
 }
@@ -355,6 +362,10 @@
 .hs_impl_eq_at_upper <- function(pr, row) pr$implRowDualUpper[row] < -pr$dtol
 
 .hs_change_col_upper <- function(pr, col, v) {
+  if (pr$integrality[col] != 0L) {
+    v <- floor(v + pr$ptol)
+    if (v == pr$cu[col]) return(invisible())
+  }
   old <- pr$cu[col]; pr$cu[col] <- v
   for (p in .hs_col_slots(pr, col)) {
     .hs_lsb_updated_var_up(pr, "r", pr$Arow[p], col, pr$Avalue[p], old)
@@ -362,6 +373,10 @@
   }
 }
 .hs_change_col_lower <- function(pr, col, v) {
+  if (pr$integrality[col] != 0L) {
+    v <- ceiling(v - pr$ptol)
+    if (v == pr$cl[col]) return(invisible())
+  }
   old <- pr$cl[col]; pr$cl[col] <- v
   for (p in .hs_col_slots(pr, col)) {
     .hs_lsb_updated_var_lo(pr, "r", pr$Arow[p], col, pr$Avalue[p], old)
@@ -467,8 +482,12 @@
     ib <- .cd_val(.cd_div(.cd_add(c(bnd, 0), -residual), val))
     if (abs(ib) * 1e-14 > pr$ptol) return()
     if (dir * val > 0) {
+      if (pr$mip) ib <- .hs_mip_implied_col_upper(pr, row, col, ib, thr)
       if (ib < pr$implColUpper[col] - thr) .hs_change_impl_col_upper(pr, col, ib, row)
-    } else if (ib > pr$implColLower[col] + thr) .hs_change_impl_col_lower(pr, col, ib, row)
+    } else {
+      if (pr$mip) ib <- .hs_mip_implied_col_lower(pr, row, col, ib, thr)
+      if (ib > pr$implColLower[col] + thr) .hs_change_impl_col_lower(pr, col, ib, row)
+    }
   }
   if (ck$up != Inf) check(ck$up, .hs_lsb_residual(pr, "r", "LO", row, col, val), 1L)
   if (ck$lo != -Inf) check(ck$lo, .hs_lsb_residual(pr, "r", "UO", row, col, val), -1L)
@@ -661,6 +680,9 @@
   }
   btol <- tol / max(1, abs(val))
   lt <- ncl > lo + btol; ut <- ncu < up - btol
+  isint <- pr$integrality[col] != 0L
+  if (lt && isint) ncl <- ceiling(ncl - btol)
+  if (ut && isint) ncu <- floor(ncu + btol)
   lb <- if (lt) ncl else lo
   ub <- if (ut) ncu else up
   if (ub <= lb + tol) {
@@ -690,7 +712,13 @@
   p1 <- pr$rowroot[row]
   p2 <- if (pr$ARright[p1] != 0L) pr$ARright[p1] else pr$ARleft[p1]
   c1 <- pr$Acol[p1]; c2 <- pr$Acol[p2]
-  better1 <- {
+  i1 <- pr$integrality[c1] == 1L; i2 <- pr$integrality[c2] == 1L
+  smv <- pr$small_matrix_value
+  better1 <- if (i1) {
+    a1 <- abs(pr$Avalue[p1]); a2 <- abs(pr$Avalue[p2])
+    if (!i2) FALSE else if (a1 < a2 - smv) TRUE else if (a2 < a1 - smv) FALSE
+    else pr$colsize[c1] < pr$colsize[c2]
+  } else if (i2) TRUE else {
     s1 <- pr$colsize[c1]
     if (s1 == 1L) TRUE else {
       s2 <- pr$colsize[c2]
@@ -703,6 +731,14 @@
   if (better1) { sc <- c1; st <- c2; scoef <- pr$Avalue[p1]; tcoef <- pr$Avalue[p2] }
   else { sc <- c2; st <- c1; scoef <- pr$Avalue[p2]; tcoef <- pr$Avalue[p1] }
   rhs <- pr$ru[row]
+  if (pr$integrality[sc] == 1L && pr$integrality[st] == 1L) {
+    rc <- .hs_round(tcoef / scoef) * scoef
+    if (abs(rc - tcoef) > smv) return(invisible())
+    tcoef <- rc
+    rr <- .hs_round(rhs / scoef) * scoef
+    if (abs(rhs - rr) > pr$ptol) .hs_pre_abort("infeasible")
+    rhs <- rr
+  }
   olo <- pr$cl[st]; oup <- pr$cu[st]; slo <- pr$cl[sc]; sup <- pr$cu[sc]
   imp <- function(b) .cd_val(.cd_div(.cd_add(c(rhs, 0), -(scoef * b)), tcoef))
   if (sign(scoef) != sign(tcoef)) {
@@ -735,6 +771,14 @@
     .hs_remove_row(pr, row)
     return(invisible())
   }
+  if (pr$rowsizeInteger[row] != 0L || pr$rowsizeImplInt[row] != 0L) {
+    .hs_mip_degree1_tests(pr, row)
+    if (.hs_is_redundant(pr, row)) {
+      .hs_ps_redundant_row(pr, row)
+      .hs_remove_row(pr, row)
+      return(invisible())
+    }
+  }
   redundant_bounds <- function(col) {
     if (pr$colsize[col] != 1L) return()
     if (pr$cost[col] > 0) {
@@ -746,16 +790,19 @@
     if (.hs_impl_eq_at_lower(pr, row)) {
       pr$ru[row] <- pr$rl[row]
       .hs_change_row_dual_lower(pr, row, -Inf)
-      redundant_bounds(pr$rowDualLowerSource[row])
+      if (!pr$mip) redundant_bounds(pr$rowDualLowerSource[row])
     } else if (.hs_impl_eq_at_upper(pr, row)) {
       pr$rl[row] <- pr$ru[row]
       .hs_change_row_dual_upper(pr, row, Inf)
-      redundant_bounds(pr$rowDualUpperSource[row])
+      if (!pr$mip) redundant_bounds(pr$rowDualUpperSource[row])
     }
   }
   if (pr$rowsize[row] == 2L && pr$rl[row] == pr$ru[row]) {
     rt <- if (orl == oru) "eq" else if (oru != Inf) "leq" else "geq"
     return(.hs_doubleton_eq(pr, row, rt))
+  }
+  if (pr$rowsizeInteger[row] != 0L || pr$rowsizeImplInt[row] != 0L) {
+    if (.hs_mip_row_presolve(pr, row)) return(invisible())
   }
   forcing <- function(dir, side, implied, min_abs, row_type) {
     if (dir * implied > dir * side + tol * min(1, min_abs)) return()
@@ -771,6 +818,9 @@
     .hs_mark_row_deleted(pr, row)
     for (k in seq_along(rv$index)) {
       j <- rv$index[k]
+      if (pr$integrality[j] != 0L &&
+          .hs_fractionality(if (dir * rv$value[k] > 0) pr$cu[j] else pr$cl[j]) > pr$mip_feastol)
+        .hs_pre_abort("infeasible")
       if (dir * rv$value[k] > 0) {
         .hs_ps_fixed_col(pr, j, pr$cu[j], "upper")
         if (pr$cl[j] < pr$cu[j]) .hs_change_col_lower(pr, j, pr$cu[j])
@@ -846,7 +896,7 @@
     bod <- if (dir > 0) -.hs_lsb_sum(pr, "d", "UO", col, -pr$cost[col]) else -.hs_lsb_sum(pr, "d", "LO", col, -pr$cost[col])
     if (bod != 0) return()
     .hs_ps_push(pr, list(type = "forcingcol", col = col, cost = pr$cost[col], bound = other, at_inf_upper = dir < 0,
-                         colv = .hs_col_vec(pr, col)))
+                         colv = .hs_col_vec(pr, col), integral = pr$integrality[col] == 1L))
     .hs_mark_col_deleted(pr, col)
     p <- pr$colhead[col]
     while (p != 0L) {
@@ -868,29 +918,47 @@
 
 .hs_dual_fixing <- function(pr, col) {
   if (pr$cl[col] == pr$cu[col]) return(invisible())
-  down <- 0L; up <- 0L
+  down <- 0L; up <- 0L; down_row <- 0L; up_row <- 0L
   if (pr$cost[col] > 0) up <- up + 1L else if (pr$cost[col] < 0) down <- down + 1L
   for (p in .hs_col_slots(pr, col)) {
-    if (.hs_yields_lower(pr, pr$Arow[p], pr$Avalue[p])) down <- down + 1L
-    if (.hs_yields_upper(pr, pr$Arow[p], pr$Avalue[p])) up <- up + 1L
+    if (.hs_yields_lower(pr, pr$Arow[p], pr$Avalue[p])) { down <- down + 1L; down_row <- pr$Arow[p] }
+    if (.hs_yields_upper(pr, pr$Arow[p], pr$Avalue[p])) { up <- up + 1L; up_row <- pr$Arow[p] }
     if (down > 1L && up > 1L) break
   }
   if (down == 0L || up == 0L) return(.hs_fix_col_to(pr, col, down != 0L))
+  if (pr$mip && pr$cl[col] != -Inf && pr$cu[col] != Inf) {
+    if (down == 1L && down_row != 0L) {
+      .hs_mip_dual_fix_subst(pr, col, down_row, 1L, pr$cu[col], pr$cl[col])
+      if (pr$colDeleted[col]) return(invisible())
+    }
+    if (up == 1L && up_row != 0L) {
+      .hs_mip_dual_fix_subst(pr, col, up_row, -1L, pr$cl[col], pr$cu[col])
+      if (pr$colDeleted[col]) return(invisible())
+    }
+  }
+  isint <- pr$integrality[col] != 0L
   tighter <- function(dir, current) {
     if (dir * pr$cost[col] < 0) return(NULL)
     nb <- if (dir > 0) .hs_worst_case_bound(pr, col, TRUE) else -.hs_worst_case_bound(pr, col, FALSE)
     if (nb != -Inf && (nb >= dir * current - pr$ptol || abs(nb) > pr$ptol / 1e-14)) return(NULL)
+    if (isint) nb <- ceiling(nb - pr$ptol)
     nb * dir
   }
   nb <- tighter(1L, pr$cu[col])
   if (!is.null(nb)) {
     nb <- max(nb, pr$cl[col])
-    if (nb < pr$cu[col] - pr$ptol && nb == pr$cl[col]) .hs_fix_col_to(pr, col, FALSE)
+    if (nb < pr$cu[col] - pr$ptol) {
+      if (nb == pr$cl[col]) .hs_fix_col_to(pr, col, FALSE)
+      else if (isint) .hs_change_col_upper(pr, col, nb)
+    }
   } else {
     nb <- tighter(-1L, pr$cl[col])
     if (!is.null(nb)) {
       nb <- min(nb, pr$cu[col])
-      if (nb > pr$cl[col] + pr$ptol && nb == pr$cu[col]) .hs_fix_col_to(pr, col, TRUE)
+      if (nb > pr$cl[col] + pr$ptol) {
+        if (nb == pr$cu[col]) .hs_fix_col_to(pr, col, TRUE)
+        else if (isint) .hs_change_col_lower(pr, col, nb)
+      }
     }
   }
 }
@@ -904,11 +972,13 @@
   }
   .hs_detect_dominated_col(pr, col, FALSE)
   if (pr$colDeleted[col]) return(invisible())
+  if (pr$mip) .hs_convert_implied_integer(pr, col, row)
   .hs_dual_fixing(pr, col)
   if (pr$colDeleted[col]) return(invisible())
   .hs_update_col_impl_one(pr, row, col, coef)
-  .hs_update_row_dual_one(pr, row, col, coef)
+  if (pr$integrality[col] != 1L) .hs_update_row_dual_one(pr, row, col, coef)
   if (.hs_is_dual_implied_free(pr, row) && .hs_is_implied_free(pr, col)) {
+    if (pr$integrality[col] == 1L && !.hs_is_implied_integral(pr, col)) return(invisible())
     rowpos <- .hs_row_inorder(pr, row)
     .hs_substitute_free_col(pr, row, col, rowpos)
   }
@@ -944,9 +1014,10 @@
   if (pr$colsize[col] == 1L) return(.hs_singleton_col(pr, col))
   .hs_detect_dominated_col(pr, col)
   if (pr$colDeleted[col]) return(invisible())
+  if (pr$mip) .hs_mip_col_presolve(pr, col)
   .hs_dual_fixing(pr, col)
   if (pr$colDeleted[col]) return(invisible())
-  .hs_update_row_dual(pr, col)
+  if (pr$integrality[col] != 1L) .hs_update_row_dual(pr, col)
 }
 
 .hs_presolve_changed_rows <- function(pr) {
@@ -1029,6 +1100,7 @@
   pr$Anext <- pr$Aprev <- pr$ARleft <- pr$ARright <- integer(k)
   pr$freeslots <- integer()
   pr$colhead[] <- 0L; pr$colsize[] <- 0L; pr$rowroot[] <- 0L; pr$rowsize[] <- 0L
+  pr$rowsizeInteger[] <- 0L; pr$rowsizeImplInt[] <- 0L
   pr$lsb <- list(r = .hs_lsb_new(pr$m), d = .hs_lsb_new(pr$n))
   for (pos in seq_len(k)) .hs_link(pr, pos)
   pr$rcur[rows] <- seq_along(rows) - 1L; pr$ccur[cols] <- seq_along(cols) - 1L
@@ -1054,12 +1126,20 @@
   maybe_shrink <- function() {
     if (pr$numDeletedCols >= pr$ncol_now %/% 2L || pr$numDeletedRows >= pr$nrow_now %/% 2L) .hs_shrink(pr)
   }
-  # sparsify is off for LPs (lp_presolve_requires_basis_postsolve)
+  # sparsify runs for an LP only when no basis postsolve is required (IPM
+  # without crossover): lp_presolve_requires_basis_postsolve is false
+  try_sparsify <- !pr$basis_postsolve
   repeat {
     .hs_fast_presolve_loop(pr)
     .hs_store_size(pr)
     .hs_aggregator(pr)
     if (big()) next
+    if (try_sparsify) {
+      nnz <- .hs_num_nonzeros(pr)
+      .hs_sparsify(pr)
+      if (isTRUE(100 * (1 - .hs_num_nonzeros(pr) / nnz) > 0)) .hs_fast_presolve_loop(pr)
+      try_sparsify <- FALSE
+    }
     if (parallel_calls < 5L) {
       maybe_shrink()
       .hs_store_size(pr)
@@ -1115,6 +1195,8 @@
     if (!ok(row, col)) { pr$subst[k, 1L] <- 0L; next }
     pos <- .hs_find_nonzero(pr, row, col)
     if (pos == 0L) { pr$subst[k, 1L] <- 0L; next }
+    # MIP: an integer column is substituted only when it is implied integral
+    if (pr$mip && pr$integrality[col] == 1L && !.hs_is_implied_integral(pr, col)) next
     if (pr$rowsize[row] == 2L || pr$colsize[col] == 2L) {
       .hs_substitute_free_col(pr, row, col, .hs_row_inorder(pr, row), TRUE)
       pr$subst[k, 1L] <- 0L
@@ -1297,14 +1379,23 @@
       next
     }
     # lp_presolve_requires_basis_postsolve skips rows with singleton
-    # columns, so only the duplicate row reduction applies
-    if (row_singletons[i] != 0L) next
+    # columns; without it the nearly parallel rows are combined by
+    # equalityRowAddition
+    nsing <- row_singletons[i]
+    if (pr$basis_postsolve && nsing != 0L) next
     grp <- .hs_bucket_group(buckets, row_key[i])
     del <- 0L; last <- 0L
     rowpos <- if (length(grp)) .hs_row_inorder(pr, i) else integer()
     for (gi in seq_along(grp)) {
       cand <- grp[gi]; last <- gi
-      if (pr$rowsize[i] != pr$rowsize[cand]) next
+      nsingc <- row_singletons[cand]
+      if (pr$basis_postsolve && nsingc != 0L) next
+      if (pr$rowsize[i] - nsing != pr$rowsize[cand] - nsingc) next
+      if (nsingc > 1L || nsing > 1L) {
+        if ((nsing != 0L || !.hs_is_equation(pr, i)) && (nsingc != 0L || !.hs_is_equation(pr, cand))) next
+      } else if (nsingc != nsing) {
+        if (!.hs_is_equation(pr, i) && !.hs_is_equation(pr, cand)) next
+      }
       scale <- row_max[cand] / row_max[i]
       parallel <- TRUE
       for (p in rowpos) {
@@ -1314,6 +1405,17 @@
         if (!parallel) break
       }
       if (!parallel) next
+      if (nsing != 0L || nsingc != 0L) {
+        if (.hs_is_equation(pr, i)) {
+          .hs_equality_row_addition(pr, i, cand, -scale, rowpos)
+          del <- cand
+        } else if (.hs_is_equation(pr, cand)) {
+          .hs_equality_row_addition(pr, cand, i, -row_max[i] / row_max[cand], .hs_row_preorder(pr, cand))
+          del <- i
+        }
+        # two inequalities with one singleton each: not handled (as in HiGHS)
+        next
+      }
       ut <- FALSE; lt <- FALSE
       if (scale > 0) {
         nu <- pr$ru[i] * scale; nl <- pr$rl[i] * scale
@@ -1392,8 +1494,152 @@
 
 # HPresolve::run on the LP; returns the status ("reduced", "empty",
 # "notreduced", "infeasible", "unboundedorinfeasible") and the reduced LP
-.hs_presolve <- function(cost, A, row_lower, row_upper, col_lower, col_upper, ptol = 1e-7, dtol = 1e-7) {
+# HPresolve::numNonzeros
+.hs_num_nonzeros <- function(pr) length(pr$Avalue) - length(pr$freeslots)
+
+# HPresolve::equalityRowAddition: adds scale times the equation stayrow to
+# removerow, cancelling their common nonzeros (the rows are parallel)
+.hs_equality_row_addition <- function(pr, stayrow, removerow, scale, vec_pos) {
+  stay <- .hs_row_inorder(pr, stayrow)
+  .hs_ps_push(pr, list(type = "eqrowaddition", row = removerow, addedeq = stayrow, scale = scale,
+                       rowv = list(index = pr$Acol[vec_pos], value = pr$Avalue[vec_pos])))
+  for (p in stay) {
+    q <- .hs_find_nonzero(pr, removerow, pr$Acol[p])
+    if (q != 0L) .hs_unlink(pr, q) else .hs_add_to_matrix(pr, removerow, pr$Acol[p], scale * pr$Avalue[p])
+  }
+  if (pr$ru[removerow] != Inf)
+    pr$ru[removerow] <- .cd_val(.cd_add(.cd_two_product(scale, pr$ru[stayrow]), pr$ru[removerow]))
+  if (pr$rl[removerow] != -Inf)
+    pr$rl[removerow] <- .cd_val(.cd_add(.cd_two_product(scale, pr$ru[stayrow]), pr$rl[removerow]))
+  .hs_row_presolve(pr, removerow)
+}
+
+# HPresolve::sparsify: adds multiples of each equation to the rows where
+# that cancels more nonzeros than it fills in. possibleScales is a std::map,
+# kept as sorted key and count vectors. A MIP presolve state carries
+# integrality, rowsizeInteger and small_matrix_value; an LP has none.
+.hs_sparsify <- function(pr) {
+  .hs_remove_row_singletons(pr)
+  .hs_remove_doubleton_equations(pr)
+  eqrows <- which(!is.na(pr$eqsize))
+  eqrows <- eqrows[order(pr$eqsize[eqrows], eqrows)]
+  minNonzeroVal <- sqrt(pr$ptol)
+  smv <- if (is.null(pr$small_matrix_value)) 1e-9 else pr$small_matrix_value
+  is_int <- function(j) !is.null(pr$integrality) && pr$integrality[j] == 1L
+  int_size <- function(r) if (is.null(pr$rowsizeInteger)) 0L else pr$rowsizeInteger[r]
+  add_scale <- function(ps, scale, nzval, candval) {
+    tolr <- minNonzeroVal / abs(nzval)
+    i <- which(ps$k >= scale - tolr)[1L]
+    if (!is.na(i) && abs(ps$k[i] - scale) <= tolr) {
+      if (ps$v[i] == -1) return(ps)
+      if (abs(ps$k[i] * nzval + candval) <= smv) ps$v[i] <- ps$v[i] + 1 else ps$v[i] <- -1
+    } else {
+      at <- if (is.na(i)) length(ps$k) else i - 1L
+      ps$k <- append(ps$k, scale, at); ps$v <- append(ps$v, 1, at)
+    }
+    ps
+  }
+  best_scale <- function(ps, misses) {
+    numCancel <- 0; scale <- 0
+    for (i in seq_along(ps$k)) {
+      if (ps$v[i] <= misses) next
+      if (ps$v[i] > numCancel || (ps$v[i] == numCancel && abs(ps$k[i]) < abs(scale))) {
+        scale <- ps$k[i]; numCancel <- ps$v[i]
+      }
+    }
+    c(scale, numCancel)
+  }
+  for (eqrow in eqrows) {
+    if (pr$rowDeleted[eqrow]) next
+    rowpos <- .hs_row_inorder(pr, eqrow)
+    sc <- 0L; sc2 <- 0L; scl <- .Machine$integer.max; sc2l <- .Machine$integer.max
+    for (p in rowpos) {
+      col <- pr$Acol[p]
+      if (pr$colsize[col] < scl) {
+        sc2 <- sc; sc2l <- scl; sc <- col; scl <- pr$colsize[col]
+      } else if (pr$colsize[col] < sc2l) {
+        sc2 <- col; sc2l <- pr$colsize[col]
+      }
+    }
+    srows <- integer(); sscales <- numeric()
+    for (cp in .hs_col_slots(pr, sc)) {
+      candRow <- pr$Arow[cp]
+      if (candRow == eqrow) next
+      ps <- list(k = numeric(), v = numeric())
+      misses <- 0L
+      maxMisses <- 1L
+      if (int_size(eqrow) == 0L && int_size(candRow) != 0L) maxMisses <- maxMisses - 1L
+      for (p in rowpos) {
+        j <- pr$Acol[p]
+        if (j == sc) {
+          candval <- pr$Avalue[cp]
+        } else {
+          q <- .hs_find_nonzero(pr, candRow, j)
+          if (q == 0L) {
+            if (is_int(j) && pr$cu[j] - pr$cl[j] > 1.5) { misses <- 2L; break }
+            misses <- misses + 1L
+            if (misses > maxMisses) break
+            next
+          }
+          candval <- pr$Avalue[q]
+        }
+        scale <- -candval / pr$Avalue[p]
+        if (abs(scale) > 1e3) next
+        ps <- add_scale(ps, scale, pr$Avalue[p], candval)
+      }
+      if (misses > maxMisses || !length(ps$k)) next
+      b <- best_scale(ps, misses)
+      if (b[2L] > misses) { srows <- c(srows, candRow); sscales <- c(sscales, b[1L]) }
+    }
+    if (!is_int(sc) || (pr$cu[sc] - pr$cl[sc]) < 1.5) {
+      for (cp in .hs_col_slots(pr, sc2)) {
+        candRow <- pr$Arow[cp]
+        if (candRow == eqrow) next
+        if (int_size(eqrow) == 0L && int_size(candRow) != 0L) next
+        if (.hs_find_nonzero(pr, candRow, sc) != 0L) next
+        ps <- list(k = numeric(), v = numeric())
+        skip <- FALSE
+        for (p in rowpos) {
+          j <- pr$Acol[p]
+          if (j == sc2) {
+            candval <- pr$Avalue[cp]
+          } else {
+            q <- .hs_find_nonzero(pr, candRow, j)
+            skip <- q == 0L
+            if (skip) break
+            candval <- pr$Avalue[q]
+          }
+          scale <- -candval / pr$Avalue[p]
+          if (abs(scale) > 1e3) next
+          ps <- add_scale(ps, scale, pr$Avalue[p], candval)
+        }
+        if (skip || !length(ps$k)) next
+        b <- best_scale(ps, 1L)
+        if (b[2L] > 1) { srows <- c(srows, candRow); sscales <- c(sscales, b[1L]) }
+      }
+    }
+    if (!length(srows)) next
+    .hs_ps_push(pr, list(type = "eqrowadditions", row = eqrow,
+                         rowv = list(index = pr$Acol[rowpos], value = pr$Avalue[rowpos]),
+                         addrows = list(index = srows, value = sscales)))
+    rhs <- pr$rl[eqrow]
+    for (k in seq_along(srows)) {
+      row <- srows[k]; scale <- sscales[k]
+      if (pr$rl[row] != -Inf) pr$rl[row] <- pr$rl[row] + scale * rhs
+      if (pr$ru[row] != Inf) pr$ru[row] <- pr$ru[row] + scale * rhs
+      for (p in rowpos) .hs_add_to_matrix(pr, row, pr$Acol[p], scale * pr$Avalue[p])
+      .hs_reinsert_equation(pr, row)
+    }
+    .hs_remove_row_singletons(pr)
+    .hs_remove_doubleton_equations(pr)
+  }
+  invisible()
+}
+
+.hs_presolve <- function(cost, A, row_lower, row_upper, col_lower, col_upper, ptol = 1e-7, dtol = 1e-7,
+                         basis_postsolve = TRUE) {
   pr <- new.env(parent = emptyenv())
+  pr$basis_postsolve <- basis_postsolve
   m <- nrow(A); n <- ncol(A)
   pr$m <- m; pr$n <- n; pr$ncol_now <- n; pr$nrow_now <- m
   pr$ptol <- ptol; pr$dtol <- dtol
@@ -1421,6 +1667,7 @@
   pr$stack <- list()
   pr$rcur <- seq_len(m) - 1L; pr$ccur <- seq_len(n) - 1L
   pr$subst <- matrix(0L, 0L, 2L)
+  .hs_mip_fields(pr, integer(n))
   for (pos in seq_len(k)) .hs_link(pr, pos)
   pr$eqsize <- ifelse(row_lower == row_upper, pr$rowsize, NA_integer_)
   for (row in which(row_lower == row_upper))
@@ -1713,6 +1960,17 @@
             }
           }
         }
+      },
+      eqrowaddition = {
+        # the row dual implicitly raises the dual of the added equation
+        if (rd[r$row] != 0)
+          rd[r$addedeq] <- .cd_val(.cd_add(.cd_mul(c(r$scale, 0), rd[r$row]), rd[r$addedeq]))
+      },
+      eqrowadditions = {
+        d <- c(rd[r$row], 0)
+        for (k in seq_along(r$addrows$index))
+          d <- .cd_iadd(d, .cd_mul(c(r$addrows$value[k], 0), rd[r$addrows$index[k]]))
+        rd[r$row] <- .cd_val(d)
       },
       forcingcolrow = {
         val <- c(r$rhs, 0)

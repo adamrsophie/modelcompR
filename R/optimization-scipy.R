@@ -77,8 +77,9 @@ print.ScipyOptimizer <- function(x, ...) {
 #' perturbation, dual steepest edge pricing and the bound flipping ratio
 #' test, primal simplex cleanup, the HFactor LU factorization with
 #' Forrest-Tomlin updates) solves them, with
-#' `presolve = FALSE` passed on as in SciPy; `"highs-ipm"` uses the simplex
-#' solver in place of IPX, and `ScipyMilp()`
+#' `presolve = FALSE` passed on as in SciPy; `"highs-ipm"` runs IPX with
+#' crossover (`run_crossover = "off"` skips it) and the simplex clean up of
+#' HiGHS, and `ScipyMilp()`
 #' branches and bounds depth first over its LPs without the cuts and
 #' heuristics of the HiGHS MIP solver, so node counts differ. `ScipyCOBYQA()` solves its
 #' interpolation systems with R's LAPACK (SciPy uses Accelerate or

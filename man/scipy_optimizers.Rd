@@ -166,8 +166,9 @@ HiGHS simplex solver (dual simplex method with scaling, cost
 perturbation, dual steepest edge pricing and the bound flipping ratio
 test, primal simplex cleanup, the HFactor LU factorization with
 Forrest-Tomlin updates) solves them, with
-\code{presolve = FALSE} passed on as in SciPy; \code{"highs-ipm"} uses the simplex
-solver in place of IPX, and \code{ScipyMilp()}
+\code{presolve = FALSE} passed on as in SciPy; \code{"highs-ipm"} runs IPX with
+crossover (\code{run_crossover = "off"} skips it) and the simplex clean up of
+HiGHS, and \code{ScipyMilp()}
 branches and bounds depth first over its LPs without the cuts and
 heuristics of the HiGHS MIP solver, so node counts differ. \code{ScipyCOBYQA()} solves its
 interpolation systems with R's LAPACK (SciPy uses Accelerate or
