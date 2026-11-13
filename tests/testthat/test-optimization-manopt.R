@@ -23,42 +23,36 @@ mo_hess_jl <- function(M, p, X) {
 }
 mo_p0 <- c(0.6, -0.48, 0.64)
 mo_dev <- function(a, b) max(abs(a - b))
-# a point after a fixed number of iterations: the iterate of Manopt.jl on the
-# reference platform, a point of the sphere elsewhere (line searches amplify
-# last bit differences)
-mo_expect <- function(x, ref, tol) {
-  if (ref_platform()) expect_lt(mo_dev(x, ref), tol) else expect_equal(sum(x * x), 1, tolerance = 1e-10)
-}
 
 test_that("Manopt solvers on the sphere follow Manopt.jl iterate by iterate", {
   M <- Sphere(2)
   S <- Manopt$StopAfterIteration
-  mo_expect(Manopt$gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25)),
-                   c(0.39124950596404234, -0.90330559854597, 0.17596255203423183), 3e-16)
-  mo_expect(Manopt$gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25),
+  expect_lt(mo_dev(Manopt$gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25)),
+                   c(0.39124950596404234, -0.90330559854597, 0.17596255203423183)), 3e-16)
+  expect_lt(mo_dev(Manopt$gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25),
                                            retraction_method = Manopt$ProjectionRetraction()),
-                   c(0.3912478498277492, -0.9033046610653426, 0.17597104677414904), 3e-16)
-  mo_expect(Manopt$conjugate_gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25)),
-                   c(0.6713152328342332, -0.7124620055445724, 0.2042883961954886), 3e-16)
-  mo_expect(Manopt$quasi_Newton(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(12)),
-                   c(0.39112903367280033, -0.9032372863251186, 0.17657996378473167), 3e-16)
-  mo_expect(Manopt$trust_regions(M, mo_f, mo_grad_jl, mo_hess_jl, mo_p0, stopping_criterion = S(10)),
-                   c(0.39112903356505907, -0.9032372863824442, 0.17657996373015128), 3e-16)
-  mo_expect(Manopt$adaptive_regularization_with_cubics(M, mo_f, mo_grad_jl, mo_hess_jl, mo_p0,
+                   c(0.3912478498277492, -0.9033046610653426, 0.17597104677414904)), 3e-16)
+  expect_lt(mo_dev(Manopt$conjugate_gradient_descent(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(25)),
+                   c(0.6713152328342332, -0.7124620055445724, 0.2042883961954886)), 3e-16)
+  expect_lt(mo_dev(Manopt$quasi_Newton(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(12)),
+                   c(0.39112903367280033, -0.9032372863251186, 0.17657996378473167)), 3e-16)
+  expect_lt(mo_dev(Manopt$trust_regions(M, mo_f, mo_grad_jl, mo_hess_jl, mo_p0, stopping_criterion = S(10)),
+                   c(0.39112903356505907, -0.9032372863824442, 0.17657996373015128)), 3e-16)
+  expect_lt(mo_dev(Manopt$adaptive_regularization_with_cubics(M, mo_f, mo_grad_jl, mo_hess_jl, mo_p0,
                                                               stopping_criterion = S(8)),
-                   c(0.39112903356505907, -0.9032372863824442, 0.1765799637301513), 1e-15)
-  mo_expect(Manopt$Frank_Wolfe_method(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(6)),
-                   c(-0.5885778106963631, 0.39117979814477166, -0.7074987818217725), 3e-16)
+                   c(0.39112903356505907, -0.9032372863824442, 0.1765799637301513)), 1e-15)
+  expect_lt(mo_dev(Manopt$Frank_Wolfe_method(M, mo_f, mo_grad_jl, mo_p0, stopping_criterion = S(6)),
+                   c(-0.5885778106963631, 0.39117979814477166, -0.7074987818217725)), 3e-16)
   simplex <- list(c(0.6, -0.48, 0.64), c(0, 0.6, 0.8), c(-0.48, 0.64, 0.6))
-  mo_expect(Manopt$NelderMead(M, mo_f, simplex, stopping_criterion = S(30)),
-                   c(0.3911386562926317, -0.9032507871367662, 0.17648956651996975), 3e-16)
+  expect_lt(mo_dev(Manopt$NelderMead(M, mo_f, simplex, stopping_criterion = S(30)),
+                   c(0.3911386562926317, -0.9032507871367662, 0.17648956651996975)), 3e-16)
 
   # the default stopping criteria: iterations until the gradient norm is small
   st <- Manopt$gradient_descent(M, mo_f, mo_grad_jl, mo_p0, return_state = TRUE)
   expect_equal(st$iterations, 70L)
   expect_true(st$converged)
   expect_lt(mo_dev(Manopt$get_solver_result(st), c(0.39112903377215263, -0.9032372865000773, 0.1765799626697204)),
-            ref_tol(1e-15, 1e-8))
+            1e-15)
   st <- Manopt$quasi_Newton(M, mo_f, mo_grad_jl, mo_p0, return_state = TRUE)
   expect_equal(st$iterations, 7L)
   expect_lt(mo_dev(st$p, c(0.3911290505705838, -0.9032372702955959, 0.1765800083495141)), 3e-16)
@@ -201,13 +195,66 @@ test_that("SymmetricPositiveDefinite carries the affine invariant geometry", {
   expect_equal(p, mid, tolerance = 1e-6)
 })
 
+test_that("SymmetricPositiveDefinite matches Manifolds.jl and Manopt.jl", {
+  # values of tools/manopt-probe.jl; the maps go through eigen decompositions
+  # whose LAPACK results differ from Julia's OpenBLAS by a few ulps
+  M <- SymmetricPositiveDefinite(2)
+  A <- matrix(c(2, 0.5, 0.5, 1), 2); B <- matrix(c(1, -0.3, -0.3, 3), 2)
+  X <- c(0.1, 0.2, 0.2, -0.3)
+  mf <- function(name, ...) get(name, envir = asNamespace("modelcompR"))(M, ...)
+  a <- as.numeric(A); b <- as.numeric(B)
+  expect_equal(mf(".mf_exp", a, X), c(2.1182432448980046, 0.6747567208287562, 0.6747567208287562, 0.7687298032404923),
+               tolerance = 1e-14)
+  expect_equal(mf(".mf_log", a, b), c(-1.543705951730838, -0.7418335371745315, -0.7418335371745314, 0.8459063388701346),
+               tolerance = 1e-14)
+  expect_equal(mf(".mf_inner", a, X, c(0.3, -0.1, -0.1, 0.2)), -0.1657142857142857, tolerance = 1e-14)
+  expect_equal(mf(".mf_distance", a, b), 1.5426995089660311, tolerance = 1e-14)
+  expect_equal(mf(".mf_transport", a, X, b),
+               c(-0.03392772177023339, 0.40074482220507573, 0.40074482220507573, -1.3026637280123452), tolerance = 1e-14)
+  expect_equal(mf(".mf_get_coordinates", a, X), c(8.252620095397387e-18, 0.2828427124746189, -0.4000000000000001),
+               tolerance = 1e-14)
+  expect_equal(mf(".mf_rgrad", a, c(1, 3, 2, 4)), c(10, 8.625, 8.625, 6.75))
+  kf <- function(M, p) distance(M, p, A)^2 + distance(M, p, B)^2
+  kg <- function(M, p) -2 * (matrix(mf(".mf_log", as.numeric(p), a), 2) + matrix(mf(".mf_log", as.numeric(p), b), 2))
+  s15 <- Manopt$StopAfterIteration(15)
+  expect_equal(Manopt$gradient_descent(M, kf, kg, diag(2), stopping_criterion = s15),
+               matrix(c(1.3754378460243553, 0.13981645384132613, 0.13981645384132624, 1.657483693475966), 2),
+               tolerance = 1e-12)
+  expect_equal(Manopt$quasi_Newton(M, kf, kg, diag(2), stopping_criterion = s15),
+               matrix(c(1.3775242983950455, 0.132693266240773, 0.1326932662407731, 1.6509794599157068), 2),
+               tolerance = 1e-12)
+  expect_equal(Manopt$trust_regions(M, kf, kg, diag(2), stopping_criterion = Manopt$StopAfterIteration(8)),
+               matrix(c(1.3775242983950484, 0.1326932662407666, 0.1326932662407666, 1.6509794599156857), 2),
+               tolerance = 1e-12)
+  # the Armijo tests of the conjugate gradient and of the default gradient
+  # descent come down to cost differences of a few ulps, decided by the
+  # rounding of the eigen decompositions: Julia stops after 63 iterations, R
+  # after 67
+  expect_equal(Manopt$conjugate_gradient_descent(M, kf, kg, diag(2), stopping_criterion = s15),
+               matrix(c(1.095091799168431, 0.2706275432363794, 0.2706275432363794, 1.459217149903989), 2),
+               tolerance = 1e-7)
+  st <- Manopt$gradient_descent(M, kf, kg, diag(2), return_state = TRUE)
+  expect_true(st$converged)
+  expect_equal(st$p, matrix(c(1.3775242993164076, 0.13269326414674465, 0.13269326414674454, 1.6509794584079749), 2),
+               tolerance = 1e-8)
+})
+
 test_that("Lorentz is R^n with the Minkowski metric", {
   L <- Lorentz(3)
   ns <- asNamespace("modelcompR")
   expect_equal(get(".mf_inner", envir = ns)(L, NULL, c(1, 2, 3), c(1, 1, 1)), 0)
-  expect_equal(get(".mf_rgrad", envir = ns)(L, c(0, 0, 1), c(1, 2, 3)), c(1, 2, -3))
   expect_error(get(".mf_norm", envir = ns)(L, NULL, c(0, 0, 1)), "DomainError")
+  # Manifolds.jl cannot change the representer of a Euclidean gradient to the
+  # Minkowski metric, so the Riemannian gradient and Hessian fail as upstream
+  msg <- "local_metric(::AbstractManifold, ::Any, ::AbstractBasis) is ambiguous"
+  expect_error(get(".mf_rgrad", envir = ns)(L, c(0, 0, 1), c(1, 2, 3)), msg, fixed = TRUE)
+  expect_error(get(".mf_rhess", envir = ns)(L, c(0, 0, 1), c(1, 2, 3), c(1, 0, 0), c(0, 1, 0)), msg, fixed = TRUE)
   g <- function(x, p) (x[1] - 1)^2 + (x[2] + 2)^2
-  sol <- solve(OptimizationProblem(g, c(0, 0, 1), manifold = L), GradientDescentOptimizer(), maxiters = 100)
-  expect_equal(sol$u, c(1, -2, 1), tolerance = 1e-6)
+  expect_error(solve(OptimizationProblem(g, c(0, 0, 1), manifold = L), GradientDescentOptimizer(), maxiters = 100),
+               msg, fixed = TRUE)
+  # with the gradient in the Minkowski representation the solver runs
+  lg <- function(M, x) c(2 * (x[1] - 1), 2 * (x[2] + 2), -0)
+  p <- Manopt$gradient_descent(L, function(M, x) g(x, NULL), lg, c(0, 0, 1),
+                               stopping_criterion = Manopt$StopAfterIteration(20))
+  expect_equal(p, c(1, -2, 1), tolerance = 1e-2)
 })

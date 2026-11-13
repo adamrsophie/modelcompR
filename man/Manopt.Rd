@@ -12,9 +12,11 @@ Manopt
 \description{
 \code{Manopt} gathers the parts of Manopt.jl that OptimizationManopt
 re-exports, ported to R: the solvers on a manifold \code{M} (\code{\link[=Euclidean]{Euclidean()}},
-\code{\link[=Sphere]{Sphere()}}, \code{\link[=SymmetricPositiveDefinite]{SymmetricPositiveDefinite()}} or \code{\link[=Lorentz]{Lorentz()}}), called with the cost \code{f(M, p)} and, where needed, the
-Riemannian gradient \code{grad_f(M, p)} and Hessian \code{Hess_f(M, p, X)}
-(approximated by finite differences of the gradient when missing), the
+\code{\link[=Sphere]{Sphere()}}, \code{\link[=SymmetricPositiveDefinite]{SymmetricPositiveDefinite()}} or \code{\link[=Lorentz]{Lorentz()}}), called with
+the cost \code{f(M, p)} and, where needed, the Riemannian gradient
+\code{grad_f(M, p)} and Hessian \code{Hess_f(M, p, X)} (approximated by finite
+differences of the gradient when missing; as in Julia the point may then
+follow \code{grad_f} directly, \code{trust_regions(M, f, grad_f, p)}), the
 stopping criteria and the step sizes. Reach them with \code{Manopt$name}.
 }
 \details{

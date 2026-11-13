@@ -555,9 +555,11 @@ print.ManoptSolverState <- function(x, ...) {
 #'
 #' `Manopt` gathers the parts of Manopt.jl that OptimizationManopt
 #' re-exports, ported to R: the solvers on a manifold `M` ([Euclidean()],
-#' [Sphere()], [SymmetricPositiveDefinite()] or [Lorentz()]), called with the cost `f(M, p)` and, where needed, the
-#' Riemannian gradient `grad_f(M, p)` and Hessian `Hess_f(M, p, X)`
-#' (approximated by finite differences of the gradient when missing), the
+#' [Sphere()], [SymmetricPositiveDefinite()] or [Lorentz()]), called with
+#' the cost `f(M, p)` and, where needed, the Riemannian gradient
+#' `grad_f(M, p)` and Hessian `Hess_f(M, p, X)` (approximated by finite
+#' differences of the gradient when missing; as in Julia the point may then
+#' follow `grad_f` directly, `trust_regions(M, f, grad_f, p)`), the
 #' stopping criteria and the step sizes. Reach them with `Manopt$name`.
 #'
 #' Solvers: `gradient_descent(M, f, grad_f, p, ...)`,
@@ -603,10 +605,14 @@ Manopt <- list(
     .mo_return(.mo_conjugate_gradient(.mo_user_problem(M, f, grad_f), p, ...), return_state),
   quasi_Newton = function(M, f, grad_f, p, ..., return_state = FALSE)
     .mo_return(.mo_quasi_newton(.mo_user_problem(M, f, grad_f), p, ...), return_state),
-  trust_regions = function(M, f, grad_f, Hess_f = NULL, p, ..., return_state = FALSE)
-    .mo_return(.mo_trust_regions(.mo_user_problem(M, f, grad_f, Hess_f), p, ...), return_state),
-  adaptive_regularization_with_cubics = function(M, f, grad_f, Hess_f = NULL, p, ..., return_state = FALSE)
-    .mo_return(.mo_arc(.mo_user_problem(M, f, grad_f, Hess_f), p, ...), return_state),
+  trust_regions = function(M, f, grad_f, Hess_f = NULL, p, ..., return_state = FALSE) {
+    if (missing(p)) { p <- Hess_f; Hess_f <- NULL }
+    .mo_return(.mo_trust_regions(.mo_user_problem(M, f, grad_f, Hess_f), p, ...), return_state)
+  },
+  adaptive_regularization_with_cubics = function(M, f, grad_f, Hess_f = NULL, p, ..., return_state = FALSE) {
+    if (missing(p)) { p <- Hess_f; Hess_f <- NULL }
+    .mo_return(.mo_arc(.mo_user_problem(M, f, grad_f, Hess_f), p, ...), return_state)
+  },
   Frank_Wolfe_method = function(M, f, grad_f, p, ..., return_state = FALSE)
     .mo_return(.mo_frank_wolfe(.mo_user_problem(M, f, grad_f), p, ...), return_state),
   NelderMead = function(M, f, population = NULL, ..., return_state = FALSE)

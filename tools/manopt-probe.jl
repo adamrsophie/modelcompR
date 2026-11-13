@@ -99,16 +99,32 @@ for (name, solver) in [("spd_gd", gradient_descent), ("spd_cg", conjugate_gradie
     st = solver(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(15), return_state = true)
     pr(name, get_solver_result(st))
 end
+# the iterates on the way, to find where R and Julia part
+for k in 1:15
+    pr("spd_cg_" * string(k), conjugate_gradient_descent(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(k)))
+end
+for k in (20, 30, 40, 50, 55, 60)
+    pr("spd_gd_" * string(k), gradient_descent(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(k)))
+end
 st = gradient_descent(P2, kf, kg, copy(q0); return_state = true)
 pr("spd_gd_default", (get_solver_result(st), [c.at_iteration for c in Manopt.get_stopping_criterion(st).criteria]))
 st = trust_regions(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(8), return_state = true)
 pr("spd_tr", get_solver_result(st))
 
-# Lorentz(3): a cost of the spacelike coordinates, the gradient through the
-# Minkowski change of representer
+# Lorentz(3): a cost of the spacelike coordinates. Manifolds cannot change
+# the representer of a Euclidean gradient to the Minkowski metric (the
+# deprecated local_metric(M, p, B) it calls is ambiguous), so the gradient is
+# given in the Minkowski representation, the last coordinate negated
 L3 = Lorentz(3)
 lf(M, x) = (x[1] - 1)^2 + (x[2] + 2)^2
-lg(M, x) = riemannian_gradient(M, x, [2 * (x[1] - 1), 2 * (x[2] + 2), 0.0])
+lg(M, x) = [2 * (x[1] - 1), 2 * (x[2] + 2), -0.0]
 st = gradient_descent(L3, lf, lg, [0.0, 0.0, 1.0]; stopping_criterion = StopAfterIteration(20), return_state = true)
 pr("lorentz_gd", get_solver_result(st))
-pr("lorentz_rgrad", riemannian_gradient(L3, [0.0, 0.0, 1.0], [1.0, 2.0, 3.0]))
+errline(f) = try
+    repr(f())
+catch e
+    first(split(sprint(showerror, e), "\n"))
+end
+println("lorentz_rgrad = ", errline(() -> riemannian_gradient(L3, [0.0, 0.0, 1.0], [1.0, 2.0, 3.0])))
+println("lorentz_rhess = ", errline(() -> riemannian_Hessian(L3, [0.0, 0.0, 1.0], [1.0, 2.0, 3.0],
+                                                             [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])))

@@ -63,9 +63,12 @@
 #' \eqn{p sym(G) p} of a Euclidean gradient \eqn{G}. `Lorentz(n)` is
 #' \eqn{R^n} with the Minkowski metric (timelike in the last coordinate), as
 #' in Manifolds.jl: its exponential map, transport and retraction are those
-#' of \eqn{R^n} and its Riemannian gradient flips the sign of the last
-#' coordinate. Both are also the manifolds of the geodesic convexity
-#' analysis, `analyze(ex, M)` ([analyze()]).
+#' of \eqn{R^n}. As in Manifolds.jl a Euclidean gradient cannot be converted
+#' to the Minkowski metric (a MethodError), so a gradient based solve of an
+#' [OptimizationProblem()] on it fails; the [Manopt] solvers run with a
+#' Riemannian gradient given in the Minkowski representation. Both are also
+#' the manifolds of the geodesic convexity analysis, `analyze(ex, M)`
+#' ([analyze()]).
 #'
 #' @param n The dimension of the manifold.
 #' @return A manifold object.
@@ -359,12 +362,18 @@ print.AbstractManifold <- function(x, ...) {
 # riemannian_gradient and riemannian_Hessian of ManifoldDiff and Manifolds:
 # the projection of the Euclidean gradient G, then the change of representer
 # to the metric of M; the Hessian from G and the Euclidean Hessian H at X
+# Manifolds.jl changes the representer of a Euclidean gradient on Lorentz
+# through the deprecated basis form of local_metric, whose dispatch is
+# ambiguous for a MetricManifold, so every conversion fails upstream
+.mf_lorentz_representer <- function() {
+  stop("MethodError: local_metric(::AbstractManifold, ::Any, ::AbstractBasis) is ambiguous.", call. = FALSE)
+}
 .mf_rgrad <- function(M, p, G) {
   if (.mf_spd(M)) {
     P <- matrix(p, M$n)
     return(as.numeric(P %*% .spd_sym(matrix(G, M$n)) %*% P))
   }
-  if (.mf_lorentz(M)) return(c(G[-length(G)], -G[length(G)]))
+  if (.mf_lorentz(M)) .mf_lorentz_representer()
   .mf_project(M, p, G)
 }
 .mf_rhess <- function(M, p, G, H, X) {
@@ -374,7 +383,7 @@ print.AbstractManifold <- function(x, ...) {
     Y <- .spd_sym(matrix(X, n) %*% .spd_sym(matrix(G, n)) %*% P)
     return(as.numeric(Y + P %*% .spd_sym(matrix(H, n)) %*% P))
   }
-  if (.mf_lorentz(M)) return(c(H[-length(H)], -H[length(H)]))
+  if (.mf_lorentz(M)) .mf_lorentz_representer()
   Y <- .mf_project(M, p, H)
   if (!.mf_sphere(M)) return(Y)
   Y + (-.jl_dot(p, G - .mf_project(M, p, G))) * X

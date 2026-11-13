@@ -205,6 +205,9 @@
 }
 
 .clk_dot3 <- function(x, y) x[1L] * y[1L] + x[2L] * y[2L] + x[3L] * y[3L]
+# dot of two StaticArrays: the @simd reduction allows contraction, so the
+# product sum is a chain of fused multiply adds
+.clk_sdot3 <- function(x, y) .jl_dot(x[1:3], y[1:3])
 
 .clk_update_Hs <- function(K, s, z, mu, strategy) {
   if (strategy == "Dual") {
@@ -216,10 +219,10 @@
   zt <- .clk_gradient_primal(K, s)
   dot_sz <- .jl_dot(z, s)
   mu0 <- dot_sz / 3
-  mut <- .clk_dot3(zt, st) / 3
+  mut <- .clk_sdot3(zt, st) / 3
   ds <- s + mu0 * st
   dz <- z + mu0 * zt
-  dot_dsz <- .clk_dot3(ds, dz)
+  dot_dsz <- .clk_sdot3(ds, dz)
   de1 <- mu0 * mut - 1
   # zt' H_dual zt, column by column as LinearAlgebra.dot(x, A, y)
   de2 <- 0
@@ -241,7 +244,11 @@
       Hs[i, j] <- s[i] * s[j] / dot_sz + ds[i] * ds[j] / dot_dsz + t0 * axis_z[i] * axis_z[j]
     Hs[2L, 1L] <- Hs[1L, 2L]; Hs[3L, 1L] <- Hs[1L, 3L]; Hs[3L, 2L] <- Hs[2L, 3L]
     K$Hs <- Hs
-  } else K$Hs <- mu * K$H_dual
+  } else {
+    # the fallback scales by the local mu = <s, z>/3 of this cone, not by the
+    # mu of the whole iterate
+    K$Hs <- mu0 * K$H_dual
+  }
   invisible()
 }
 
@@ -366,18 +373,19 @@
   eta[3] <- -z[1] / z[3]
   eta[1] <- .cl_logsafe(eta[3])
   psi <- z[1] * eta[1] - z[1] + z[2]
-  dotpsiu <- .clk_dot3(eta, u)
+  dotpsiu <- .clk_sdot3(eta, u)
   dotpsiv <- .clk_dot3(eta, v)
   coef <- ((u[1] * (v[1] / z[1] - v[3] / z[3]) + u[3] * (z[1] * v[3] / z[3] - v[1]) / z[3]) * psi -
              2 * dotpsiu * dotpsiv) / (psi * psi * psi)
   eta <- eta * coef
   inv_psi2 <- 1 / psi / psi
-  eta[1] <- eta[1] + (1 / psi - 2 / z[1]) * u[1] * v[1] / (z[1] * z[1]) - u[3] * v[3] / (z[3] * z[3]) / psi +
-    dotpsiu * inv_psi2 * (v[1] / z[1] - v[3] / z[3]) + dotpsiv * inv_psi2 * (u[1] / z[1] - u[3] / z[3])
-  eta[3] <- eta[3] + 2 * (z[1] / psi - 1) * u[3] * v[3] / (z[3] * z[3] * z[3]) -
+  # Julia's x += a - b + c adds the whole sum to x
+  eta[1] <- eta[1] + ((1 / psi - 2 / z[1]) * u[1] * v[1] / (z[1] * z[1]) - u[3] * v[3] / (z[3] * z[3]) / psi +
+    dotpsiu * inv_psi2 * (v[1] / z[1] - v[3] / z[3]) + dotpsiv * inv_psi2 * (u[1] / z[1] - u[3] / z[3]))
+  eta[3] <- eta[3] + (2 * (z[1] / psi - 1) * u[3] * v[3] / (z[3] * z[3] * z[3]) -
     (u[3] * v[1] + u[1] * v[3]) / (z[3] * z[3]) / psi +
     dotpsiu * inv_psi2 * (z[1] * v[3] / (z[3] * z[3]) - v[1] / z[3]) +
-    dotpsiv * inv_psi2 * (z[1] * u[3] / (z[3] * z[3]) - u[1] / z[3])
+    dotpsiv * inv_psi2 * (z[1] * u[3] / (z[3] * z[3]) - u[1] / z[3]))
   eta / 2
 }
 
@@ -469,10 +477,10 @@
   H11 <- 2 * a * (2 * a - 1) * phi / (z[1] * z[1])
   H12 <- 4 * a * (1 - a) * phi / (z[1] * z[2])
   H22 <- 2 * (1 - a) * (1 - 2 * a) * phi / (z[2] * z[2])
-  dotpsiu <- .clk_dot3(eta, u)
+  dotpsiu <- .clk_sdot3(eta, u)
   dotpsiv <- .clk_dot3(eta, v)
   Hv <- c(H11 * v[1] + H12 * v[2], H12 * v[1] + H22 * v[2], -2 * v[3])
-  coef <- (.clk_dot3(u, Hv) * psi - 2 * dotpsiu * dotpsiv) / (psi * psi * psi)
+  coef <- (.clk_sdot3(u, Hv) * psi - 2 * dotpsiu * dotpsiv) / (psi * psi * psi)
   coef2 <- 4 * a * (2 * a - 1) * (1 - a) * phi * (u[1] / z[1] - u[2] / z[2]) * (v[1] / z[1] - v[2] / z[2]) / psi
   inv_psi2 <- 1 / psi / psi
   eta[1] <- coef * eta[1] - 2 * (1 - a) * u[1] * v[1] / (z[1] * z[1] * z[1]) + coef2 / z[1] +

@@ -44,9 +44,12 @@ projection onto the symmetric matrices and the Riemannian gradient
 \eqn{p sym(G) p} of a Euclidean gradient \eqn{G}. \code{Lorentz(n)} is
 \eqn{R^n} with the Minkowski metric (timelike in the last coordinate), as
 in Manifolds.jl: its exponential map, transport and retraction are those
-of \eqn{R^n} and its Riemannian gradient flips the sign of the last
-coordinate. Both are also the manifolds of the geodesic convexity
-analysis, \code{analyze(ex, M)} (\code{\link[=analyze]{analyze()}}).
+of \eqn{R^n}. As in Manifolds.jl a Euclidean gradient cannot be converted
+to the Minkowski metric (a MethodError), so a gradient based solve of an
+\code{\link[=OptimizationProblem]{OptimizationProblem()}} on it fails; the \link{Manopt} solvers run with a
+Riemannian gradient given in the Minkowski representation. Both are also
+the manifolds of the geodesic convexity analysis, \code{analyze(ex, M)}
+(\code{\link[=analyze]{analyze()}}).
 }
 \examples{
 M <- Sphere(2)
