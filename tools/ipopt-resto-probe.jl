@@ -9,7 +9,7 @@ using ModelingToolkit: t_nounits as t, D_nounits as D
 import InfiniteOpt
 using JuMP, Ipopt
 import OrdinaryDiffEqExplicitTableaus as ExplicitTableaus
-using Symbolics
+const Symbolics = ModelingToolkit.Symbolics
 
 println("== versions")
 for p in ("Ipopt", "Ipopt_jll", "JuMP", "InfiniteOpt", "ModelingToolkit")

@@ -65,7 +65,12 @@ test_that("bounds from metadata keep the iterates in the box", {
   sys <- complete(System(list(0 ~ x^2 - 4), name = "b"))
   prob <- NonlinearProblem(sys, list(x ~ 0.1))
   expect_equal(prob$lb, 0); expect_equal(prob$ub, 10)
-  expect_equal(unname(solve(prob, NewtonRaphson())$u), 2, tolerance = 1e-10)
+  # Julia (tools/trustregion-probe.jl, sq_newton): NewtonRaphson through the
+  # bounds transform stalls at the start, 0.1; the default algorithm finds 2
+  snr <- solve(prob, NewtonRaphson())
+  expect_equal(unname(snr$u), 0.1)
+  expect_equal(snr$retcode, "Stalled")
+  expect_equal(unname(solve(prob)$u), 2, tolerance = 1e-10)
   xm <- Variable("xm", bounds = c(-10, 0))
   probm <- NonlinearProblem(complete(System(list(0 ~ xm^2 - 4), name = "bm")), list(xm ~ -0.1))
   expect_equal(unname(solve(probm, TrustRegion())$u), -2, tolerance = 1e-10)
