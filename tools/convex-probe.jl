@@ -107,7 +107,12 @@ function trace(name, prob, alg, iters)
         for k in 0:iters
             try
                 cache = SciMLBase.init(build(prob), with_max_iter(alg, k))
-                SciMLBase.solve!(cache)
+                # the solver state is read even if the wrapper rejects an early exit
+                try
+                    SciMLBase.solve!(cache)
+                catch e
+                    e isa InterruptException && rethrow()
+                end
                 s = rawsolver(cache.model)
                 d = s.data
                 eq = d.equilibration
