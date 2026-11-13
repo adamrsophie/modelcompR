@@ -71,6 +71,7 @@ function bridges_str(model)
 end
 errline(name, e) = println(join([name, "ERROR", replace(sprint(showerror, e), "\n" => " ", "\t" => " ")], "\t"))
 function probe(name, prob; alg = ALG)
+    cache = nothing
     try
         cache = SciMLBase.init(build(prob), alg)
         sol = SciMLBase.solve!(cache)
@@ -79,6 +80,17 @@ function probe(name, prob; alg = ALG)
     catch e
         e isa InterruptException && rethrow()
         errline(name, e)
+        # the solver state of a solve that threw after the iterations (the
+        # dual completion of a decomposed PSD cone): status, iterations,
+        # decomposed cones, sizes and the iterate before the completion
+        cache === nothing || try
+            s = rawsolver(cache.model)
+            v = s.variables
+            println(join([name, "SOLVER", string(s.info.status), string(s.info.iterations),
+                join(conestr.(s.data.cones), ","), string(s.data.n), string(s.data.m),
+                hv(v.x), hv(v.z), hv(v.s), hx(v.τ), hx(v.κ)], "\t"))
+        catch
+        end
     end
 end
 
