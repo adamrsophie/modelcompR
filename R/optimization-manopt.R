@@ -53,6 +53,20 @@
 #' logarithmic map and the projection onto tangent spaces, through which a
 #' Euclidean gradient becomes a Riemannian one.
 #'
+#' `SymmetricPositiveDefinite(n)` is the manifold of symmetric positive
+#' definite \eqn{n \times n} matrices with the affine invariant metric
+#' \eqn{g_p(X, Y) = tr(p^{-1} X p^{-1} Y)}: its points are matrices (the
+#' starting point and the solution of an [OptimizationProblem()]), its
+#' retraction the exponential map \eqn{p^{1/2} Exp(p^{-1/2} X p^{-1/2})
+#' p^{1/2}}, with the logarithmic map, the parallel transport, the
+#' projection onto the symmetric matrices and the Riemannian gradient
+#' \eqn{p sym(G) p} of a Euclidean gradient \eqn{G}. `Lorentz(n)` is
+#' \eqn{R^n} with the Minkowski metric (timelike in the last coordinate), as
+#' in Manifolds.jl: its exponential map, transport and retraction are those
+#' of \eqn{R^n} and its Riemannian gradient flips the sign of the last
+#' coordinate. Both are also the manifolds of the geodesic convexity
+#' analysis, `analyze(ex, M)` ([analyze()]).
+#'
 #' @param n The dimension of the manifold.
 #' @return A manifold object.
 #' @examples
@@ -82,14 +96,120 @@ print.AbstractManifold <- function(x, ...) {
 }
 
 .mf_sphere <- function(M) inherits(M, "Sphere")
-.mf_dim <- function(M) M$n
-.mf_rep <- function(M) if (.mf_sphere(M)) M$n + 1L else M$n
+.mf_spd <- function(M) inherits(M, "SymmetricPositiveDefinite")
+.mf_lorentz <- function(M) inherits(M, "Lorentz")
+# manifold_dimension
+.mf_dim <- function(M) if (.mf_spd(M)) M$n * (M$n + 1L) %/% 2L else M$n
+# the length of a point as a vector (a positive definite matrix by columns)
+.mf_rep <- function(M) if (.mf_sphere(M)) M$n + 1L else if (.mf_spd(M)) M$n * M$n else M$n
+# a point or tangent vector as the user sees it
+.mf_shape <- function(M, x) if (.mf_spd(M)) matrix(x, M$n, M$n) else x
 .mf_inj <- function(M) if (.mf_sphere(M)) pi else Inf
-.mf_inner <- function(M, p, X, Y) .jl_dot(X, Y)
-.mf_norm <- function(M, p, X) .jl_norm(X)
-.mf_project <- function(M, p, X) if (.mf_sphere(M)) X - .jl_dot(p, X) * p else X
+.mf_inner <- function(M, p, X, Y) {
+  if (.mf_spd(M)) return(.spd_inner(M$n, p, X, Y))
+  if (.mf_lorentz(M)) return(.mf_minkowski(X, Y))
+  .jl_dot(X, Y)
+}
+.mf_norm <- function(M, p, X) {
+  if (.mf_spd(M)) return(sqrt(.spd_inner(M$n, p, X, X)))
+  if (.mf_lorentz(M)) return(.mf_sqrt(.mf_minkowski(X, X)))
+  .jl_norm(X)
+}
+.mf_project <- function(M, p, X) {
+  if (.mf_sphere(M)) return(X - .jl_dot(p, X) * p)
+  if (.mf_spd(M)) return(as.numeric(.spd_sym(matrix(X, M$n))))
+  X
+}
 .mf_project_point <- function(M, p) if (.mf_sphere(M)) p / .jl_norm(p) else p
 .mf_cbrt_eps <- 6.055454452393343e-06
+
+# the Minkowski metric of Manifolds.jl, timelike in the last coordinate
+.mf_minkowski <- function(a, b) {
+  n <- length(a)
+  -a[n] * b[n] + .jl_dot(a[-n], b[-n])
+}
+# Julia's sqrt throws on a negative argument (a timelike vector has no norm)
+.mf_sqrt <- function(x) {
+  if (x < 0) stop("DomainError with ", .jl_show_float(x), ":\nsqrt was called with a negative real argument but ",
+                  "will only return a complex result if called with a complex argument. Try sqrt(Complex(x)).",
+                  call. = FALSE)
+  sqrt(x)
+}
+
+# The affine invariant geometry of SymmetricPositiveDefinite(n) as Manifolds.jl
+# computes it (HermitianPositiveDefiniteAffineInvariant.jl): a point and a
+# tangent vector are n x n matrices, stored by columns.
+.spd_sym <- function(X) (X + t(X)) / 2
+# Hermitian(A): the matrix its upper triangle defines
+.spd_herm <- function(A) {
+  A[lower.tri(A)] <- t(A)[lower.tri(A)]
+  A
+}
+.spd_eigen <- function(A) {
+  e <- eigen(.spd_herm(A), symmetric = TRUE)
+  o <- order(e$values)
+  list(values = e$values[o], vectors = e$vectors[, o, drop = FALSE])
+}
+.spd_fun <- function(U, d) U %*% (d * t(U))
+# hpd_sqrt_and_sqrt_inv
+.spd_sqrt2 <- function(p) {
+  e <- .spd_eigen(p)
+  S <- pmax(e$values, .Machine$double.xmin)
+  list(sqrt = .spd_herm(.spd_fun(e$vectors, sqrt(S))), inv = .spd_herm(.spd_fun(e$vectors, 1 / sqrt(S))))
+}
+.spd_inner <- function(n, p, X, Y) {
+  p <- matrix(p, n); X <- matrix(X, n); Y <- matrix(Y, n)
+  R <- chol(.spd_herm(p))
+  sum(backsolve(R, forwardsolve(t(R), .spd_herm(X))) * t(backsolve(R, forwardsolve(t(R), t(.spd_herm(Y))))))
+}
+.spd_exp <- function(n, p, X) {
+  r <- .spd_sqrt2(matrix(p, n))
+  e <- .spd_eigen(r$inv %*% matrix(X, n) %*% r$inv)
+  pU <- r$sqrt %*% e$vectors
+  as.numeric(pU %*% (exp(e$values) * t(pU)))
+}
+.spd_log <- function(n, p, q) {
+  r <- .spd_sqrt2(matrix(p, n))
+  e <- .spd_eigen(r$inv %*% matrix(q, n) %*% r$inv)
+  a <- max(abs(e$values))
+  c <- if (a < .Machine$double.eps) max(.Machine$double.eps / 2 * a, .Machine$double.xmin) else .Machine$double.eps
+  pU <- r$sqrt %*% e$vectors
+  as.numeric(pU %*% (log(pmax(e$values, c)) * t(pU)))
+}
+.spd_distance <- function(n, p, q) {
+  if (identical(as.numeric(p), as.numeric(q))) return(0)
+  U <- chol(.spd_herm(matrix(q, n)))
+  s <- .spd_eigen(t(forwardsolve(t(U), t(forwardsolve(t(U), matrix(p, n))))))$values
+  sqrt(sum(abs(log(pmax(s, .Machine$double.xmin)))^2))
+}
+.spd_transport <- function(n, p, X, q) {
+  if (.spd_distance(n, p, q) < 2 * .Machine$double.eps) return(X)
+  r <- .spd_sqrt2(matrix(p, n))
+  tv <- .spd_herm(r$inv %*% matrix(X, n) %*% r$inv)
+  e2 <- .spd_eigen(r$inv %*% matrix(q, n) %*% r$inv)
+  logty <- .spd_herm(.spd_fun(e2$vectors, log(pmax(e2$values, .Machine$double.xmin))))
+  e3 <- .spd_eigen(logty)
+  pU <- r$sqrt %*% .spd_fun(e3$vectors, exp(e3$values / 2))
+  as.numeric(.spd_herm(pU %*% tv %*% t(pU)))
+}
+# the orthonormal basis of the tangent space at p (get_basis_orthonormal),
+# and the basis that diagonalizes the curvature along the direction v with
+# its sectional curvatures (get_basis_diagonalizing)
+.spd_basis <- function(n, p, v = NULL) {
+  r <- .spd_sqrt2(matrix(p, n))
+  V <- diag(n); lam <- NULL
+  if (!is.null(v)) {
+    e <- .spd_eigen(r$inv %*% matrix(v, n) %*% r$inv)
+    V <- e$vectors; lam <- e$values
+  }
+  B <- list(); k <- numeric()
+  for (i in seq_len(n)) for (j in i:n) {
+    E <- V[, i] %*% t(V[, j]) + V[, j] %*% t(V[, i])
+    B[[length(B) + 1L]] <- as.numeric((if (i == j) 1 / 2 else 1 / sqrt(2)) * (r$sqrt %*% E %*% r$sqrt))
+    k <- c(k, if (is.null(lam)) 0 else -1 / 4 * (lam[i] - lam[j])^2)
+  }
+  list(vectors = B, kappa = k)
+}
 
 .mf_cos_usinc_sq <- function(t2) {
   if (t2 < .mf_cbrt_eps) return(c(1 - t2 * (0.5 - t2 / 24), 1 - t2 * (1 / 6 - t2 / 120)))
@@ -98,6 +218,7 @@ print.AbstractManifold <- function(x, ...) {
 }
 
 .mf_exp <- function(M, p, X, t = 1) {
+  if (.mf_spd(M)) return(.spd_exp(M$n, p, t * X))
   if (!.mf_sphere(M)) return(p + t * X)
   cs <- .mf_cos_usinc_sq((t * t) * .jl_dot(X, X))
   cs[1L] * p + (cs[2L] * t) * X
@@ -107,12 +228,20 @@ print.AbstractManifold <- function(x, ...) {
 # (on the sphere the exponential map followed by a projection),
 # "project" the projection retraction.
 .mf_retract <- function(M, p, X, t = 1, method = "exp") {
+  if (.mf_spd(M)) {
+    if (!identical(method, "exp")) .mf_no_method(M, "retraction", method)
+    return(.spd_exp(M$n, p, t * X))
+  }
   if (!.mf_sphere(M)) return(p + t * X)
   q <- if (identical(method, "project")) p + t * X else .mf_exp(M, p, X, t)
   q / .jl_norm(q)
 }
 
+.mf_no_method <- function(M, what, method)
+  stop("MethodError: no ", what, " method \"", method, "\" on ", class(M)[1L], "(", M$n, ")", call. = FALSE)
+
 .mf_log <- function(M, p, q) {
+  if (.mf_spd(M)) return(.spd_log(M$n, p, q))
   if (!.mf_sphere(M)) return(q - p)
   ct <- min(max(.jl_dot(p, q), -1), 1)
   X <- if (ct >= 0) q - p else q + p
@@ -141,12 +270,19 @@ print.AbstractManifold <- function(x, ...) {
 }
 
 .mf_invretract <- function(M, p, q, method = "log") {
+  if (.mf_spd(M)) {
+    if (!identical(method, "log")) .mf_no_method(M, "inverse retraction", method)
+    return(.spd_log(M$n, p, q))
+  }
   if (!.mf_sphere(M)) return(q - p)
   if (identical(method, "project")) return(q / .jl_dot(p, q) - p)
   .mf_log(M, p, q)
 }
 
 .mf_distance <- function(M, p, q) {
+  if (.mf_spd(M)) return(.spd_distance(M$n, p, q))
+  # the norm of the logarithmic map of the Minkowski metric
+  if (.mf_lorentz(M)) return(.mf_sqrt(.mf_minkowski(q - p, q - p)))
   if (!.mf_sphere(M)) return(sqrt(sum((p - q) * (p - q))))
   ct <- .jl_dot(p, q)
   if (-1 < ct && ct < 1 - sqrt(.Machine$double.eps) / 8) return(acos(ct))
@@ -156,6 +292,10 @@ print.AbstractManifold <- function(x, ...) {
 # vector_transport_to(M, p, X, q, method): "parallel" (the default) or
 # "project".
 .mf_transport <- function(M, p, X, q, method = "parallel") {
+  if (.mf_spd(M)) {
+    if (identical(method, "project")) return(.mf_project(M, q, X))
+    return(.spd_transport(M$n, p, X, q))
+  }
   if (!.mf_sphere(M)) return(X)
   if (identical(method, "project")) return(X - .jl_dot(q, X) * q)
   m <- p + q
@@ -163,13 +303,25 @@ print.AbstractManifold <- function(x, ...) {
 }
 
 .mf_rand <- function(M) {
+  if (.mf_spd(M)) {
+    # rand(M): the exponential at the identity of a Gaussian symmetric
+    # tangent vector of deviation 1/sqrt(n)
+    n <- M$n
+    X <- .spd_sym(matrix(stats::rnorm(n * n), n)) / sqrt(n)
+    return(.spd_exp(n, diag(n), X))
+  }
   v <- stats::rnorm(.mf_rep(M))
   .mf_project_point(M, v)
 }
-.mf_rand_vector <- function(M, p, sigma = 1) .mf_project(M, p, sigma * stats::rnorm(.mf_rep(M)))
+.mf_rand_vector <- function(M, p, sigma = 1) {
+  if (.mf_spd(M))
+    return(.mf_get_vector(M, p, sigma * stats::rnorm(.mf_dim(M))))
+  .mf_project(M, p, sigma * stats::rnorm(.mf_rep(M)))
+}
 
 # coordinates in the default orthonormal basis of the tangent space
 .mf_get_vector <- function(M, p, c) {
+  if (.mf_spd(M)) return(Reduce(`+`, Map(function(b, ck) ck * b, .spd_basis(M$n, p)$vectors, c)))
   if (!.mf_sphere(M)) return(c)
   n <- M$n
   ct <- abs(p[1L])
@@ -179,6 +331,7 @@ print.AbstractManifold <- function(x, ...) {
   c(-lam * pX, c - pend * (pX / (1 + ct)))
 }
 .mf_get_coordinates <- function(M, p, X) {
+  if (.mf_spd(M)) return(vapply(.spd_basis(M$n, p)$vectors, function(b) .spd_inner(M$n, p, X, b), 0))
   if (!.mf_sphere(M)) return(X)
   n <- M$n
   ct <- abs(p[1L])
@@ -188,11 +341,11 @@ print.AbstractManifold <- function(x, ...) {
 
 # the Riemannian mean by geodesic interpolation
 .mf_mean <- function(M, pts) {
-  if (!.mf_sphere(M)) return(Reduce(`+`, pts) / length(pts))
+  if (!.mf_sphere(M) && !.mf_spd(M)) return(Reduce(`+`, pts) / length(pts))
   q <- pts[[1L]]
   for (i in seq_along(pts)[-1L]) q <- .mf_retract(M, q, .mf_log(M, q, pts[[i]]), 1 / i)
   # points beyond the radius pi/2: gradient descent estimation from there
-  if (!any(vapply(pts, function(x) .mf_distance(M, q, x) >= pi / 2, TRUE))) return(q)
+  if (.mf_spd(M) || !any(vapply(pts, function(x) .mf_distance(M, q, x) >= pi / 2, TRUE))) return(q)
   for (it in seq_len(100L)) {
     yold <- q
     v <- .mf_log(M, yold, pts[[1L]])
@@ -201,6 +354,30 @@ print.AbstractManifold <- function(x, ...) {
     if (.jl_norm(q - yold) <= sqrt(.Machine$double.eps) * max(.jl_norm(q), .jl_norm(yold))) break
   }
   q
+}
+
+# riemannian_gradient and riemannian_Hessian of ManifoldDiff and Manifolds:
+# the projection of the Euclidean gradient G, then the change of representer
+# to the metric of M; the Hessian from G and the Euclidean Hessian H at X
+.mf_rgrad <- function(M, p, G) {
+  if (.mf_spd(M)) {
+    P <- matrix(p, M$n)
+    return(as.numeric(P %*% .spd_sym(matrix(G, M$n)) %*% P))
+  }
+  if (.mf_lorentz(M)) return(c(G[-length(G)], -G[length(G)]))
+  .mf_project(M, p, G)
+}
+.mf_rhess <- function(M, p, G, H, X) {
+  if (.mf_spd(M)) {
+    n <- M$n
+    P <- matrix(p, n)
+    Y <- .spd_sym(matrix(X, n) %*% .spd_sym(matrix(G, n)) %*% P)
+    return(as.numeric(Y + P %*% .spd_sym(matrix(H, n)) %*% P))
+  }
+  if (.mf_lorentz(M)) return(c(H[-length(H)], -H[length(H)]))
+  Y <- .mf_project(M, p, H)
+  if (!.mf_sphere(M)) return(Y)
+  Y + (-.jl_dot(p, G - .mf_project(M, p, G))) * X
 }
 
 # ---------------------------------------------------------------------------
@@ -441,7 +618,9 @@ print.ManoptStoppingCriterion <- function(x, ...) {
 
 .mo_state <- function(mp, p, sc) {
   st <- new.env(parent = emptyenv())
-  st$p <- p
+  # a positive definite matrix is held by columns
+  st$p <- as.numeric(p)
+  st$M <- mp$M
   st$cost <- mp$f
   st$stopper <- .mo_stopper(sc, mp$M)
   st$iterations <- 0L
@@ -803,8 +982,26 @@ print.ManoptStoppingCriterion <- function(x, ...) {
 }
 
 # the gradient of the Frank Wolfe oracle q -> <X, log_p q>: the adjoint
-# differential of the logarithm in its argument
+# differential of the logarithm in its argument, the adjoint Jacobi field of
+# ManifoldDiff along the geodesic from q to p in the basis diagonalizing the
+# curvature
 .mo_adjoint_dlog <- function(M, p, q, X) {
+  if (.mf_spd(M)) {
+    n <- M$n
+    d <- .spd_distance(n, q, p)
+    if (.jl_norm(q - p) <= sqrt(.Machine$double.eps) * max(.jl_norm(q), .jl_norm(p))) return(X)
+    v <- .spd_log(n, q, p)
+    tX <- .spd_transport(n, p, X, q)
+    B <- .spd_basis(n, q, v / d)
+    Y <- numeric(n * n)
+    for (k in seq_along(B$vectors)) {
+      kap <- B$kappa[k]
+      beta <- if (d == 0 || kap == 0) 1 else if (kap < 0) sqrt(-kap) * d / sinh(sqrt(-kap) * d)
+              else sqrt(kap) * d / sin(sqrt(kap) * d)
+      Y <- Y + beta * .spd_inner(n, q, B$vectors[[k]], tX) * B$vectors[[k]]
+    }
+    return(Y)
+  }
   if (!.mf_sphere(M)) return(X)
   d <- .mf_distance(M, q, p)
   if (.jl_norm(q - p) <= sqrt(.Machine$double.eps) * max(.jl_norm(q), .jl_norm(p))) return(X)

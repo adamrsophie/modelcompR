@@ -32,7 +32,14 @@ r_iterate <- function(prob, alg, k) {
   list(status = i$status, q = vapply(qnames, function(n) as.numeric(get(n, envir = i)), 0),
        x = S$solution$x, z = S$solution$z, s = S$solution$s,
        data = list(q = S$data$q, b = S$data$b, A = S$data$A$nzval, P = S$data$P$nzval, d = S$data$d, e = S$data$e,
-                   c = S$data$c))
+                   c = S$data$c),
+       step = with(S$step_lhs, list(x = x, z = z, s = s, tau = tau, kappa = kappa)),
+       cones = lapply(S$cones$cones, function(K) if (is.null(K$H_dual)) NULL else
+         list(H_dual = as.numeric(K$H_dual), Hs = as.numeric(K$Hs), grad = K$grad, z = K$z)))
+}
+deep <- function(nm, tag, got, want) {
+  d <- mapply(function(a, b) rel(a, num(b)), got, want)
+  cat(nm, tag, if (all(d == 0)) "identical" else paste(names(d), signif(d, 3), collapse = " "), "\n")
 }
 
 tracepath <- Sys.getenv("TRACE")
@@ -60,6 +67,15 @@ for (nm in cases) {
       if (any(dd > 0)) cat(nm, "DATA differs:", paste(names(dd)[dd > 0], signif(dd[dd > 0], 3), collapse = " "), "\n")
       next
     }
+    if (startsWith(r[[2]], "STEP")) {
+      deep(nm, r[[2]], r_iterate(prob, alg, as.integer(sub("STEP", "", r[[2]])))$step, r[3:7])
+      next
+    }
+    if (startsWith(r[[2]], "CONE")) {
+      kj <- as.integer(strsplit(sub("CONE", "", r[[2]]), ":", fixed = TRUE)[[1]])
+      deep(nm, r[[2]], r_iterate(prob, alg, kj[1])$cones[[kj[2]]], r[3:6])
+      next
+    }
     k <- as.integer(r[[2]])
     if (r[[3]] == "ERROR") { cat(nm, k, "julia ERROR", r[[4]], "\n"); next }
     it <- r_iterate(prob, alg, k)
@@ -75,6 +91,10 @@ for (nm in cases) {
         first <- FALSE
       } else {
         cat(nm, "k =", k, "max rel", signif(max(d), 3), "status", it$status, "/", r[[3]], "\n")
+        if (nzchar(Sys.getenv("VERBOSE"))) {
+          cat("  ", paste(names(d), signif(d, 3), collapse = " "), "\n")
+          cat("  R    ", hx(it$q), "\n  julia", r[[4]], "\n")
+        }
       }
     }
   }

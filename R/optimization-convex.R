@@ -243,7 +243,7 @@ print.ConvexOptimizationCache <- function(x, ...) {
 .cvx_is_theta <- function(e, optkeys) is_sym(e) && !.cvx_is_num(e) && length(.cvx_vars(e)) > 0L &&
   !.cvx_has_optvar(e, optkeys)
 
-.CVX_ATOMS <- c("norm", "exp", "log", "abs", "Abs", "abs2", "max", "min", "Max", "Min", "maximum", "minimum",
+.CVX_ATOMS <- c("norm", "exp", "log", "abs", "Abs", "abs2", "max", "min", "Max", "Min", "maximum_vec", "minimum_vec",
                 "sum_abs", "maximum_abs", "sum_sq", "self_prod", "quad_form", "quad_prod", "eigmax", "eigmin",
                 "opnorm", "logdet")
 
@@ -467,9 +467,9 @@ print.ConvexOptimizationCache <- function(x, ...) {
     abs2 = .cvx_rsoc(args[1L], tau),
     sum_sq = , self_prod = .cvx_rsoc(args, tau),
     quad_form = , quad_prod = .cvx_quad_lowering(t, tau),
-    max = , Max = , maximum = list(rows = lapply(.cvx_flatten_fn(args, name), function(w) tau - w),
+    max = , Max = , maximum_vec = list(rows = lapply(.cvx_flatten_fn(args, name), function(w) tau - w),
                                    set = MOI$Nonnegatives(length(.cvx_flatten_fn(args, name))), dir = 1L),
-    min = , Min = , minimum = list(rows = lapply(.cvx_flatten_fn(args, name), function(w) w - tau),
+    min = , Min = , minimum_vec = list(rows = lapply(.cvx_flatten_fn(args, name), function(w) w - tau),
                                    set = MOI$Nonnegatives(length(.cvx_flatten_fn(args, name))), dir = -1L),
     sum_abs = list(rows = c(list(tau), args), set = MOI$NormOneCone(length(args) + 1L), dir = 1L),
     maximum_abs = list(rows = c(list(tau), args), set = MOI$NormInfinityCone(length(args) + 1L), dir = 1L),
@@ -542,7 +542,7 @@ print.ConvexOptimizationCache <- function(x, ...) {
   switch(.name(e),
     exp = exp(x), log = log(x), abs = , Abs = abs(x), abs2 = x^2, log1p = log1p(x), cosh = cosh(x),
     hypot = sqrt(x[1L]^2 + x[2L]^2),
-    max = , Max = , maximum = max(x), min = , Min = , minimum = min(x),
+    max = , Max = , maximum_vec = max(x), min = , Min = , minimum_vec = min(x),
     sum_abs = sum(abs(x)), maximum_abs = max(abs(x)), sum_sq = , self_prod = sum(x^2),
     norm = { w <- x[-length(x)]; p <- last(); if (is.infinite(p)) max(abs(w)) else sum(abs(w)^p)^(1 / p) },
     quad_form = , quad_prod = { L <- length(x); n <- as.integer(round((-1 + sqrt(1 + 4 * L)) / 2))
@@ -710,8 +710,8 @@ print.ConvexOptimizationCache <- function(x, ...) {
     sum_abs = .cvx_sum_of(.cvx_abs_all(a)),
     maximum_abs = .cvx_fold("max", .cvx_abs_all(a)),
     sum_sq = , self_prod = .cvx_sum_of(lapply(a, function(e) .cvx_fn("abs2", list(e)))),
-    maximum = .cvx_fold("max", a),
-    minimum = .cvx_fold("min", a),
+    maximum_vec = .cvx_fold("max", a),
+    minimum_vec = .cvx_fold("min", a),
     quad_prod = {
       low <- .cvx_quad_lowering(x, Symbol(".tau[0]"))
       .cvx_sum_of(lapply(low$rows[-(1:2)], function(e) .cvx_fn("abs2", list(e))))
@@ -722,7 +722,7 @@ print.ConvexOptimizationCache <- function(x, ...) {
 # ---------------------------------------------------------------------------
 # Disciplined parametrized programming: the problem data affine in p
 
-.cvx_fmt <- function(e) paste(format(e), collapse = "")
+.cvx_fmt <- function(e) gsub("\\b(maximum|minimum)_vec\\(", "\\1(", paste(format(e), collapse = ""))
 
 # an extracted coefficient or constant that still holds an optimization
 # variable is the non affine case (the expansion is greedy)

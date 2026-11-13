@@ -16,6 +16,12 @@ if (nzchar(refpath)) {
   ref <- read.delim(refpath, header = FALSE, stringsAsFactors = FALSE, colClasses = "character", na.strings = NULL)
   for (k in seq_len(nrow(ref))) {
     r <- ref[k, ]
+    if (r[[2]] == "SOLVER") {
+      # the solver state of a Julia solve that threw in the dual completion
+      refs[k] <- sprintf("  %s_solver = list(status = \"%s\", iters = %sL, cones = \"%s\", n = %sL, m = %sL)",
+                         r[[1]], r[[3]], r[[4]], r[[5]], r[[6]], r[[7]])
+      next
+    }
     if (r[[2]] == "ERROR") {
       # the MOI messages go on to print the model tree, which is not ASCII
       msg <- sub("  (## More information|To fix this error|If you encountered).*$", "", r[[3]])
@@ -479,13 +485,26 @@ cvx_arrowsq <- function(u, n) {
     X[[i, j]] <- if (i == j) u[i] else if (i == 1 || j == 1) u[n + max(i, j) - 1] else 0
   as.vector(X)
 }
-cvx_chordal <- function(f, n) {
+# band of half width w; the entries of diagonal k follow those of diagonals
+# 1..k-1. Widths 3 and 4 make the clique graph merges run
+cvx_wbandsq <- function(u, n, w) {
+  X <- matrix(list(0), n, n)
+  for (j in seq_len(n)) for (i in seq_len(n)) {
+    k <- abs(i - j)
+    X[[i, j]] <- if (k == 0) u[i] else if (k <= w) u[n + sum(n - seq_len(k - 1)) + min(i, j)] else 0
+  }
+  as.vector(X)
+}
+cvx_chordal <- function(f, n, nv = n - 1L) {
   # the cases are built in a loop, so the matrix builder is fixed now
   force(f)
-  ConvexOptimizationProblem(function(u, p) sum(u[seq_len(n)]), c(rep(1, n), rep(0, n - 1)),
-    constraints = list(ConeConstraint(function(u, p) u[n + seq_len(n - 1)] - 1, MOI$Zeros(n - 1)),
+  ConvexOptimizationProblem(function(u, p) sum(u[seq_len(n)]), c(rep(1, n), rep(0, nv)),
+    constraints = list(ConeConstraint(function(u, p) u[n + seq_len(nv)] - 1, MOI$Zeros(nv)),
                        ConeConstraint(function(u, p) do.call(c, f(u, n)), MOI$PositiveSemidefiniteConeSquare(n))))
 }
+cvx_chordal_cases <- list(band6 = list(cvx_bandsq, 6L), arrow6 = list(cvx_arrowsq, 6L), band9 = list(cvx_bandsq, 9L),
+  wband8 = list(function(u, n) cvx_wbandsq(u, n, 3L), 8L, 18L),
+  wband12 = list(function(u, n) cvx_wbandsq(u, n, 4L), 12L, 38L))
 
 # the 0.1.4 atoms, the bridged sets and the sparse PSD cones of the probe
 cvx_problems_014 <- function() {
@@ -560,11 +579,10 @@ cvx_problems_014 <- function() {
     dualpow = CP(function(u, p) u[3], rep(1, 3), constraints = list(cvx_set(3, MOI$DualPowerCone(0.3)))),
     dualrelentr = CP(function(u, p) u[1], rep(1, 3), constraints = list(cvx_set(3, MOI$DualRelativeEntropyCone(3)))),
     dualgeomean = CP(function(u, p) u[1], rep(1, 3), constraints = list(cvx_cz(2:3, c(1, 2)), cvx_set(3, MOI$DualGeometricMeanCone(3)))))
-  for (nm in c("band6", "arrow6", "band9")) {
-    f <- if (startsWith(nm, "band")) cvx_bandsq else cvx_arrowsq
-    n <- as.integer(substring(nm, nchar(nm)))
+  for (nm in names(cvx_chordal_cases)) {
+    cc <- cvx_chordal_cases[[nm]]
     for (v in c("", "_pc", "_nm", "_std", "_nocd", "_nm_nocd", "_std_nocd"))
-      out[[paste0("chordal_", nm, v)]] <- cvx_chordal(f, n)
+      out[[paste0("chordal_", nm, v)]] <- do.call(cvx_chordal, cc)
   }
   for (nm in cvx_psd_bridged) out[[paste0(nm, "_nocd")]] <- out[[nm]]
   out
@@ -574,7 +592,7 @@ cvx_algs <- function() {
   a <- list(eigmax = cvx_tight, eigmin = cvx_tight, opnorm = cvx_tight, logdet = cvx_tight, eig_nested = cvx_tight,
             eig_max = cvx_tight, eig_pdata = cvx_tight, eig_param = cvx_tight, pdata_abs = cvx_tight,
             pdata_exp = cvx_tight, pdata_max = cvx_tight, logdet_con = cvx_tight12)
-  for (nm in c("band6", "arrow6", "band9")) {
+  for (nm in names(cvx_chordal_cases)) {
     a[[paste0("chordal_", nm, "_pc")]] <- ConvexMOI(ClarabelOptimizer(chordal_decomposition_merge_method = "parent_child"))
     a[[paste0("chordal_", nm, "_nm")]] <- ConvexMOI(ClarabelOptimizer(chordal_decomposition_merge_method = "none"))
     a[[paste0("chordal_", nm, "_std")]] <- ConvexMOI(ClarabelOptimizer(chordal_decomposition_compact = FALSE))
@@ -641,9 +659,24 @@ cvx_run <- function(prob, alg, sweep = NULL) {
   }), error = function(e) list(retcode = "ERROR", error = conditionMessage(e)))
 }
 
+# the distinct bridges print_active_bridges lists, as Constraint.X or
+# Variable.X
+cvx_bridge_names <- function(s) {
+  m <- regmatches(s, gregexpr("MOIB\\.(Constraint|Variable)\\.[A-Za-z]+", s))[[1]]
+  sort(unique(sub("^MOIB\\.", "", m)))
+}
+
 cvx_check <- function(name, got, want, ref) {
   if (identical(want$retcode, "ERROR")) {
     if (cvx_upstream_bug(want)) {
+      # the solve itself, up to the completion that throws upstream
+      sv <- ref[[paste0(name, "_solver")]]
+      if (!is.null(sv) && identical(got$retcode, "Success")) {
+        expect_identical(sv$status, "SOLVED", label = paste(name, "Julia status"))
+        expect_identical(got$iters, sv$iters, label = paste(name, "iterations"))
+        expect_identical(got$cones, sv$cones, label = paste(name, "cones"))
+        expect_identical(c(got$n, got$m), c(sv$n, sv$m), label = paste(name, "size"))
+      }
       alt <- ref[[paste0(name, "_nocd")]]
       if (is.null(alt)) return(expect_identical(got$retcode, "Success", label = paste(name, "retcode")))
       expect_identical(got$retcode, alt$retcode, label = paste(name, "retcode"))
@@ -690,7 +723,7 @@ cvx_compare <- function(name, got, want) {
     expect_identical(as.integer(got$perm), as.integer(want$perm), label = paste(name, "AMD permutation"))
   }
   expect_identical(got$chordal, want$chordal, label = paste(name, "chordal decomposition"))
-  for (b in got$active) expect_true(grepl(b, want$bridges, fixed = TRUE), label = paste(name, "bridge", b))
+  expect_identical(sort(got$active), cvx_bridge_names(want$bridges), label = paste(name, "active bridges"))
   # an infeasible or unbounded exit divides by a vanishing tau, so its u and
   # objective are certificates whose size is not reproducible to 1e-7
   if (want$retcode != "Success") return(invisible())

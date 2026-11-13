@@ -43,10 +43,13 @@ An algorithm object.
 \description{
 The optimizers of OptimizationManopt: Riemannian optimization with the
 Manopt.jl algorithms, ported to R, on the manifold given as the
-\code{manifold} of the \code{\link[=OptimizationProblem]{OptimizationProblem()}} (\code{\link[=Euclidean]{Euclidean()}} or
-\code{\link[=Sphere]{Sphere()}}). Gradient based methods turn the Euclidean gradient of the
+\code{manifold} of the \code{\link[=OptimizationProblem]{OptimizationProblem()}} (\code{\link[=Euclidean]{Euclidean()}}, \code{\link[=Sphere]{Sphere()}},
+\code{\link[=SymmetricPositiveDefinite]{SymmetricPositiveDefinite()}}, whose points are matrices, or
+\code{\link[=Lorentz]{Lorentz()}}). Gradient based methods turn the Euclidean gradient of the
 problem (finite differences when it has none) into the Riemannian one by
-projecting it onto the tangent space; the trust region and cubic
+projecting it onto the tangent space and changing it to the representer
+of the metric (\eqn{p sym(G) p} on the positive definite matrices, the
+sign of the last coordinate flipped on the Lorentz model); the trust region and cubic
 regularization methods use the Riemannian Hessian built the same way
 from Hessian vector products.
 }

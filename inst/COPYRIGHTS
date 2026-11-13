@@ -43,7 +43,9 @@ noted:
   Copyright (c) 2017: Miles Lubin and contributors; Copyright (c) 2017:
   Google Inc. MIT License. License text: inst/CONVEX-LICENSES.
 - SymbolicAnalysis.jl (https://github.com/Vaibhavdixit02/SymbolicAnalysis.jl),
-  version 0.5.8 (disciplined convex programming rules).
+  version 0.5.8 (disciplined convex programming rules, and the geodesic
+  curvature rules and atoms on the SymmetricPositiveDefinite and Lorentz
+  manifolds in R/symbolic-gdcp.R).
   Copyright (c) 2024 Vaibhav Dixit and contributors. MIT License. License
   text: inst/CONVEX-LICENSES.
 - Clarabel.jl (https://github.com/oxfordcontrol/Clarabel.jl), version 0.11.1,

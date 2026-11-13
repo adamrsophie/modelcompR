@@ -4,7 +4,10 @@
 # geometry, unit systems, multibody mechanics, codegen and stochastic
 # processes) are allowed because the modelcompR functions hand foreign
 # arguments to symcompR. Stream is a value in modelcompR, which a call skips.
-mcr_shared <- c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream")
+# distance and hadamard_product (the SymbolicAnalysis atoms) hand ordinary
+# arguments to symcompR's.
+mcr_shared <- c("flatten", "compose", "Differential", "extend", "System", "Variable", "WienerProcess", "Stream",
+                "distance", "hadamard_product")
 default_pkgs <- c("base", "stats", "utils", "graphics", "grDevices", "methods", "datasets")
 
 test_that("exports do not mask base R functions", {

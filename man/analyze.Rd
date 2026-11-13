@@ -4,15 +4,16 @@
 \alias{analyze}
 \title{Disciplined convex programming analysis}
 \usage{
-analyze(ex)
+analyze(ex, M = NULL)
 }
 \arguments{
 \item{ex}{A symbolic expression (or a number).}
+
+\item{M}{\code{NULL}, or the manifold of the geodesic analysis.}
 }
 \value{
 An \code{AnalysisResult}: a list with \code{curvature}, \code{sign} and
-\code{gcurvature} (\code{NULL}; the geodesic analysis on manifolds is not yet
-ported).
+\code{gcurvature} (\code{NULL} without a manifold).
 }
 \description{
 \code{analyze(ex)} reports the curvature (\code{"Convex"}, \code{"Concave"}, \code{"Affine"}
@@ -24,9 +25,21 @@ a warning and give \code{"UnknownCurvature"}), and an atom (\code{exp}, \code{lo
 \code{abs}, \code{Max}, \code{Min}, powers, \code{norm}) composes with arguments of matching
 curvature and monotonicity.
 }
+\details{
+\code{analyze(ex, M)} adds the geodesic curvature on the manifold \code{M}
+(\code{\link[=SymmetricPositiveDefinite]{SymmetricPositiveDefinite()}} or \code{\link[=Lorentz]{Lorentz()}}): \code{"GConvex"},
+\code{"GConcave"}, \code{"GLinear"} or \code{"GUnknownCurvature"}, from the rules of
+the atoms in \link{gdcp_atoms} and \code{\link[=add_gdcprule]{add_gdcprule()}}. A Euclidean rule only
+composes over an argument that already has a geodesic curvature. The
+signs of the geodesic rules hold on \code{M}, so they also enter the sign
+and the Euclidean curvature. The variable is a symcompR \code{MatrixSymbol};
+\code{Transpose(a) * Y * a} becomes \code{quad_form(a, Y)} first, as upstream.
+}
 \examples{
 x <- Symbol("x"); y <- Symbol("y")
 analyze(exp(x) - log(y))$curvature
 analyze((x - 1)^2 + 2 * abs(y))$curvature
 analyze(-x^2)$sign
+X <- MatrixSymbol("X", 3, 3)
+analyze(tr(Inverse(X)) + logdet(X), SymmetricPositiveDefinite(3))
 }

@@ -348,8 +348,9 @@ ClarabelOptimizer <- function(...) {
                                                     side = set$side_dimension)))
 }
 
+# active bridges are named as print_active_bridges names them, less "MOIB."
 .moi_bridged <- function(M, set, bridge, kids, ...) {
-  M$active <- union(M$active, bridge)
+  M$active <- union(M$active, paste0("Constraint.", bridge))
   list(set = set, bridge = bridge, kids = kids, ...)
 }
 
@@ -580,6 +581,9 @@ ClarabelOptimizer <- function(...) {
   tset <- switch(set$name, LogDetConeSquare = MOI$LogDetConeTriangle(dim), RootDetConeSquare = MOI$RootDetConeTriangle(dim),
                  MOI$PositiveSemidefiniteConeTriangle(dim))
   tri <- .moi_bridge_vector(M, .moi_aff_rows(a, idx), tset)
+  # print_active_bridges lists the bridge graph, which holds the EqualTo
+  # chain even when every pair is symmetric and no equality is added
+  M$active <- union(M$active, "Constraint.VectorizeBridge")
   .moi_bridged(M, set, "SquareBridge", list(tri), sym = sym, dim = dim, offset = offset)
 }
 
@@ -608,8 +612,12 @@ ClarabelOptimizer <- function(...) {
 }
 
 # Variable bounds: x >= lb is x - lb in Nonnegatives, x <= ub is -x + ub.
-# The bridge graph creates the GreaterThan and LessThan nodes on the way
+# The bridge graph creates the GreaterThan and LessThan nodes on the way.
+# The bound is a constrained variable: GreaterThan through
+# Variable.VectorizeBridge, LessThan through it and then
+# Variable.NonposToNonnegBridge
 .moi_add_bound <- function(M, var, value, lower) {
+  M$active <- union(M$active, c("Variable.VectorizeBridge", if (!lower) "Variable.NonposToNonnegBridge"))
   M$nodes <- union(M$nodes, "GreaterThan")
   if (!lower && is.null(M$lessthan)) {
     M$lessthan <- "LessToGreaterBridge"

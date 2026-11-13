@@ -169,3 +169,45 @@ test_that("problems on the sphere go through the Riemannian gradient and Hessian
   expect_output(print(M), "Sphere\\(2\\)")
   expect_output(print(Euclidean(3)), "Euclidean\\(3\\)")
 })
+
+test_that("SymmetricPositiveDefinite carries the affine invariant geometry", {
+  M <- SymmetricPositiveDefinite(2)
+  A <- matrix(c(2, 0.5, 0.5, 1), 2); B <- matrix(c(1, -0.3, -0.3, 3), 2)
+  X <- matrix(c(0.1, 0.2, 0.2, -0.3), 2)
+  mf <- function(name, ...) get(name, envir = asNamespace("modelcompR"))(M, ...)
+  q <- mf(".mf_exp", as.numeric(A), as.numeric(X))
+  expect_equal(mf(".mf_log", as.numeric(A), q), as.numeric(X), tolerance = 1e-12)
+  Ai <- solve(A)
+  expect_equal(mf(".mf_inner", as.numeric(A), X, X), sum(diag(Ai %*% X %*% Ai %*% X)))
+  expect_equal(mf(".mf_distance", as.numeric(A), q), sqrt(sum(diag(Ai %*% X %*% Ai %*% X))))
+  Y <- mf(".mf_transport", as.numeric(A), as.numeric(X), as.numeric(B))
+  expect_equal(mf(".mf_norm", as.numeric(B), Y), mf(".mf_norm", as.numeric(A), as.numeric(X)))
+  expect_equal(mf(".mf_get_vector", as.numeric(A), mf(".mf_get_coordinates", as.numeric(A), as.numeric(X))),
+               as.numeric(X))
+  G <- matrix(c(1, 3, 2, 4), 2)
+  expect_equal(mf(".mf_rgrad", as.numeric(A), G), as.numeric(A %*% ((G + t(G)) / 2) %*% A))
+  # the Karcher mean of two points is their geodesic midpoint
+  mid <- matrix(mf(".mf_exp", as.numeric(A), 0.5 * mf(".mf_log", as.numeric(A), as.numeric(B))), 2)
+  f <- function(x, p) distance(M, x, A)^2 + distance(M, x, B)^2
+  for (alg in list(GradientDescentOptimizer(), QuasiNewtonOptimizer(), TrustRegionsOptimizer())) {
+    sol <- solve(OptimizationProblem(f, diag(2), manifold = M), alg, maxiters = 200)
+    expect_identical(sol$retcode, "Success")
+    expect_true(is.matrix(sol$u))
+    expect_equal(sol$u, mid, tolerance = 1e-6)
+  }
+  kg <- function(M, p) -2 * (matrix(mf(".mf_log", as.numeric(p), as.numeric(A)), 2) +
+                               matrix(mf(".mf_log", as.numeric(p), as.numeric(B)), 2))
+  p <- Manopt$gradient_descent(M, function(M, p) f(p, NULL), kg, diag(2))
+  expect_equal(p, mid, tolerance = 1e-6)
+})
+
+test_that("Lorentz is R^n with the Minkowski metric", {
+  L <- Lorentz(3)
+  ns <- asNamespace("modelcompR")
+  expect_equal(get(".mf_inner", envir = ns)(L, NULL, c(1, 2, 3), c(1, 1, 1)), 0)
+  expect_equal(get(".mf_rgrad", envir = ns)(L, c(0, 0, 1), c(1, 2, 3)), c(1, 2, -3))
+  expect_error(get(".mf_norm", envir = ns)(L, NULL, c(0, 0, 1)), "DomainError")
+  g <- function(x, p) (x[1] - 1)^2 + (x[2] + 2)^2
+  sol <- solve(OptimizationProblem(g, c(0, 0, 1), manifold = L), GradientDescentOptimizer(), maxiters = 100)
+  expect_equal(sol$u, c(1, -2, 1), tolerance = 1e-6)
+})

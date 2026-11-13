@@ -78,3 +78,37 @@ pr("rosen_qn_maxiters30", (x, rf(R2, x), [c.at_iteration for c in Manopt.get_sto
 st = gradient_descent(R2, rf, rg, copy(x0); return_state = true)
 x = get_solver_result(st)
 pr("rosen_gd_default", (x, rf(R2, x)))
+
+# SymmetricPositiveDefinite(2) with the affine invariant metric: the Karcher
+# mean of two matrices, with its Riemannian gradient -2 (log_p A + log_p B)
+P2 = SymmetricPositiveDefinite(2)
+A2 = [2.0 0.5; 0.5 1.0]
+B2 = [1.0 -0.3; -0.3 3.0]
+kf(M, p) = distance(M, p, A2)^2 + distance(M, p, B2)^2
+kg(M, p) = -2 * (log(M, p, A2) + log(M, p, B2))
+q0 = Matrix{Float64}(I, 2, 2)
+X0 = [0.1 0.2; 0.2 -0.3]
+pr("spd_exp", exp(P2, A2, X0))
+pr("spd_log", log(P2, A2, B2))
+pr("spd_inner", inner(P2, A2, X0, [0.3 -0.1; -0.1 0.2]))
+pr("spd_distance", distance(P2, A2, B2))
+pr("spd_transport", parallel_transport_to(P2, A2, X0, B2))
+pr("spd_coords", get_coordinates(P2, A2, X0, DefaultOrthonormalBasis()))
+pr("spd_rgrad", riemannian_gradient(P2, A2, [1.0 2.0; 3.0 4.0]))
+for (name, solver) in [("spd_gd", gradient_descent), ("spd_cg", conjugate_gradient_descent), ("spd_qn", quasi_Newton)]
+    st = solver(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(15), return_state = true)
+    pr(name, get_solver_result(st))
+end
+st = gradient_descent(P2, kf, kg, copy(q0); return_state = true)
+pr("spd_gd_default", (get_solver_result(st), [c.at_iteration for c in Manopt.get_stopping_criterion(st).criteria]))
+st = trust_regions(P2, kf, kg, copy(q0); stopping_criterion = StopAfterIteration(8), return_state = true)
+pr("spd_tr", get_solver_result(st))
+
+# Lorentz(3): a cost of the spacelike coordinates, the gradient through the
+# Minkowski change of representer
+L3 = Lorentz(3)
+lf(M, x) = (x[1] - 1)^2 + (x[2] + 2)^2
+lg(M, x) = riemannian_gradient(M, x, [2 * (x[1] - 1), 2 * (x[2] + 2), 0.0])
+st = gradient_descent(L3, lf, lg, [0.0, 0.0, 1.0]; stopping_criterion = StopAfterIteration(20), return_state = true)
+pr("lorentz_gd", get_solver_result(st))
+pr("lorentz_rgrad", riemannian_gradient(L3, [0.0, 0.0, 1.0], [1.0, 2.0, 3.0]))

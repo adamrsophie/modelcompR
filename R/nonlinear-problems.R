@@ -824,6 +824,10 @@ SCCNonlinearProblem <- function(sys, op = list(), ..., jac = TRUE, guesses = lis
   env <- .sol_env(x)
   u <- env$U[1L, ]
   if (!is.null(colnames(env$U))) names(u) <- colnames(env$U)
+  # u has the shape of u0, as in Julia: a matrix for a matrix start (a point
+  # of SymmetricPositiveDefinite)
+  d <- dim(env$prob$u0)
+  if (length(d) == 2L && prod(d) == length(u)) u <- matrix(unname(u), d[1L], d[2L])
   u
 }
 

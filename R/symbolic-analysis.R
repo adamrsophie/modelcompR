@@ -89,8 +89,10 @@
   }
   if (length(el) == 1L) return(.cvx_sv1(el[[1L]]))
   # one vector argument is Julia's maximum(w) / minimum(w); several arguments
-  # its scalar max(a, b, ...), which the lowering flattens
-  if (length(args) == 1L) return(.cvx_sv1(.cvx_fn(if (gen == "max") "maximum" else "minimum", el)))
+  # its scalar max(a, b, ...), which the lowering flattens. The node is named
+  # maximum_vec / minimum_vec because symcompR's Function("minimum") is its
+  # one argument calculus minimum(f) and rejects the elements of w
+  if (length(args) == 1L) return(.cvx_sv1(.cvx_fn(if (gen == "max") "maximum_vec" else "minimum_vec", el)))
   .cvx_sv1(.cvx_fn(gen, .cvx_flatten_fn(el, gen)))
 }
 
@@ -210,6 +212,10 @@ t.mtk_symvec <- function(x) structure(list(v = .symvec_elems(x), mid = list()), 
 }
 
 .cvx_matrix_atom <- function(X, name, numfun) {
+  # a matrix variable of the geodesic analysis
+  if (is_sym(X) && .sg_is_mat(X)) return(Function(name)(X))
+  # LinearAlgebra.logdet of a number is its log
+  if (name == "logdet" && is_sym(X) && !.cvx_state$active) return(log(X))
   s <- .cvx_symmat(X, name)
   if (is.null(s)) return(numfun(X))
   if (!is.null(s$numeric)) return(numfun(s$numeric))
@@ -268,6 +274,7 @@ logdet <- function(X) .cvx_matrix_atom(X, "logdet", function(M) {
 #' @rdname eigmax
 #' @export
 quad_form <- function(x, P) {
+  if ((is_sym(x) && .sg_is_mat(x)) || (is_sym(P) && .sg_is_mat(P))) return(.sg_node("quad_form", x, P))
   if (!inherits(x, "mtk_symvec") && !is_sym(x)) {
     if (length(x) != nrow(P)) stop("DimensionMismatch: x and P must have same length", call. = FALSE)
     return(sum(x * (P %*% x)))
@@ -312,9 +319,18 @@ quad_form <- function(x, P) {
 # Curvature and sign (SymbolicAnalysis.jl rules)
 
 .SA_SIGN <- c("Positive", "Negative", "AnySign")
+
+# The manifold of the analysis in progress (NULL for the Euclidean one) and
+# the geodesic curvatures computed so far, by key (the fold of fold.jl)
+.sa_state <- new.env(parent = emptyenv())
+.sa_state$M <- NULL
+.sa_state$gmemo <- new.env(parent = emptyenv())
+.sa_state$cmemo <- NULL
 .SA_CURV <- c("Convex", "Concave", "Affine", "UnknownCurvature")
 
-.sa_num_sign <- function(v) if (v < 0) "Negative" else "Positive"
+# a constant array is Negative or Positive when every entry is, as
+# getsign(::AbstractArray); zero counts as Positive
+.sa_num_sign <- function(v) if (length(v) && all(v < 0)) "Negative" else if (all(v >= 0)) "Positive" else "AnySign"
 
 # the sign and curvature of an array argument (getsign / getcurvature of an
 # AbstractArray)
@@ -378,6 +394,10 @@ quad_form <- function(x, P) {
 # The DCP rule of a call: list(sign, curvature, monotonicity, argument
 # groups), or NULL for a call without one
 .sa_rule <- function(e) {
+  if (.sg_matrix_node(e)) {
+    r <- .sg_euclid_rule(e)
+    if (!is.null(r)) return(r)
+  }
   args <- .args(e)
   t <- .type(e)
   one <- function(s, c, m) list(s, c, m, lapply(args, list))
@@ -410,8 +430,8 @@ quad_form <- function(x, P) {
     Abs = , abs = , abs2 = , cosh = , hypot = one("Positive", "Convex", .sa_incr_if_pos),
     Max = , max = one("AnySign", "Convex", "Increasing"),
     Min = , min = one("AnySign", "Concave", "Increasing"),
-    maximum = vec1("AnySign", "Convex", "Increasing"),
-    minimum = vec1("AnySign", "Concave", "Increasing"),
+    maximum_vec = vec1("AnySign", "Convex", "Increasing"),
+    minimum_vec = vec1("AnySign", "Concave", "Increasing"),
     # sum and maximum over the elementwise abs or square of w (a convex
     # broadcast of sign Positive): the reducer keeps its own sign AnySign
     sum_abs = , maximum_abs = , sum_sq = {
@@ -458,7 +478,13 @@ quad_form <- function(x, P) {
   if (!is_sym(e)) return(.sa_num_sign(e))
   if (.cvx_is_num(e)) return(.sa_num_sign(.cvx_num(e)))
   t <- .type(e)
-  if (t == "Mul") {
+  if (t == "Identity") return("Positive")
+  # on a manifold a geodesic rule's sign comes before the Euclidean one
+  if (!is.null(.sa_state$M) && .sg_iscall(e) && !(t %in% c("Add", "Mul", "MatAdd", "MatMul"))) {
+    g <- .sg_rule(.sg_op(e))
+    if (!is.null(g)) return(g$sign)
+  }
+  if (t %in% c("Mul", "MatMul")) {
     neg <- 0L
     for (a in .args(e)) {
       s <- .sa_sign(a)
@@ -467,7 +493,7 @@ quad_form <- function(x, P) {
     }
     return(if (neg %% 2L == 1L) "Negative" else "Positive")
   }
-  if (t == "Add") {
+  if (t %in% c("Add", "MatAdd")) {
     all_neg <- TRUE; all_pos <- TRUE
     for (a in .args(e)) {
       s <- .sa_sign(a)
@@ -476,25 +502,40 @@ quad_form <- function(x, P) {
     }
     return(if (all_neg) "Negative" else if (all_pos) "Positive" else "AnySign")
   }
-  r <- if (t == "Symbol") NULL else .sa_rule(e)
+  r <- if (t %in% .sg_leaf_types) NULL else .sa_rule(e)
   if (is.null(r)) "AnySign" else r[[1L]]
 }
 
+# analyze() computes each node once, as the fold of fold.jl, so a warning is
+# emitted once per node
 .sa_curvature <- function(e) {
-  if (!is_sym(e) || .cvx_is_num(e) || .type(e) == "Symbol") return("Affine")
+  if (!is_sym(e) || .cvx_is_num(e) || .type(e) %in% c(.sg_leaf_types, "Identity")) return("Affine")
+  memo <- .sa_state$cmemo
+  if (is.null(memo)) return(.sa_curvature1(e))
+  k <- .key(e)
+  hit <- memo[[k]]
+  if (!is.null(hit)) return(hit)
+  cv <- .sa_curvature1(e)
+  assign(k, cv, envir = memo)
+  cv
+}
+
+.sa_curvature1 <- function(e) {
   t <- .type(e)
   args <- .args(e)
-  if (t == "Mul") {
+  if (t %in% c("Mul", "MatMul")) {
+    # a matrix product's constant factors (an identity) hold no variable
+    isconst <- if (t == "Mul") .cvx_is_num else .sg_const
     nonconst <- NULL; count <- 0L; prod <- 1
     for (a in args) {
-      if (!.cvx_is_num(a)) {
+      if (!isconst(a)) {
         count <- count + 1L
         nonconst <- a
         if (count > 1L) {
           warning("DCP does not support multiple non-constant arguments in multiplication", call. = FALSE)
           return("UnknownCurvature")
         }
-      } else prod <- prod * .cvx_num(a)
+      } else prod <- prod * .sg_constval(a)
     }
     if (is.null(nonconst)) return("Affine")
     cv <- .sa_curvature(nonconst)
@@ -502,7 +543,7 @@ quad_form <- function(x, P) {
     if (.sa_num_sign(prod) == "Negative") return(switch(cv, Convex = "Concave", Concave = "Convex", cv))
     return(cv)
   }
-  if (t == "Add") return(.sa_vcurv(args))
+  if (t %in% c("Add", "MatAdd")) return(.sa_vcurv(args))
   r <- .sa_rule(e)
   if (is.null(r)) return("UnknownCurvature")
   if (!length(r[[4L]])) return(r[[2L]])
@@ -520,24 +561,52 @@ quad_form <- function(x, P) {
 #' `abs`, `Max`, `Min`, powers, `norm`) composes with arguments of matching
 #' curvature and monotonicity.
 #'
+#' `analyze(ex, M)` adds the geodesic curvature on the manifold `M`
+#' ([SymmetricPositiveDefinite()] or [Lorentz()]): `"GConvex"`,
+#' `"GConcave"`, `"GLinear"` or `"GUnknownCurvature"`, from the rules of
+#' the atoms in [gdcp_atoms] and [add_gdcprule()]. A Euclidean rule only
+#' composes over an argument that already has a geodesic curvature. The
+#' signs of the geodesic rules hold on `M`, so they also enter the sign
+#' and the Euclidean curvature. The variable is a symcompR `MatrixSymbol`;
+#' `Transpose(a) * Y * a` becomes `quad_form(a, Y)` first, as upstream.
+#'
 #' @param ex A symbolic expression (or a number).
+#' @param M `NULL`, or the manifold of the geodesic analysis.
 #' @return An `AnalysisResult`: a list with `curvature`, `sign` and
-#'   `gcurvature` (`NULL`; the geodesic analysis on manifolds is not yet
-#'   ported).
+#'   `gcurvature` (`NULL` without a manifold).
 #' @examples
 #' x <- Symbol("x"); y <- Symbol("y")
 #' analyze(exp(x) - log(y))$curvature
 #' analyze((x - 1)^2 + 2 * abs(y))$curvature
 #' analyze(-x^2)$sign
+#' X <- MatrixSymbol("X", 3, 3)
+#' analyze(tr(Inverse(X)) + logdet(X), SymmetricPositiveDefinite(3))
 #' @export
-analyze <- function(ex) {
+analyze <- function(ex, M = NULL) {
   if (inherits(ex, "mtk_symvec")) ex <- .symvec_elems(ex)[[1L]]
-  structure(list(curvature = .sa_curvature(ex), sign = .sa_sign(ex), gcurvature = NULL), class = "AnalysisResult")
+  ex <- .sg_canonize(ex)
+  if (!is.null(M) && !inherits(M, c("SymmetricPositiveDefinite", "Lorentz")))
+    stop("AssertionError: Only SymmetricPositiveDefinite and Lorentz manifolds are currently supported", call. = FALSE)
+  .sa_state$M <- M
+  .sa_state$gmemo <- new.env(parent = emptyenv())
+  .sa_state$cmemo <- new.env(parent = emptyenv())
+  on.exit({
+    .sa_state$M <- NULL
+    .sa_state$gmemo <- new.env(parent = emptyenv())
+    .sa_state$cmemo <- NULL
+  })
+  # the curvature first: upstream annotates each node's curvature before its
+  # geodesic curvature, and both may warn
+  cv <- .sa_curvature(ex)
+  sg <- .sa_sign(ex)
+  g <- if (is.null(M)) NULL else .sg_gcurv(ex)
+  structure(list(curvature = cv, sign = sg, gcurvature = g), class = "AnalysisResult")
 }
 
 #' @export
 print.AnalysisResult <- function(x, ...) {
-  cat("AnalysisResult: curvature = ", x$curvature, ", sign = ", x$sign, "\n", sep = "")
+  cat("AnalysisResult: curvature = ", x$curvature, ", sign = ", x$sign,
+      if (!is.null(x$gcurvature)) paste0(", gcurvature = ", x$gcurvature), "\n", sep = "")
   invisible(x)
 }
 

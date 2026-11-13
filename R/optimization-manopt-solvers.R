@@ -338,10 +338,13 @@
 #'
 #' The optimizers of OptimizationManopt: Riemannian optimization with the
 #' Manopt.jl algorithms, ported to R, on the manifold given as the
-#' `manifold` of the [OptimizationProblem()] ([Euclidean()] or
-#' [Sphere()]). Gradient based methods turn the Euclidean gradient of the
+#' `manifold` of the [OptimizationProblem()] ([Euclidean()], [Sphere()],
+#' [SymmetricPositiveDefinite()], whose points are matrices, or
+#' [Lorentz()]). Gradient based methods turn the Euclidean gradient of the
 #' problem (finite differences when it has none) into the Riemannian one by
-#' projecting it onto the tangent space; the trust region and cubic
+#' projecting it onto the tangent space and changing it to the representer
+#' of the metric (\eqn{p sym(G) p} on the positive definite matrices, the
+#' sign of the last coordinate flipped on the Lorentz model); the trust region and cubic
 #' regularization methods use the Riemannian Hessian built the same way
 #' from Hessian vector products.
 #'
@@ -439,13 +442,8 @@ AdaptiveRegularizationCubicOptimizer <- function() .mo_opt("AdaptiveRegularizati
 # Riemannian Hessian from the Euclidean ones
 .mo_problem <- function(M, f, eg, ehv) {
   list(M = M, f = f,
-       grad = function(x) .mf_project(M, x, eg(x)),
-       hess = function(x, v) {
-         Y <- .mf_project(M, x, ehv(x, v))
-         if (!.mf_sphere(M)) return(Y)
-         G <- eg(x)
-         Y + (-.jl_dot(x, G - .mf_project(M, x, G))) * v
-       })
+       grad = function(x) .mf_rgrad(M, x, eg(x)),
+       hess = function(x, v) .mf_rhess(M, x, eg(x), ehv(x, v), v))
 }
 
 .mo_solve <- function(a, alg, opts) {
@@ -454,15 +452,19 @@ AdaptiveRegularizationCubicOptimizer <- function() .mo_opt("AdaptiveRegularizati
   if (is.null(M))
     stop("Manifold not specified in the problem, for example ",
          "`OptimizationProblem(f, x, p, manifold = Sphere(2))`.", call. = FALSE)
-  if (!inherits(M, "AbstractManifold")) stop("`manifold` must be Euclidean(n) or Sphere(n)", call. = FALSE)
+  if (!inherits(M, c("Euclidean", "Sphere", "SymmetricPositiveDefinite", "Lorentz")))
+    stop("`manifold` must be Euclidean(n), Sphere(n), SymmetricPositiveDefinite(n) or Lorentz(n)", call. = FALSE)
   x0 <- as.numeric(a$u0)
   if (length(x0) != .mf_rep(M))
     stop("the starting point has length ", length(x0), " but points of ", class(M)[1L], "(", M$n,
          ") have length ", .mf_rep(M), call. = FALSE)
   p <- a$p; fn <- a$f
-  f <- function(x) as.numeric(fn$f(x, p))[1L]
-  eg <- if (is.function(fn$grad)) function(x) as.numeric(fn$grad(x, p)) else function(x) .opt_fd_gradient(f, x)
-  ehv <- if (is.function(fn$hess)) function(x, v) as.numeric(fn$hess(x, p) %*% v) else function(x, v) {
+  # the objective sees a point of M as Julia does: a matrix on the positive
+  # definite manifold
+  f <- function(x) as.numeric(fn$f(.mf_shape(M, x), p))[1L]
+  eg <- if (is.function(fn$grad)) function(x) as.numeric(fn$grad(.mf_shape(M, x), p)) else
+    function(x) .opt_fd_gradient(f, x)
+  ehv <- if (is.function(fn$hess)) function(x, v) as.numeric(fn$hess(.mf_shape(M, x), p) %*% v) else function(x, v) {
     nv <- sqrt(sum(v * v))
     if (nv == 0) return(numeric(length(x)))
     h <- .Machine$double.eps^(1 / 3) * max(1, sqrt(sum(x * x))) / nv
@@ -502,7 +504,7 @@ AdaptiveRegularizationCubicOptimizer <- function() .mo_opt("AdaptiveRegularizati
     ConvexBundleOptimizer = do.call(.mo_convex_bundle, c(list(mp, x0), args)),
     stop("AbstractManoptOptimizer() is the abstract type of the Manopt optimizers; use one of them, ",
          "for example GradientDescentOptimizer()", call. = FALSE))
-  .opt_solution(a, alg, st$p, f(st$p), .mo_retcode(st$stopper$active), st)
+  .opt_solution(a, alg, .mf_shape(M, st$p), f(st$p), .mo_retcode(st$stopper$active), st)
 }
 
 .mo_retcode <- function(act) {
@@ -518,9 +520,11 @@ AdaptiveRegularizationCubicOptimizer <- function() .mo_opt("AdaptiveRegularizati
 # The Manopt module
 
 .mo_user_problem <- function(M, f, grad_f = NULL, Hess_f = NULL) {
-  cost <- function(p) f(M, p)
-  g <- if (is.function(grad_f)) function(p) grad_f(M, p) else function(p) .mf_project(M, p, .opt_fd_gradient(cost, p))
-  h <- if (is.function(Hess_f)) function(p, X) Hess_f(M, p, X) else function(p, X) {
+  shp <- function(x) .mf_shape(M, x)
+  cost <- function(p) f(M, shp(p))
+  g <- if (is.function(grad_f)) function(p) as.numeric(grad_f(M, shp(p))) else
+    function(p) .mf_rgrad(M, p, .opt_fd_gradient(cost, p))
+  h <- if (is.function(Hess_f)) function(p, X) as.numeric(Hess_f(M, shp(p), shp(X))) else function(p, X) {
     nx <- .mf_norm(M, p, X)
     if (nx == 0) return(numeric(length(p)))
     c <- 2^-14 / nx
@@ -533,11 +537,11 @@ AdaptiveRegularizationCubicOptimizer <- function() .mo_opt("AdaptiveRegularizati
 .mo_return <- function(st, return_state) {
   if (isTRUE(return_state)) {
     act <- st$stopper$active
-    return(structure(list(p = st$p, iterations = st$iterations, stopped_by = act,
+    return(structure(list(p = .mf_shape(st$M, st$p), iterations = st$iterations, stopped_by = act,
                           converged = !is.null(act) && isTRUE(.mo_sc_converges[act$type])),
                      class = "ManoptSolverState"))
   }
-  st$p
+  .mf_shape(st$M, st$p)
 }
 
 #' @export
@@ -550,8 +554,8 @@ print.ManoptSolverState <- function(x, ...) {
 #' The Manopt module
 #'
 #' `Manopt` gathers the parts of Manopt.jl that OptimizationManopt
-#' re-exports, ported to R: the solvers on a manifold `M` ([Euclidean()] or
-#' [Sphere()]), called with the cost `f(M, p)` and, where needed, the
+#' re-exports, ported to R: the solvers on a manifold `M` ([Euclidean()],
+#' [Sphere()], [SymmetricPositiveDefinite()] or [Lorentz()]), called with the cost `f(M, p)` and, where needed, the
 #' Riemannian gradient `grad_f(M, p)` and Hessian `Hess_f(M, p, X)`
 #' (approximated by finite differences of the gradient when missing), the
 #' stopping criteria and the step sizes. Reach them with `Manopt$name`.
