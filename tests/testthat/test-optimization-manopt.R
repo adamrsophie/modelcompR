@@ -226,10 +226,12 @@ test_that("SymmetricPositiveDefinite matches Manifolds.jl and Manopt.jl", {
   expect_equal(Manopt$trust_regions(M, kf, kg, diag(2), stopping_criterion = Manopt$StopAfterIteration(8)),
                matrix(c(1.3775242983950484, 0.1326932662407666, 0.1326932662407666, 1.6509794599156857), 2),
                tolerance = 1e-12)
-  # the Armijo tests of the conjugate gradient and of the default gradient
-  # descent come down to cost differences of a few ulps, decided by the
-  # rounding of the eigen decompositions: Julia stops after 63 iterations, R
-  # after 67
+  # the iterates of tools/manopt-probe.jl (spd_cg_k, spd_gd_k) agree to a few
+  # ulps at first: the conjugate gradient doubles that rounding difference
+  # each step (1e-12 at step 13) until an Armijo backtrack flips at step 14,
+  # and the gradient descent agrees to 3e-15 through step 50, after which the
+  # Armijo tests compare costs that differ by rounding only; Julia stops
+  # after 63 iterations, R after 67
   expect_equal(Manopt$conjugate_gradient_descent(M, kf, kg, diag(2), stopping_criterion = s15),
                matrix(c(1.095091799168431, 0.2706275432363794, 0.2706275432363794, 1.459217149903989), 2),
                tolerance = 1e-7)
@@ -248,7 +250,10 @@ test_that("Lorentz is R^n with the Minkowski metric", {
   # Minkowski metric, so the Riemannian gradient and Hessian fail as upstream
   msg <- "local_metric(::AbstractManifold, ::Any, ::AbstractBasis) is ambiguous"
   expect_error(get(".mf_rgrad", envir = ns)(L, c(0, 0, 1), c(1, 2, 3)), msg, fixed = TRUE)
-  expect_error(get(".mf_rhess", envir = ns)(L, c(0, 0, 1), c(1, 2, 3), c(1, 0, 0), c(0, 1, 0)), msg, fixed = TRUE)
+  expect_error(get(".mf_rhess", envir = ns)(L, c(0, 0, 1), c(1, 2, 3), c(1, 0, 0), c(0, 1, 0)),
+               paste0("MethodError: no method matching Weingarten!(::MetricManifold{\u211d, Euclidean{\u211d, ",
+                      "ManifoldsBase.TypeParameter{Tuple{3}}}, MinkowskiMetric}, ::Vector{Float64}, ",
+                      "::Vector{Float64}, ::Vector{Float64}, ::Vector{Float64})"), fixed = TRUE)
   g <- function(x, p) (x[1] - 1)^2 + (x[2] + 2)^2
   expect_error(solve(OptimizationProblem(g, c(0, 0, 1), manifold = L), GradientDescentOptimizer(), maxiters = 100),
                msg, fixed = TRUE)
@@ -256,5 +261,5 @@ test_that("Lorentz is R^n with the Minkowski metric", {
   lg <- function(M, x) c(2 * (x[1] - 1), 2 * (x[2] + 2), -0)
   p <- Manopt$gradient_descent(L, function(M, x) g(x, NULL), lg, c(0, 0, 1),
                                stopping_criterion = Manopt$StopAfterIteration(20))
-  expect_equal(p, c(1, -2, 1), tolerance = 1e-2)
+  expect_equal(p, c(0.9987891696990816, -1.9975783393981632, 1), tolerance = 1e-14)
 })

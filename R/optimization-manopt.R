@@ -383,7 +383,13 @@ print.AbstractManifold <- function(x, ...) {
     Y <- .spd_sym(matrix(X, n) %*% .spd_sym(matrix(G, n)) %*% P)
     return(as.numeric(Y + P %*% .spd_sym(matrix(H, n)) %*% P))
   }
-  if (.mf_lorentz(M)) .mf_lorentz_representer()
+  # riemannian_Hessian projects the Euclidean Hessian and then calls the
+  # Weingarten map, which Lorentz does not define
+  if (.mf_lorentz(M)) {
+    stop("MethodError: no method matching Weingarten!(::MetricManifold{\u211d, Euclidean{\u211d, ",
+         "ManifoldsBase.TypeParameter{Tuple{", M$n, "}}}, MinkowskiMetric}, ::Vector{Float64}, ::Vector{Float64}, ",
+         "::Vector{Float64}, ::Vector{Float64})", call. = FALSE)
+  }
   Y <- .mf_project(M, p, H)
   if (!.mf_sphere(M)) return(Y)
   Y + (-.jl_dot(p, G - .mf_project(M, p, G))) * X
