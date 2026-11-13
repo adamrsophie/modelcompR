@@ -98,8 +98,9 @@ DefaultInit <- function() structure(list(), class = c("DefaultInit", "DAEInitial
     if (is.null(alg_rows) || !any(alg_rows)) return(ok(u, du))
     resid <- function(du, u) ctx$f(u, ctx$p, t)[alg_rows]
   }
+  # the residual check (CheckInit, check_dae_tolerance) is not counted in nf
   r0 <- resid(du, u)
-  if (isTRUE(sqrt(mean(r0^2)) / abstol <= 1)) return(ok(u, du, 1L))
+  if (isTRUE(sqrt(mean(r0^2)) / abstol <= 1)) return(ok(u, du))
   if (inherits(alg, "CheckInit")) return(fail)
   if (inherits(alg, "ShampineCollocationInit")) {
     dt <- alg$initdt %||% (if (t != 0) min(abs(t) / 1000, dtmax / 10) else dtmax / 10)

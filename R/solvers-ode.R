@@ -556,7 +556,7 @@ solve.ODEProblem <- function(a, b, ...) {
               # the dimension of the position part of a DynamicalODEProblem and
               # the count of f2 calls (nf2) of the partitioned methods
               # (R/solvers-symplectic.R)
-              nv = prob$nv, counts = new.env(parent = emptyenv()),
+              nv = prob$nv, tspan = prob$tspan, counts = new.env(parent = emptyenv()),
               # opts.dense (QNDF evaluates f at the end of a step only for dense output)
               dense = dense)
   ctx$lazy_nf$n <- 0L
@@ -629,6 +629,8 @@ solve.ODEProblem <- function(a, b, ...) {
   if (!done) {
 
   cbs <- .as_callback_set(opts$callback)
+  # opts.calck of OrdinaryDiffEqCore: the steps compute their dense output
+  ctx$calck <- opts$calck %||% (length(cbs$continuous) + length(cbs$discrete) > 0L || dense || length(saveat) > 0L)
   for (cb in cbs$discrete) {
     cts <- if (!is.null(cb$tstops_fn)) cb$tstops_fn(prob$tspan) else cb$tstops
     tstops <- sort(unique(c(tstops, cts[(cts - t0) * tdir > 0 & (cts - tf) * tdir <= 0])),
@@ -906,7 +908,10 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       ul <- as.numeric(limiter(res$u, integ, integ$p, tnew))
       if (length(ul) != length(res$u)) stop("step_limiter must return the state vector", call. = FALSE)
       res$u <- ul
-      if (!is_dae && !is.null(res$cache$fsal)) {
+      if (!is_dae && isTRUE(res$cache$defer_fsal)) {
+        # reeval_fsal: the step evaluates it at the start of the next step
+        res$cache$reeval_fsal <- TRUE
+      } else if (!is_dae && !is.null(res$cache$fsal)) {
         # an environment cache is updated in place, a list cache is replaced
         res$cache$fsal <- ctx$f(ul, integ$p, tnew)
         stats$nf <- stats$nf + 1L

@@ -3,21 +3,215 @@
 \name{rosenbrock_algorithms}
 \alias{rosenbrock_algorithms}
 \alias{Rosenbrock23}
+\alias{Rosenbrock32}
+\alias{ROS3P}
+\alias{Rodas3}
+\alias{Rodas3d}
+\alias{Rodas23W}
+\alias{Rodas3P}
 \alias{Rodas4}
+\alias{Rodas42}
+\alias{Rodas4P}
+\alias{Rodas4P2}
+\alias{Rodas4PW}
+\alias{Rodas5}
 \alias{Rodas5P}
+\alias{Rodas5Pe}
+\alias{Rodas5Pr}
+\alias{Rodas6P}
 \title{Rosenbrock algorithms}
 \usage{
-Rosenbrock23(autodiff = NULL)
+Rosenbrock23(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 1L,
+  jac_reuse_gamma_tol = 0.03
+)
 
-Rodas4(autodiff = NULL)
+Rosenbrock32(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 1L,
+  jac_reuse_gamma_tol = 0.03
+)
 
-Rodas5P(autodiff = NULL)
+ROS3P(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas3(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas3d(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas23W(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas3P(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas4(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas42(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas4P(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas4P2(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas4PW(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas5(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas5P(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas5Pe(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas5Pr(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
+
+Rodas6P(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  step_limiter = NULL,
+  stage_limiter = NULL,
+  max_jac_age = 20L,
+  jac_reuse_gamma_tol = 0.03
+)
 }
 \arguments{
 \item{autodiff}{How Jacobians are computed when the problem has no
 symbolic Jacobian: \code{AutoForwardDiff()} (central differences, as R has no
 dual numbers), \code{AutoFiniteDiff(fdtype)} or \code{AutoSparse(ad)}; see
 \code{\link[=AutoForwardDiff]{AutoForwardDiff()}}. The default uses forward differences.}
+
+\item{concrete_jac, linsolve}{Accepted for compatibility with
+OrdinaryDiffEq.jl; the linear systems are always solved densely.}
+
+\item{step_limiter}{A function \code{limiter(u, integrator, p, t)} returning
+the state after each accepted step, or \code{NULL}.}
+
+\item{stage_limiter}{Accepted for compatibility: as in OrdinaryDiffEq.jl,
+the out of place steps do not apply a stage limiter.}
+
+\item{max_jac_age}{Number of accepted steps after which a W-method
+evaluates the Jacobian again (1 for \code{Rosenbrock23()} and
+\code{Rosenbrock32()}, which then evaluate it at every step).}
+
+\item{jac_reuse_gamma_tol}{Relative change of \code{dt * gamma} above which a
+W-method evaluates the Jacobian again.}
 }
 \value{
 An algorithm object.
@@ -26,16 +220,27 @@ An algorithm object.
 Linearly implicit Rosenbrock methods for stiff problems and for
 differential algebraic equations in mass matrix form (index 1, singular
 mass matrices as produced by \code{\link[=mtkcompile]{mtkcompile()}}), as in OrdinaryDiffEq.jl.
-\code{Rosenbrock23()} is the order 2(3) method of MATLAB's ode23s with
-Shampine's interpolant, \code{Rodas4()} an order 4 and \code{Rodas5P()} an order 5
-stiffly accurate method with their stiff aware dense output. Each step
-uses the Jacobian \code{prob$f$jac} (from \code{ODEProblem(sys, ..., jac = TRUE)})
-when present and finite differences otherwise, and \code{prob$f$tgrad} for
-non autonomous problems when present.
+\code{Rosenbrock23()} is the order 2(3) W-method of MATLAB's ode23s and
+\code{Rosenbrock32()} its order 3(2) counterpart, both with Shampine's
+interpolant; \code{Rodas3()}, \code{Rodas3d()} and \code{ROS3P()} are third order,
+\code{Rodas3P()} and the W-method \code{Rodas23W()} third order with a stiff aware
+interpolant, \code{Rodas4()}, \code{Rodas42()}, \code{Rodas4P()}, \code{Rodas4P2()} and the
+W-method \code{Rodas4PW()} fourth order, \code{Rodas5()}, \code{Rodas5P()}, \code{Rodas5Pe()}
+(another embedded method) and \code{Rodas5Pr()} (with a residual test of the
+interpolant) fifth order and \code{Rodas6P()} sixth order stiffly accurate
+methods with their stiff aware dense output. Each step uses the Jacobian
+\code{prob$f$jac} when present and differentiation otherwise, and
+\code{prob$f$tgrad} for non autonomous problems when present. The W-methods
+keep the Jacobian along accepted steps until it is \code{max_jac_age} steps
+old or the step size changes by more than \code{jac_reuse_gamma_tol}.
+After an accepted step \code{Rosenbrock32()} evaluates the derivative at the
+new solution for the next step; OrdinaryDiffEq.jl reuses the derivative
+at the second order point there, which costs one evaluation less per step.
 }
 \examples{
 vdp <- function(u, p, t) c(u[2], p * (1 - u[1]^2) * u[2] - u[1])
 prob <- ODEProblem(vdp, c(2, 0), c(0, 1), p = 1000)
 sol <- solve(prob, Rodas5P())
 sol$retcode
+solve(prob, Rosenbrock23())$stats$njacs
 }
