@@ -39,8 +39,17 @@ conestr(c::Clarabel.GenPowerConeT) = "GenPower:$(length(getfield(c, Symbol("\u03
 conestr(c::Clarabel.PSDTriangleConeT) = "PSDTriangle:$(c.dim)"
 setstr(s) = string(nameof(typeof(s)), ":", MOI.dimension(s))
 
+# MOI.RawSolver through a CachingOptimizer tries to map the solver object
+# through the index map and throws, so unwrap the layers by hand
+rawsolver(m::Clarabel.Optimizer) = m.solver
+rawsolver(m::MOI.Bridges.LazyBridgeOptimizer) = rawsolver(m.model)
+rawsolver(m::MOI.Utilities.CachingOptimizer) = rawsolver(m.optimizer)
+rawsolver(m) = MOI.get(m, MOI.RawSolver())
+# a case is passed as a function building the problem, so that an error in
+# the constructor is reported as that case's ERROR line
+build(prob) = prob isa Function ? prob() : prob
 function report(name, cache, sol)
-    solver = MOI.get(cache.model, MOI.RawSolver())
+    solver = rawsolver(cache.model)
     perm = solver.kktsystem.kktsolver.ldlsolver.factors.perm
     println(join([
         name, string(sol.retcode), string(solver.info.iterations), hx(sol.objective), hv(sol.u),
@@ -63,7 +72,7 @@ end
 errline(name, e) = println(join([name, "ERROR", replace(sprint(showerror, e), "\n" => " ", "\t" => " ")], "\t"))
 function probe(name, prob; alg = ALG)
     try
-        cache = SciMLBase.init(prob, alg)
+        cache = SciMLBase.init(build(prob), alg)
         sol = SciMLBase.solve!(cache)
         report(name, cache, sol)
     catch e
@@ -73,7 +82,7 @@ function probe(name, prob; alg = ALG)
 end
 function sweep(name, prob, thetas; alg = ALG)
     cache = try
-        SciMLBase.init(prob, alg)
+        SciMLBase.init(build(prob), alg)
     catch e
         e isa InterruptException && rethrow()
         return errline(name, e)
@@ -97,46 +106,46 @@ cons = [
 c1 = [ConeConstraint((u, p) -> [u[1] + u[2] - 1.0], MOI.Zeros(1))]
 A = reshape([1.0, 1.0], 2, 1)
 b = [0.0, 2.0]
-probe("lp", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + 2 * u[2]), [0.5, 0.5]; constraints = cons))
-probe("soc", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), [0.0, 0.0, 0.0]; constraints = [
+probe("lp", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + 2 * u[2]), [0.5, 0.5]; constraints = cons))
+probe("soc", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), [0.0, 0.0, 0.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] - 3.0, u[2] - 4.0], MOI.Zeros(2)),
     ConeConstraint((u, p) -> [u[3], u[1], u[2]], MOI.SecondOrderCone(3))]))
-probe("norm2", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(A * u - b, 2)), [0.0]))
-probe("norm2_cons", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, 2)), [0.5, 0.5]; constraints = cons))
-probe("norm1", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, 1)), [0.5, 0.5]; constraints = c1))
-probe("norminf", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, Inf)), [0.5, 0.5]; constraints = c1))
-probe("exp", ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(u[1]) + u[2]), [0.0, 0.0];
+probe("norm2", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(A * u - b, 2)), [0.0]))
+probe("norm2_cons", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, 2)), [0.5, 0.5]; constraints = cons))
+probe("norm1", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, 1)), [0.5, 0.5]; constraints = c1))
+probe("norminf", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- 1.0, Inf)), [0.5, 0.5]; constraints = c1))
+probe("exp", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(u[1]) + u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [u[1] - 1.0, u[2]], MOI.Zeros(2))]))
-probe("log", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -log(u[1])), [1.0];
+probe("log", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -log(u[1])), [1.0];
     constraints = [ConeConstraint((u, p) -> [u[1] - 2.0], MOI.Zeros(1))]))
 # cones and bridges beyond the upstream tests
-probe("rsoc", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0, 0.0]; constraints = [
+probe("rsoc", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0, 0.0]; constraints = [
     ConeConstraint((u, p) -> [u[3] - 2.0], MOI.Zeros(1)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3]], MOI.RotatedSecondOrderCone(3))]))
-probe("nonpos", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0]; constraints = [
+probe("nonpos", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] + 2 * u[2] - 4.0, 3 * u[1] + u[2] - 6.0], MOI.Nonpositives(2)),
     ConeConstraint((u, p) -> [u[1], u[2]], MOI.Nonnegatives(2))]))
-probe("soc6", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[6]), zeros(6); constraints = [
+probe("soc6", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[6]), zeros(6); constraints = [
     ConeConstraint((u, p) -> [u[1] - 1.0, u[2] - 2.0, u[3] - 3.0, u[4] - 4.0, u[5] - 5.0], MOI.Zeros(5)),
     ConeConstraint((u, p) -> [u[6], u[1], u[2], u[3], u[4], u[5]], MOI.SecondOrderCone(6))]))
-probe("pow", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[3]), [1.0, 1.0, 0.0]; constraints = [
+probe("pow", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[3]), [1.0, 1.0, 0.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] - 1.0, u[2] - 4.0], MOI.Zeros(2)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3]], MOI.PowerCone(0.3))]))
-probe("genpow", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[3] - u[4]), [1.0, 1.0, 0.0, 0.0]; constraints = [
+probe("genpow", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[3] - u[4]), [1.0, 1.0, 0.0, 0.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] - 1.0, u[2] - 2.0], MOI.Zeros(2)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3], u[4]], Clarabel.MOI.GenPowerCone([0.4, 0.6], 2))]))
-probe("psd", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[3]), [1.0, 0.0, 1.0]; constraints = [
+probe("psd", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[3]), [1.0, 0.0, 1.0]; constraints = [
     ConeConstraint((u, p) -> [u[2] - 1.0], MOI.Zeros(1)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3]], MOI.PositiveSemidefiniteConeTriangle(2))]))
-probe("psd3", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[3] + u[6]), [1.0, 0.0, 1.0, 0.0, 0.0, 1.0]; constraints = [
+probe("psd3", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[3] + u[6]), [1.0, 0.0, 1.0, 0.0, 0.0, 1.0]; constraints = [
     ConeConstraint((u, p) -> [u[2] - 1.0, u[4] - 0.5, u[5] + 0.25], MOI.Zeros(3)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3], u[4], u[5], u[6]], MOI.PositiveSemidefiniteConeTriangle(3))]))
-probe("expcon", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), [0.0, 1.0, 1.0]; constraints = [
+probe("expcon", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), [0.0, 1.0, 1.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] - 0.5, u[2] - 2.0], MOI.Zeros(2)),
     ConeConstraint((u, p) -> [u[1], u[2], u[3]], MOI.ExponentialCone())]))
-probe("lpbox", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] - 2 * u[2]), [0.0, 0.0];
+probe("lpbox", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] - 2 * u[2]), [0.0, 0.0];
     constraints = c1, lb = [-1.0, -3.0], ub = [2.0, 1.5]))
-probe("infeas", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0]; constraints = [
+probe("infeas", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0]; constraints = [
     ConeConstraint((u, p) -> [u[1] - 1.0], MOI.Nonnegatives(1)), ConeConstraint((u, p) -> [-u[1]], MOI.Nonnegatives(1))]))
 
 # parametric sweeps of the upstream tests
@@ -144,24 +153,24 @@ lp_cons = [
     ConeConstraint((u, p) -> [u[1] + u[2] - 1.0 - p[2]], MOI.Zeros(1)),
     ConeConstraint((u, p) -> [u[1], u[2]], MOI.Nonnegatives(2)),
 ]
-sweep("lp_p", ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.5, 0.5], [0.5, 0.0];
+sweep("lp_p", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.5, 0.5], [0.5, 0.0];
     constraints = lp_cons), ([0.5, 0.0], [2.0, 1.0], [-1.0, 0.5], [0.0, 3.0], [0.5, 0.0]))
 Al = [1.0 0.5; 0.2 1.0; 0.7 0.7]
 bl = [1.0, 2.0, 0.5]
-sweep("lasso", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(Al * u - bl, 2) + p[1] * norm(u, 1)),
+sweep("lasso", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(Al * u - bl, 2) + p[1] * norm(u, 1)),
     [0.0, 0.0], [0.0]; lb = [-10.0, -10.0], ub = [10.0, 10.0]), ([0.0], [0.25], [0.5], [2.0], [10.0]))
-sweep("proj", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- p, 2)), [0.0, 0.0], [1.0, 1.0];
+sweep("proj", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- p, 2)), [0.0, 0.0], [1.0, 1.0];
     constraints = c1), ([1.0, 1.0], [3.0, -1.0], [0.0, 0.0]))
-sweep("cross", ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.5, 0.5], [0.0];
+sweep("cross", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.5, 0.5], [0.0];
     constraints = c1, lb = [-10.0, -10.0], ub = [10.0, 10.0]), ([0.0], [3.0], [-5.0], [0.0]))
-sweep("maxsense", ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2] - norm(u .- 1.0, 2)),
+sweep("maxsense", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2] - norm(u .- 1.0, 2)),
     [0.0, 0.0], [1.0]; sense = SciMLBase.MaxSense, lb = [-5.0, -5.0], ub = [5.0, 5.0]), ([1.0], [-2.0], [0.0]))
-sweep("layout", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- p[1:2], 2) + p[3] * u[1]),
+sweep("layout", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(u .- p[1:2], 2) + p[3] * u[1]),
     [0.0, 0.0], [1.0, 1.0, 0.0]; constraints = [
         ConeConstraint((u, p) -> [u[1] + u[2] - p[3]], MOI.Zeros(1)),
         ConeConstraint((u, p) -> [u[1], u[2]], MOI.Nonnegatives(2))],
     lb = [-10.0, -10.0], ub = [10.0, 10.0]), ([1.0, 1.0, 0.0], [3.0, -1.0, 2.0], [0.0, 0.0, -4.0]))
-sweep("failed", ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.0, 0.0], [1.0];
+sweep("failed", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * u[1] + u[2]), [0.0, 0.0], [1.0];
     constraints = [ConeConstraint((u, p) -> [u[1], u[2]], MOI.Nonnegatives(2))]), ([1.0], [-1.0], [2.0]))
 
 # ConvexOptimization 0.1.4: the new atoms
@@ -171,118 +180,118 @@ QA = Float64[1 0 2; 0 1 1; 1 1 0; 2 0 1]
 QB = Float64[1, 2, 3, 4]
 P2 = [2.0 0.5; 0.5 1.0]
 Xd(u) = [u[1] 0.0; 0.0 1.0 - u[1]]
-probe("abs", ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] - 2.0) + abs(u[2] + 1.0)), [0.0, 0.0]))
-probe("lad", ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(abs.(Al * u - bl))), [0.0, 0.0]))
-probe("cheb", ConvexOptimizationProblem(OptimizationFunction((u, p) -> maximum(abs.(Al * u - bl))), [0.0, 0.0]))
-probe("max4", ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(u[1] - 1.0, 1.0 - u[1], u[2] + 0.5, -u[2])), [0.0, 0.0]))
-probe("minimum_max", ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(u)), [0.5, 0.5];
+probe("abs", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] - 2.0) + abs(u[2] + 1.0)), [0.0, 0.0]))
+probe("lad", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(abs.(Al * u - bl))), [0.0, 0.0]))
+probe("cheb", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> maximum(abs.(Al * u - bl))), [0.0, 0.0]))
+probe("max4", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(u[1] - 1.0, 1.0 - u[1], u[2] + 0.5, -u[2])), [0.0, 0.0]))
+probe("minimum_max", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(u)), [0.5, 0.5];
     constraints = c1, sense = SciMLBase.MaxSense))
-probe("minimum_min", ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(u)), [0.5, 0.5]; constraints = c1))
-probe("minabs", ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(abs.(u))), [0.5, 0.5]))
-probe("sumsq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum((QA * u - QB) .^ 2)), zeros(3)))
-probe("normsq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(QA * u - QB)^2), zeros(3)))
-probe("square", ConvexOptimizationProblem(OptimizationFunction((u, p) -> (u[1] - 1.0)^2 + (u[2] + 2.0)^2 + u[1]), [0.0, 0.0]))
-probe("quadform", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u' * P2 * u + u[1] - 2 * u[2]), [0.0, 0.0]))
-probe("quad_form_fn", ConvexOptimizationProblem(OptimizationFunction((u, p) -> SymbolicAnalysis.quad_form(u, P2) + u[1]), [0.0, 0.0]))
-probe("selfprod", ConvexOptimizationProblem(OptimizationFunction((u, p) -> (QA * u - QB)' * (QA * u - QB)), zeros(3)))
-probe("quad_nonpsd", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u' * [1.0 0.0; 0.0 -1.0] * u), [0.0, 0.0]))
-probe("eigmax", ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax(Xd(u))), [0.0]); alg = ALG_TIGHT)
-probe("eigmin", ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmin(Xd(u))), [0.0]; sense = SciMLBase.MaxSense); alg = ALG_TIGHT)
-probe("opnorm", ConvexOptimizationProblem(OptimizationFunction((u, p) -> opnorm([u[1] - 1.0 0.0 0.0; 0.0 u[2] + 2.0 0.0])), [0.0, 0.0]); alg = ALG_TIGHT)
-probe("logdet", ConvexOptimizationProblem(OptimizationFunction((u, p) -> logdet([u[1] 0.0; 0.0 u[2]])), [1.0, 1.0];
+probe("minimum_min", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(u)), [0.5, 0.5]; constraints = c1))
+probe("minabs", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> minimum(abs.(u))), [0.5, 0.5]))
+probe("sumsq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum((QA * u - QB) .^ 2)), zeros(3)))
+probe("normsq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> norm(QA * u - QB)^2), zeros(3)))
+probe("square", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> (u[1] - 1.0)^2 + (u[2] + 2.0)^2 + u[1]), [0.0, 0.0]))
+probe("quadform", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u' * P2 * u + u[1] - 2 * u[2]), [0.0, 0.0]))
+probe("quad_form_fn", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> SymbolicAnalysis.quad_form(u, P2) + u[1]), [0.0, 0.0]))
+probe("selfprod", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> (QA * u - QB)' * (QA * u - QB)), zeros(3)))
+probe("quad_nonpsd", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u' * [1.0 0.0; 0.0 -1.0] * u), [0.0, 0.0]))
+probe("eigmax", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax(Xd(u))), [0.0]); alg = ALG_TIGHT)
+probe("eigmin", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmin(Xd(u))), [0.0]; sense = SciMLBase.MaxSense); alg = ALG_TIGHT)
+probe("opnorm", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> opnorm([u[1] - 1.0 0.0 0.0; 0.0 u[2] + 2.0 0.0])), [0.0, 0.0]); alg = ALG_TIGHT)
+probe("logdet", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> logdet([u[1] 0.0; 0.0 u[2]])), [1.0, 1.0];
     sense = SciMLBase.MaxSense, constraints = [ConeConstraint((u, p) -> [2.0 - u[1] - u[2]], MOI.Nonnegatives(1))]); alg = ALG_TIGHT)
-probe("eig_asym", ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax([u[1] u[1]; 0.0 1.0])), [0.0]))
-probe("eig_scale", ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * eigmax(Xd(u))), [0.0], [1.0]))
-probe("eig_nested", ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(eigmax(Xd(u)))), [0.0]); alg = ALG_TIGHT)
-probe("eig_max", ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(eigmax(Xd(u)), 1.0)), [0.0]); alg = ALG_TIGHT)
-sweep("eig_pdata", ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax(Xd(u)) + eigmax([p[1] 0.0; 0.0 -p[1]])),
+probe("eig_asym", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax([u[1] u[1]; 0.0 1.0])), [0.0]))
+probe("eig_scale", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> p[1] * eigmax(Xd(u))), [0.0], [1.0]))
+probe("eig_nested", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(eigmax(Xd(u)))), [0.0]); alg = ALG_TIGHT)
+probe("eig_max", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(eigmax(Xd(u)), 1.0)), [0.0]); alg = ALG_TIGHT)
+sweep("eig_pdata", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax(Xd(u)) + eigmax([p[1] 0.0; 0.0 -p[1]])),
     [0.0], [-3.0]), ([-3.0], [1.0], [2.0]); alg = ALG_TIGHT)
-sweep("eig_param", ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax([u[1] + p[1] 0.0; 0.0 1.0 - u[1] + p[2]])),
+sweep("eig_param", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> eigmax([u[1] + p[1] 0.0; 0.0 1.0 - u[1] + p[2]])),
     [0.0], [0.0, 0.0]), ([0.0, 0.0], [1.0, -0.5], [-2.0, 3.0]); alg = ALG_TIGHT)
 # nested atoms and parameter-only data
-probe("nest_exp", ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(norm(u .- [1.0, 2.0]))), [0.0, 0.0]))
-probe("nest_max", ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(norm(u), 1.0)), [0.4, 0.6]; constraints = c1))
-probe("nest_sumabs_sq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(abs.(u))^2), [0.4, 0.6]; constraints = c1))
-probe("nest_abs_norm", ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(norm(u .- 1.0))), [0.0, 0.0]))
-probe("nest_box", ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(u[1], abs(u[2]))), [0.3, -0.4];
+probe("nest_exp", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(norm(u .- [1.0, 2.0]))), [0.0, 0.0]))
+probe("nest_max", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(norm(u), 1.0)), [0.4, 0.6]; constraints = c1))
+probe("nest_sumabs_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> sum(abs.(u))^2), [0.4, 0.6]; constraints = c1))
+probe("nest_abs_norm", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(norm(u .- 1.0))), [0.0, 0.0]))
+probe("nest_box", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(u[1], abs(u[2]))), [0.3, -0.4];
     lb = [-1.0, -1.0], ub = [1.0, 1.0]))
-sweep("nest_p", ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(norm(u .- p))), [0.0, 0.0], [1.0, 2.0]),
+sweep("nest_p", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> exp(norm(u .- p))), [0.0, 0.0], [1.0, 2.0]),
     ([1.0, 2.0], [-1.0, 0.5], [0.0, 0.0]))
-sweep("pdata_abs", ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] + abs(p[1]) - 1) + u[1]^2), [0.0], [2.0]),
+sweep("pdata_abs", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] + abs(p[1]) - 1) + u[1]^2), [0.0], [2.0]),
     ([2.0], [-0.25], [0.0], [-1.0]); alg = ALG_TIGHT)
-sweep("pdata_exp", ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] + exp(p[1]) - 2) + u[1]^2), [0.0], [0.0]),
+sweep("pdata_exp", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> abs(u[1] + exp(p[1]) - 2) + u[1]^2), [0.0], [0.0]),
     ([0.0], [log(2.25)], [log(1.5)]); alg = ALG_TIGHT)
-sweep("pdata_max", ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(p[1], p[2]) * 1 + norm(u .- p)), [0.0, 0.0], [1.0, -2.0]),
+sweep("pdata_max", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> max(p[1], p[2]) * 1 + norm(u .- p)), [0.0, 0.0], [1.0, -2.0]),
     ([1.0, -2.0], [-2.0, 3.0], [0.0, 0.0]); alg = ALG_TIGHT)
-probe("scalar_p", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0], 1.0; lb = [0.0]))
+probe("scalar_p", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0], 1.0; lb = [0.0], ub = [10.0]))
 # atoms in constraints
-probe("con_norm", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
+probe("con_norm", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [norm(u) - 1.0], MOI.Nonpositives(1))]))
-probe("con_l1", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - 2 * u[2]), [0.0, 0.0];
+probe("con_l1", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - 2 * u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [sum(abs.(u)) - 1.0], MOI.Nonpositives(1))]))
-probe("con_explog", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
+probe("con_explog", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [exp(u[1]) - 2.0, u[2]^2 - 4.0], MOI.Nonpositives(2)),
         ConeConstraint((u, p) -> [log(u[1] + 2.0)], MOI.Nonnegatives(1))]))
-probe("con_quad", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), [0.0, 0.0];
+probe("con_quad", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [u' * P2 * u - 1.0], MOI.Nonpositives(1))]))
-probe("con_minimum", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0];
+probe("con_minimum", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0];
     constraints = [ConeConstraint((u, p) -> [minimum(u) - 0.5], MOI.Nonnegatives(1))]))
-probe("con_two", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
+probe("con_two", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] - u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [norm(u) + abs(u[1] - u[2]) - 2.0], MOI.Nonpositives(1))]))
-probe("con_wrong", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0];
+probe("con_wrong", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [norm(u) - 1.0], MOI.Nonnegatives(1))]))
-probe("con_eq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0];
+probe("con_eq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [norm(u) - 1.0], MOI.Zeros(1))]))
-probe("con_sign", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0], [1.0];
+probe("con_sign", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), [0.0, 0.0], [1.0];
     constraints = [ConeConstraint((u, p) -> [p[1] - norm(u)], MOI.Nonpositives(1))]))
-sweep("con_p", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [0.0, 0.0], [1.0, 1.0, 1.0];
+sweep("con_p", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [0.0, 0.0], [1.0, 1.0, 1.0];
     constraints = [ConeConstraint((u, p) -> [norm(u .- p[1:2]) - p[3]], MOI.Nonpositives(1))]),
     ([1.0, 1.0, 1.0], [0.0, 2.0, 0.5], [-1.0, 0.0, 2.0]))
-probe("logdet_con", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0];
+probe("logdet_con", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[2]), [1.0, 1.0];
     constraints = [ConeConstraint((u, p) -> [logdet([u[1] 0.0; 0.0 u[2]])], MOI.Nonnegatives(1))]);
     alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer, "tol_gap_abs" => 1.0e-12, "tol_gap_rel" => 1.0e-12,
         "tol_feas" => 1.0e-12, "tol_ktratio" => 1.0e-12)))
 
 # MathOptInterface sets reached through bridges
 cz(vals) = ConeConstraint((u, p) -> [u[i] - v for (i, v) in vals], MOI.Zeros(length(vals)))
-probe("geomean", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), [1.0, 1.0, 1.0];
+probe("geomean", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), [1.0, 1.0, 1.0];
     constraints = [cz([(2, 2.0), (3, 8.0)]), ConeConstraint((u, p) -> [u[1], u[2], u[3]], MOI.GeometricMeanCone(3))]))
-probe("geomean4", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
+probe("geomean4", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 4.0)]), ConeConstraint((u, p) -> [u[1], u[2], u[3], u[4]], MOI.GeometricMeanCone(4))]))
-probe("relentr", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(5);
+probe("relentr", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(5);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 2.0), (5, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:5], MOI.RelativeEntropyCone(5))]))
-probe("normcone2", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("normcone2", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 3.0), (3, 4.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.NormCone(2.0, 3))]))
-probe("normcone3", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("normcone3", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 3.0), (3, 4.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.NormCone(3.0, 3))]))
-probe("normone_set", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("normone_set", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 3.0), (3, -4.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.NormOneCone(3))]))
-probe("norminf_set", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("norminf_set", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 3.0), (3, -4.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.NormInfinityCone(3))]))
 Mf = [2.0, 0.5, 1.0, 0.5, 1.0, 3.0]   # a 2x3 matrix by columns
-probe("normspec", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
+probe("normspec", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
     constraints = [cz([(i + 1, Mf[i]) for i in 1:6]), ConeConstraint((u, p) -> [u[i] for i in 1:7], MOI.NormSpectralCone(2, 3))]))
-probe("normnuc", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
+probe("normnuc", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(7);
     constraints = [cz([(i + 1, Mf[i]) for i in 1:6]), ConeConstraint((u, p) -> [u[i] for i in 1:7], MOI.NormNuclearCone(2, 3))]))
-probe("logdet_tri", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
+probe("logdet_tri", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 0.5), (5, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:5], MOI.LogDetConeTriangle(2))]))
-probe("logdet_sq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(6);
+probe("logdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(6);
     constraints = [cz([(2, 1.0), (3, 2.0), (4, 0.5), (5, 0.5), (6, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:6], MOI.LogDetConeSquare(2))]))
-probe("rootdet_tri", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
+probe("rootdet_tri", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(4);
     constraints = [cz([(2, 2.0), (3, 0.5), (4, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:4], MOI.RootDetConeTriangle(2))]))
-probe("rootdet_sq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
+probe("rootdet_sq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1]), ones(5);
     constraints = [cz([(2, 2.0), (3, 0.5), (4, 0.5), (5, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:5], MOI.RootDetConeSquare(2))]))
-probe("psdsq", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[4]), [1.0, 0.0, 0.0, 1.0];
+probe("psdsq", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1] + u[4]), [1.0, 0.0, 0.0, 1.0];
     constraints = [cz([(2, 1.0), (3, 1.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:4], MOI.PositiveSemidefiniteConeSquare(2))]))
-probe("hyperrect", ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] + u[2]), [0.0, 0.0];
+probe("hyperrect", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> -u[1] + u[2]), [0.0, 0.0];
     constraints = [ConeConstraint((u, p) -> [u[1], u[2]], MOI.HyperRectangle([0.0, -1.0], [1.0, 2.0]))]))
-probe("dualexp", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), ones(3);
+probe("dualexp", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), ones(3);
     constraints = [ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.DualExponentialCone())]))
-probe("dualpow", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), ones(3);
+probe("dualpow", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[3]), ones(3);
     constraints = [ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.DualPowerCone(0.3))]))
-probe("dualrelentr", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("dualrelentr", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.DualRelativeEntropyCone(3))]))
-probe("dualgeomean", ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
+probe("dualgeomean", () -> ConvexOptimizationProblem(OptimizationFunction((u, p) -> u[1]), ones(3);
     constraints = [cz([(2, 1.0), (3, 2.0)]), ConeConstraint((u, p) -> [u[i] for i in 1:3], MOI.DualGeometricMeanCone(3))]))
 
 # sparse PSD cones: Clarabel's chordal decomposition (PSDSquare keeps it on)
@@ -306,11 +315,11 @@ for (nm, f, n) in (("band6", bandsq, 6), ("arrow6", arrowsq, 6), ("band9", bands
             ConeConstraint((u, p) -> f(u, n), MOI.PositiveSemidefiniteConeSquare(n))])
     probe("chordal_" * nm, prob)
     for (mm, merge) in (("pc", :parent_child), ("nm", :none))
-        probe("chordal_$(nm)_$mm", prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+        probe("chordal_$(nm)_$mm", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
             "chordal_decomposition_merge_method" => merge)))
     end
-    probe("chordal_$(nm)_std", prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+    probe("chordal_$(nm)_std", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
         "chordal_decomposition_compact" => false)))
-    probe("chordal_$(nm)_nocd", prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
+    probe("chordal_$(nm)_nocd", () -> prob; alg = ConvexMOI(MOI.OptimizerWithAttributes(Clarabel.Optimizer,
         "chordal_decomposition_complete_dual" => false)))
 end
