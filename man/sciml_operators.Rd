@@ -44,7 +44,7 @@ DiagonalOperator(d, update_func = NULL)
 
 ScalarOperator(alpha, update_func = NULL)
 
-IdentityOperator(n)
+IdentityOperator(n, ...)
 
 NullOperator(n)
 
@@ -123,6 +123,8 @@ named arguments (such as \code{gamma}) passed to \code{update_coefficients()}.}
 
 \item{n}{Size.}
 
+\item{...}{Operators or options. \code{IdentityOperator()} without a numeric \code{n} hands its arguments to symcompR's quantum \code{IdentityOperator()}.}
+
 \item{b}{Vector.}
 
 \item{op, op_inverse, op_adjoint}{Actions \code{f(v, u, p, t)}.}
@@ -132,8 +134,6 @@ named arguments (such as \code{gamma}) passed to \code{update_coefficients()}.}
 \item{islinear}{Whether the function operator is linear.}
 
 \item{F}{A factorization (any object with a \code{solve()} method).}
-
-\item{...}{Operators or options.}
 
 \item{mass_matrix, gamma}{Mass matrix and step factor of \code{WOperator()}.}
 

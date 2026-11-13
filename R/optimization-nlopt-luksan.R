@@ -983,3 +983,8 @@
   }
   .nlu_result(e)
 }
+
+# the Luksan drivers evaluate in the state environment of .nlu_*, which
+# holds these variables
+utils::globalVariables(c("eps8", "eta9", "fo", "gmax", "inew", "iters", "ix", "kbf", "kd", "nit",
+                         "po", "rmax", "umax"))

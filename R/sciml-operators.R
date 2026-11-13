@@ -69,7 +69,7 @@ print.AbstractSciMLOperator <- function(x, ...) {
 #'   through its factorization.
 #' @param L An operator.
 #' @param v,u,p,t Vector to act on and the state, parameters and time.
-#' @param ... Operators or options.
+#' @param ... Operators or options. `IdentityOperator()` without a numeric `n` hands its arguments to symcompR's quantum `IdentityOperator()`.
 #' @return An operator, a vector, a matrix or a logical.
 #' @examples
 #' L <- MatrixOperator(matrix(c(2, 0, 1, 3), 2))

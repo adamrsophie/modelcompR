@@ -24,6 +24,7 @@ Depends:
 Imports:
     graphics,
     Matrix,
+    methods,
     parallel,
     stats,
     utils
