@@ -58,14 +58,15 @@ for (nm, A) in [("Exp4", Exp4), ("EPIRK4s3A", EPIRK4s3A), ("EPIRK4s3B", EPIRK4s3
     go("expo_bwdpos_$nm", () -> solve(pe_bwd, A(); dt = 0.1))
     go("expo_bwdnoadapt_$nm", () -> solve(pe_bwd, A(adaptive_krylov = false); dt = -0.1))
 end
-for rep in 1:2
+# phiv_timestep(ts, A, B): B has the columns b_0, b_1 of the phi functions
+Bm = [1.0 0.2; 0.5 -0.1]
+for (nm, ts) in [("neg1", [-0.5, -1.0]), ("neg2", [-0.5, -1.0]), ("pos", [0.5, 1.0])]
     try
-        out("phiv_timestep_neg$rep", "U", ExponentialUtilities.phiv_timestep([-0.5, -1.0], A2, [1.0, 0.5], 1))
+        out("phiv_timestep_$nm", "U", ExponentialUtilities.phiv_timestep(ts, A2, Bm))
     catch e
-        outs("phiv_timestep_neg$rep", "error", replace(first(sprint(showerror, e), 300), '\n' => ' '))
+        outs("phiv_timestep_$nm", "error", replace(first(sprint(showerror, e), 300), '\n' => ' '))
     end
 end
-out("phiv_timestep_pos", "U", ExponentialUtilities.phiv_timestep([0.5, 1.0], -A2, [1.0, 0.5], 1))
 
 # ---- B. Rosenbrock methods on linear problems -------------------------------
 pr_dec = ODEProblem(ODEFunction((u, p, t) -> -u; jac = (u, p, t) -> fill(-1.0, 1, 1)), [1.0], (0.0, 1.0))
@@ -159,7 +160,7 @@ go("bwd_random_scalar_EM", () -> solve(SDEProblem((u, p, t) -> 1.01u, (u, p, t) 
 # ---- zero length spans ---------------------------------------------------------
 for (nm, A) in [("EM", EM), ("SRIW1", SRIW1), ("SOSRI", SOSRI), ("LambaEM", LambaEM)]
     s = go("zero_sde_$nm", () -> solve(SDEProblem(fd, gd, [1.0, 0.5], (0.0, 0.0)), A(); dt = 0.1))
-    s === nothing || out("zero_sde_$nm", "W", s.W === nothing ? [NaN] : s.W.t)
+    try; s === nothing || out("zero_sde_$nm", "W", s.W === nothing ? [NaN] : s.W.t); catch; end
 end
 go("zero_sde_default", () -> solve(SDEProblem(fd, gd, [1.0, 0.5], (0.0, 0.0))))
 go("zero_sde_nodt", () -> solve(SDEProblem(fd, gd, [1.0, 0.5], (0.0, 0.0)), SRIW1()))
