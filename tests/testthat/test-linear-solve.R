@@ -110,3 +110,23 @@ test_that("eigenvalue problems", {
   gen <- solve(EigenvalueProblem(diag(c(2, 6)), nev = 1, B = diag(c(1, 2))), DenseEigen())
   expect_equal(Re(gen$values), 3)
 })
+
+test_that("Krylov solves report their convergence, as LinearSolve's KrylovJL wrapper does", {
+  # one CG step on an operator stops short of the solution c(1, 0.5)
+  op <- function(x) c(x[1], 2 * x[2])
+  s <- solve(LinearProblem(op, c(1, 1)), KrylovJL_CG(), maxiters = 1)
+  expect_equal(s$retcode, "MaxIters")
+  expect_equal(s$u, c(2, 2) / 3)
+  s <- solve(LinearProblem(op, c(1, 1)), KrylovJL_CG())
+  expect_equal(s$retcode, "Success")
+  expect_equal(s$u, c(1, 0.5))
+  # rectangular least squares: the iteration limit is reported, the
+  # converged least squares solution is a success
+  A <- matrix(c(1, 2, 3, 4, 5, 7), 3); b <- c(1, 0, 2)
+  expect_equal(solve(LinearProblem(A, b), KrylovJL_LSMR(), maxiters = 1)$retcode, "MaxIters")
+  s <- solve(LinearProblem(A, b), KrylovJL_LSMR())
+  expect_equal(s$retcode, "Success")
+  expect_equal(s$u, qr.coef(qr(A), b), tolerance = 1e-6)
+  expect_equal(solve(LinearProblem(diag(3) + 0.1, c(1, 2, 3)), KrylovJL_GMRES(), maxiters = 1)$retcode,
+               "MaxIters")
+})

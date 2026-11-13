@@ -44,7 +44,7 @@ sum_log_eigmax(...)
 
 affine_map(f, X, B, Y)
 
-hadamard_product(X, B)
+hadamard_product(X, B, ...)
 
 lorentz_log_barrier(p)
 
@@ -71,7 +71,9 @@ on the Lorentz model.}
 
 \item{y}{A vector, or a list of vectors.}
 
-\item{...}{The arguments of \code{sum_log_eigmax}: \verb{(f, X, k)} or \verb{(X, k)}.}
+\item{...}{The arguments of \code{sum_log_eigmax}: \verb{(f, X, k)} or \verb{(X, k)}.
+For \code{hadamard_product()}, further factors: a call with more than two
+factors, or with symbolic factors, is symcompR's \code{hadamard_product()}.}
 
 \item{f}{A function name: \code{"conjugation"}, \code{"tr"}, \code{"diag"} or
 \code{"hadamard_product"} for \code{affine_map}; an elementwise function name for

@@ -96,6 +96,11 @@ as_symmap <- function(x) {
         out <- smap_set(out, lhs, NA_real_)
         next
       }
+      if (!is_sym(rhs) && !((is.numeric(rhs) || is.logical(rhs)) && length(rhs) == 1L && is.null(dim(rhs)))) {
+        # a nonnumeric value (a function, a string, a list, a matrix)
+        out <- smap_set(out, lhs, rhs)
+        next
+      }
       el <- Equation(lhs, rhs)
     }
     if (inherits(el, "Equation")) {

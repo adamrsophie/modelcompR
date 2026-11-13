@@ -400,3 +400,61 @@ test_that("Initial parameters can be set and remake can skip initialization", {
   o2 <- remake(op, u0 = c(2, 0.25))
   expect_equal(o2$ps[Initial(y)], 2)
 })
+
+# nonnumeric_reconstruction.jl and the nonnumeric buffers of MTKParameters:
+# struct valued parameters read by registered functions, next to a parameter
+# that initialization solves for
+test_that("parameters take nonnumeric values, as the nonnumeric buffers of MTKParameters", {
+  t <- t_nounits; D <- D_nounits
+  density <- register_symbolic("density_nn", function(m) m$rho)
+  scl <- register_symbolic("scale_nn", function(g) g$k)
+  med <- Parameter("med", default = list(rho = 2))
+  g <- Parameter("g", default = list(k = 3))
+  p0 <- Parameter("p0", default = NA, guess = 1)
+  x <- Variable("x", t, default = 1)
+  model <- System(list(D(x) ~ -density(med) * scl(g) * p0 * x), t,
+                  initialization_eqs = list(p0 ~ 2 * x), name = "model")
+  sys <- mtkcompile(model)
+  prob <- ODEProblem(sys, list(), c(0, 1))
+  expect_s3_class(prob$p, "MTKParameters")
+  expect_equal(prob[med], list(rho = 2))
+  expect_equal(prob$ps[g], list(k = 3))
+  expect_equal(prob$ps[p0], 2)
+  sol <- solve(prob, Tsit5(), reltol = 1e-10, abstol = 1e-12)
+  expect_equal(tail(sol[x], 1), exp(-12), tolerance = 1e-6)
+  # nonnumeric values follow the problem; the old problem keeps its own
+  prob2 <- remake(prob, p = list(med ~ list(rho = 4)))
+  expect_equal(prob2$ps[med], list(rho = 4))
+  expect_equal(prob$ps[med], list(rho = 2))
+  sol2 <- solve(prob2, Tsit5(), reltol = 1e-10, abstol = 1e-12)
+  expect_equal(tail(sol2[x], 1), exp(-24), tolerance = 1e-6)
+  prob3 <- prob
+  prob3$ps[g] <- list(k = 1)
+  expect_equal(prob3$ps[g], list(k = 1))
+  expect_equal(prob$ps[g], list(k = 3))
+  expect_equal(tail(solve(prob3, Tsit5(), reltol = 1e-10, abstol = 1e-12)[x], 1), exp(-4), tolerance = 1e-6)
+
+  # a function, a string and a matrix
+  ap <- register_symbolic("apply_nn", function(f, u) f(u))
+  tr <- register_symbolic("trace_nn", function(m) sum(diag(m)))
+  fp <- Parameter("fp", default = function(u) -u)
+  lbl <- Parameter("lbl", default = "decay")
+  M <- Parameter("M")
+  y <- Variable("y", t, default = 1)
+  s2 <- mtkcompile(System(list(D(y) ~ ap(fp, y) + tr(M) * y), t, ps = list(fp, lbl, M), name = "s2"))
+  # the missing parameter is still reported
+  expect_error(ODEProblem(s2, list(), c(0, 1)), "no value for parameter\\(s\\) M")
+  pr <- ODEProblem(s2, list(M ~ matrix(c(1, 0, 0, -1), 2)), c(0, 1))
+  expect_identical(pr$ps[lbl], "decay")
+  expect_equal(pr$ps[M], matrix(c(1, 0, 0, -1), 2))
+  expect_true(is.function(pr[fp]))
+  expect_equal(tail(solve(pr, Tsit5(), reltol = 1e-10, abstol = 1e-12)[y], 1), exp(-1), tolerance = 1e-6)
+  pr2 <- remake(pr, p = list(list(fp, function(u) -2 * u)))
+  expect_equal(tail(solve(pr2, Tsit5(), reltol = 1e-10, abstol = 1e-12)[y], 1), exp(-2), tolerance = 1e-6)
+  expect_equal(pr[fp](1), -1)
+  expect_equal(MTKParameters(s2, list(M ~ diag(2)))[["M"]], diag(2))
+  # numeric only systems keep the named numeric vector
+  k <- Parameter("knum", default = 2)
+  s3 <- mtkcompile(System(list(D(y) ~ -k * y), t, name = "s3"))
+  expect_identical(ODEProblem(s3, list(), c(0, 1))$p, c(knum = 2))
+})

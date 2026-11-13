@@ -423,6 +423,8 @@ local({
 #' @param a,b Numeric vectors.
 #' @param c A number.
 #' @param ... The arguments of `sum_log_eigmax`: `(f, X, k)` or `(X, k)`.
+#'   For `hadamard_product()`, further factors: a call with more than two
+#'   factors, or with symbolic factors, is symcompR's `hadamard_product()`.
 #' @return A number or matrix, or the atom.
 #' @examples
 #' A <- matrix(c(2, 0.5, 0.5, 1), 2)
@@ -467,7 +469,9 @@ sdivergence <- function(X, Y) {
 #' @rdname gdcp_atoms
 #' @export
 distance <- function(M, p, q) {
-  if (!inherits(M, "AbstractManifold")) return(symcompR::distance(M, p))
+  # symcompR's distance(p, q) of geometry gets any other call as written
+  if (missing(M) || !inherits(M, "AbstractManifold"))
+    return(.symcompr_forward("distance", sys.call(), parent.frame()))
   if (.sg_symbolic(p, q)) return(.sg_node("distance", M, p, q))
   if (inherits(M, "SymmetricPositiveDefinite")) {
     # the norm of the logarithmic map of the affine invariant metric
@@ -557,10 +561,14 @@ affine_map <- function(f, X, B, Y) {
 
 #' @rdname gdcp_atoms
 #' @export
-hadamard_product <- function(X, B) {
+hadamard_product <- function(X, B, ...) {
+  # symcompR's variadic hadamard_product() gets every call that is not a
+  # product of two matrices, as written
+  if (...length() || missing(X) || missing(B))
+    return(.symcompr_forward("hadamard_product", sys.call(), parent.frame()))
   if (is_sym(X) && .type(X) == "MatrixSymbol" && !is_sym(B)) return(.sg_node("hadamard_product", X, B))
   if (is_sym(X) || is_sym(B) || inherits(X, "symmatrix") || inherits(B, "symmatrix"))
-    return(symcompR::hadamard_product(X, B))
+    return(.symcompr_forward("hadamard_product", sys.call(), parent.frame()))
   if ((!.sg_isposdef(B) || !(.sg_eig_sym(B)[1L] >= 0)) && !any(apply(B, 1L, prod) == 0))
     stop("DomainError: B must be positive semi-definite and have no zero rows.", call. = FALSE)
   B * X

@@ -156,6 +156,17 @@ print.Inequality <- function(x, ...) {
 # ---------------------------------------------------------------------------
 # Differential operators
 
+# An expression of symcompR's differential geometry (diffgeom.R of symcompR):
+# scalar and vector fields, forms and the operators on them.
+.DIFFGEOM_TYPES <- c("BaseScalarField", "BaseVectorField", "Differential", "TensorProduct", "WedgeProduct",
+                     "Commutator", "LieDerivative", "BaseCovarDerivativeOp", "CovarDerivativeOp")
+.is_diffgeom <- function(e) {
+  if (!is_sym(e)) return(FALSE)
+  if (.type(e) %in% .DIFFGEOM_TYPES) return(TRUE)
+  for (a in .args(e)) if (.is_diffgeom(a)) return(TRUE)
+  FALSE
+}
+
 #' Differential operators
 #'
 #' `Differential(t)` returns the operator `D` with `D(x)` the derivative of
@@ -169,6 +180,7 @@ print.Inequality <- function(x, ...) {
 #'
 #' @param iv The independent variable.
 #' @param order Order of the derivative.
+#' @param ... `form_field` of symcompR's `Differential()`.
 #' @return A function of class `Differential`.
 #' @examples
 #' t <- t_nounits
@@ -177,13 +189,15 @@ print.Inequality <- function(x, ...) {
 #' D(x^2)
 #' expand_derivatives(D(x^2))
 #' @export
-Differential <- function(iv, order = 1L) {
+Differential <- function(iv, order = 1L, ...) {
   # symcompR's Differential() is the exterior derivative of differential
-  # geometry, which takes a form field; hand it anything that is not an
-  # independent variable symbol, so attaching both packages is safe.
-  if (!(is_sym(iv) && .type(iv) == "Symbol") && missing(order) &&
-      "Differential" %in% getNamespaceExports("symcompR"))
-    return(getExportedValue("symcompR", "Differential")(iv))
+  # geometry, which takes a form field: a call with a differential geometry
+  # object (a scalar field, a form, ...) goes to it as written, so attaching
+  # both packages is safe.
+  if ((missing(iv) || ...length() || .is_diffgeom(iv)) &&
+      .symcompr_has("Differential"))
+    return(.symcompr_forward("Differential", sys.call(), parent.frame()))
+  if (...length()) stop("Differential(iv, order) takes no further arguments", call. = FALSE)
   iv <- as_sym(iv)
   order <- as.integer(order)
   fn <- function(e) {

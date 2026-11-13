@@ -5,7 +5,7 @@
 \alias{expand_derivatives}
 \title{Differential operators}
 \usage{
-Differential(iv, order = 1L)
+Differential(iv, order = 1L, ...)
 
 expand_derivatives(e)
 }
@@ -13,6 +13,8 @@ expand_derivatives(e)
 \item{iv}{The independent variable.}
 
 \item{order}{Order of the derivative.}
+
+\item{...}{\code{form_field} of symcompR's \code{Differential()}.}
 
 \item{e}{An expression, an equation or a list of them.}
 }

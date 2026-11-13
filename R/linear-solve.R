@@ -515,6 +515,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       p <- z + (rz2 / rz) * p; rz <- rz2
       it <- it + 1L
     }
+    solved <- nrm(r) <= tol
   } else if (method == "bicgstab") {
     r <- b - mv(x); rh <- r; rho <- 1; al <- 1; w <- 1; v <- numeric(n); p <- numeric(n)
     while (nrm(r) > tol && it < maxit) {
@@ -529,6 +530,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       rho <- rho2
       it <- it + 1L
     }
+    solved <- nrm(r) <= tol
   } else if (method %in% c("gmres", "fgmres", "minres")) {
     # restarted GMRES with right preconditioning (MINRES, for symmetric A,
     # reaches the same minimal residual iterate)
@@ -536,7 +538,8 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     repeat {
       r <- b - mv(x)
       beta <- nrm(r)
-      if (beta <= tol || it >= maxit) break
+      solved <- beta <= tol
+      if (solved || it >= maxit) break
       V <- matrix(0, n, restart + 1L); H <- matrix(0, restart + 1L, restart)
       Z <- matrix(0, n, restart)
       V[, 1L] <- r / beta
@@ -572,6 +575,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       p <- s + (g2 / g) * p; g <- g2
       it <- it + 1L
     }
+    solved <- sqrt(g) <= tol * 1e-3
   } else if (method == "craigmr") {
     # minimum norm solution by CGNE: x = A' y with A A' y = b
     y <- numeric(n)
@@ -583,9 +587,13 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       rr2 <- sum(r^2); p <- r + (rr2 / rr) * p; rr <- rr2
       it <- it + 1L
     }
+    solved <- sqrt(rr) <= tol
     x <- as.numeric(crossprod(A, y))
   } else stop("unknown Krylov method ", method, call. = FALSE)
-  list(u = x, iters = it, resid = b - mv(x))
+  # the return code of the KrylovJL wrapper of LinearSolve (solve! in
+  # iterative_wrappers.jl) from the solved flag and status of Krylov.jl
+  retcode <- if (solved) "Success" else if (it >= maxit) "MaxIters" else "Failure"
+  list(u = x, iters = it, resid = b - mv(x), retcode = retcode)
 }
 
 .lin_solve <- function(prob, alg, opts, cache = new.env(parent = emptyenv())) {
@@ -636,7 +644,9 @@ init.LinearProblem <- function(prob, alg = NULL, ...) {
   ok <- all(is.finite(r$u)) && max(abs(r$resid), 0) <= max(1e-6, 1e-8 * max(1, max(abs(prob$b), 0)))
   if (!is.matrix(prob$A) || nrow(prob$A) > ncol(prob$A)) ok <- all(is.finite(r$u))
   if (!is.null(prob$sys)) prob$u0 <- stats::setNames(r$u, .nl_names(unknowns(prob$sys)))
-  .nl_new_solution(c("LinearSolution", "NonlinearSolution"), prob, r$alg, r$u, if (ok) "Success" else "Failure",
+  # Krylov methods report their own convergence
+  rc <- r$retcode %||% (if (ok) "Success" else "Failure")
+  .nl_new_solution(c("LinearSolution", "NonlinearSolution"), prob, r$alg, r$u, rc,
                    resid = r$resid, stats = list(iters = r$iters))
 }
 

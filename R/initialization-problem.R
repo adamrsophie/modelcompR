@@ -876,17 +876,28 @@ analyze_initialization_jacobian <- function(prob, rtol = 1e-8, atol = 0, thresho
   sys <- prob$sys
   if (is.null(sys)) stop("setting parameters by name needs a problem built from a system", call. = FALSE)
   ks <- if (is.list(i) && !is_sym(i)) i else list(i)
-  value <- as.numeric(unlist(value))
-  if (length(value) == 1L) value <- rep(value, length(ks))
+  if (length(ks) == 1L && !(is.numeric(value) || is.logical(value))) {
+    # one parameter takes a nonnumeric value (a function, a string, a list,
+    # a matrix) as it is
+    value <- list(value)
+  } else if (is.list(value) && length(value) == length(ks)) {
+    value <- lapply(value, function(v) if ((is.numeric(v) || is.logical(v)) && is.null(dim(v))) as.numeric(v) else v)
+  } else {
+    if (length(ks) == 1L && !is.null(dim(value))) value <- list(value)
+    else {
+      value <- as.list(as.numeric(unlist(value)))
+      if (length(value) == 1L) value <- rep(value, length(ks))
+    }
+  }
   if (length(value) != length(ks)) stop("one value per parameter is needed", call. = FALSE)
   pk <- .keys(.problem_params(sys))
   for (j in seq_along(ks)) {
     k <- as_sym(ks[[j]])
     if (.key(k) %in% pk) {
-      prob <- remake(prob, p = smap_set(symmap(), k, value[j]))
+      prob <- remake(prob, p = smap_set(symmap(), k, value[[j]]))
     } else if (isinitial(k) && !is.null(.f(sys, "iv"))) {
       src <- .init_ps_source(k)
-      if (!is.null(.init_ps_constant(prob, src))) prob <- remake(prob, u0 = smap_set(symmap(), src, value[j]))
+      if (!is.null(.init_ps_constant(prob, src))) prob <- remake(prob, u0 = smap_set(symmap(), src, value[[j]]))
     } else {
       stop(format(k), " is not a parameter of the problem", call. = FALSE)
     }

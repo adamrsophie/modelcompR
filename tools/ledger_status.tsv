@@ -199,7 +199,7 @@ SampleTime	MTKBase	ported
 Clock	MTKBase	ported
 SolverStepClock	MTKBase	ported
 TimeDomain	MTKBase	ported
-MTKParameters	MTKBase	not applicable
+MTKParameters	MTKBase	ported
 reorder_dimension_by_tunables!	MTKBase	ported as reorder_dimension_by_tunables
 reorder_dimension_by_tunables	MTKBase	ported
 HomotopyContinuationProblem	MTKBase	ported

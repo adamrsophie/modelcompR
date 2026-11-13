@@ -4,7 +4,8 @@
 # A problem is an S3 list with class c("<Type>Problem", "SciMLProblem"):
 #   f       a function object (ODEFunction, NonlinearFunction, ...)
 #   u0      named numeric vector of initial values (names are variable names)
-#   p       named numeric vector of parameter values
+#   p       named numeric vector of parameter values, or an MTKParameters
+#           list when some parameter value is nonnumeric
 #   tspan   numeric c(t0, t1) for time dependent problems
 #   sys     the complete system it was built from (NULL for raw problems)
 #   kwargs  solver options stored with the problem (callbacks, tstops, ...)
@@ -90,7 +91,7 @@
     v <- m[[k]]$value
     if (is_sym(v)) {
       if (.is_num(v)) vals[[k]] <- as.numeric(v) else pending[[k]] <- v
-    } else if (is.numeric(v) || is.logical(v)) {
+    } else if ((is.numeric(v) || is.logical(v)) && is.null(dim(v))) {
       vals[[k]] <- as.numeric(v)
     } else {
       vals[[k]] <- v
@@ -126,6 +127,70 @@
   vals
 }
 
+# Parameter values (MTKParameters of ModelingToolkit). A problem's p is the
+# named numeric vector of its parameter values; when a parameter has a
+# nonnumeric value (a function, a string, a list, a matrix, ...), as the
+# nonnumeric buffers of MTKParameters hold, p is instead a named list of class
+# MTKParameters. p[i] of one index is then the value itself, so generated
+# code reads p[i] either way.
+.is_num_scalar <- function(x) (is.numeric(x) || is.logical(x)) && length(x) == 1L && is.null(dim(x))
+
+.new_parameters <- function(vals, nms) {
+  nonnum <- vapply(vals, function(x) !is.null(x) && !.is_num_scalar(x), TRUE)
+  if (!any(nonnum)) {
+    p <- vapply(vals, function(x) if (is.null(x)) NA_real_ else as.numeric(x), 0)
+    return(stats::setNames(p, nms))
+  }
+  vals[!nonnum] <- lapply(vals[!nonnum], function(x) if (is.null(x)) NA_real_ else as.numeric(x))
+  structure(stats::setNames(vals, nms), class = "MTKParameters")
+}
+
+# The value of parameter i.
+.p_value <- function(p, i) if (is.list(p)) .subset2(p, i) else unname(p[i])
+
+# Which parameters lack a value.
+.p_missing <- function(p) {
+  if (!is.list(p)) return(is.na(p))
+  vapply(unclass(p), function(x) .is_num_scalar(x) && is.na(x), TRUE)
+}
+
+#' @export
+`[.MTKParameters` <- function(x, i) {
+  if (missing(i)) return(x)
+  if (length(i) == 1L) return(.subset2(x, i))
+  structure(.subset(x, i), class = "MTKParameters")
+}
+
+#' @export
+print.MTKParameters <- function(x, ...) {
+  print(unclass(x), ...)
+  invisible(x)
+}
+
+#' Parameter values of a system
+#'
+#' `MTKParameters(sys, op)` returns the parameter values of a complete system
+#' given an operating point, as `prob$p` of a problem built from it: a named
+#' numeric vector, or, when some parameter has a nonnumeric value (a
+#' function, a string, a list or a matrix, the nonnumeric buffers of
+#' ModelingToolkit's `MTKParameters`), a named list of class `MTKParameters`
+#' whose single index access `p[i]` returns the value itself.
+#'
+#' @param sys A complete `System`.
+#' @param op Values of parameters (and unknowns they depend on).
+#' @return A named numeric vector or an `MTKParameters` list.
+#' @examples
+#' x <- Variable("x", t_nounits)
+#' k <- Parameter("k", default = 2)
+#' lbl <- Parameter("lbl", default = "decay")
+#' sys <- mtkcompile(System(list(D_nounits(x) ~ -k * x), t_nounits, ps = list(k, lbl), name = "s"))
+#' MTKParameters(sys, list(k ~ 3))
+#' @export
+MTKParameters <- function(sys, op = list()) {
+  .need_complete(sys, "MTKParameters")
+  .process_op(sys, op)$p
+}
+
 # Build the numeric u0 and p vectors for a complete system. Returns a list
 # with u0, p (named numeric) and `missing_u` keys of unknowns without value.
 .process_op <- function(sys, op, require_p = TRUE) {
@@ -148,15 +213,15 @@
   vals <- .evaluate_varmap(merged)
   getv <- function(v) {
     x <- vals[[.key(v)]]
-    if (is.null(x) || !is.numeric(x)) NA_real_ else x
+    if (.is_num_scalar(x)) x else NA_real_
   }
   u0 <- vapply(us, getv, 0)
   names(u0) <- vapply(us, format, "")
-  p <- vapply(ps, getv, 0)
-  names(p) <- vapply(ps, format, "")
-  if (require_p && anyNA(p)) {
-    miss <- names(p)[is.na(p)]
-    solvable <- vapply(ps[is.na(p)], function(q) {
+  p <- .new_parameters(lapply(ps, function(v) vals[[.key(v)]]), vapply(ps, format, ""))
+  pna <- .p_missing(p)
+  if (require_p && any(pna)) {
+    miss <- names(p)[pna]
+    solvable <- vapply(ps[pna], function(q) {
       b <- smap_get(binds, q)
       !is.null(b) && !is_sym(b) && is.na(b)
     }, TRUE)
@@ -493,7 +558,7 @@ remake <- function(prob, u0 = NULL, p = NULL, tspan = NULL, ..., check_initializ
   ui <- match(k, .keys(unknowns(sys)))
   if (!is.na(ui)) return(unname(x$u0[ui]))
   pi <- match(k, .keys(.problem_params(sys)))
-  if (!is.na(pi)) return(unname(x$p[pi]))
+  if (!is.na(pi)) return(.p_value(x$p, pi))
   fn <- build_explicit_observed_function(sys, v)
   args <- list(x$u0, x$p)
   if (!is.null(.f(sys, "iv"))) args[[3L]] <- x$tspan[1L] %||% 0
@@ -531,11 +596,13 @@ remake <- function(prob, u0 = NULL, p = NULL, tspan = NULL, ..., check_initializ
   sys <- prob$sys
   v <- as_sym(i)
   pi <- match(.key(v), .keys(.problem_params(sys)))
-  if (!is.na(pi)) return(unname(prob$p[pi]))
+  if (!is.na(pi)) return(.p_value(prob$p, pi))
   b <- smap_get(bindings(sys), v)
   if (.is_fixed_binding(b)) {
     if (!is_sym(b)) return(as.numeric(b))
-    rule <- .rule_merge(.rule(.problem_params(sys), lapply(prob$p, as_sym)),
+    pv <- unclass(prob$p)
+    num <- vapply(pv, .is_num_scalar, TRUE)
+    rule <- .rule_merge(.rule(.problem_params(sys)[num], lapply(pv[num], as_sym)),
                         .binding_rule(sys))
     return(as.numeric(N(.subst_fixpoint(b, rule))))
   }

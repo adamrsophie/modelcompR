@@ -99,13 +99,12 @@ Variable <- function(name, iv = NULL, default = NULL, guess = NULL, bounds = NUL
                      tunable = NULL, dims = NULL, ...) {
   # symcompR's Variable() is the codegen AST node of SymPy (a symbol, a type,
   # a value and attributes): hand it its own calls, so attaching both
-  # packages is safe
-  if ((missing(name) || is_sym(name) || any(names(list(...)) %in% c("symbol", "type", "value", "attrs"))) &&
-      "Variable" %in% getNamespaceExports("symcompR")) {
-    cl <- sys.call()
-    cl[[1L]] <- getExportedValue("symcompR", "Variable")
-    return(eval(cl, parent.frame()))
-  }
+  # packages is safe. A codegen type (symcompR's real, integer, ...) as
+  # the second argument is such a call too.
+  if ((missing(name) || is_sym(name) || any(names(list(...)) %in% c("symbol", "type", "value", "attrs")) ||
+       (is_sym(iv) && grepl("Type$", .type(iv)))) &&
+      .symcompr_has("Variable"))
+    return(.symcompr_forward("Variable", sys.call(), parent.frame()))
   extra <- list(...)
   meta <- c(.meta_list(default = default, guess = guess, bounds = bounds,
                        description = description, input = input, output = output,

@@ -7,4 +7,3 @@ SciMLLogging	Julia logging package; MTKVerbosity() holds the verbosity levels of
 StructuralTransformations	Julia submodule name; its functions (tearing, dae_index_lowering, ...) are exported directly.
 precompile_ode_problem	Julia precompilation workload; R has no ahead of time compilation of packages.
 precompile_dae_problem	Julia precompilation workload; R has no ahead of time compilation of packages.
-MTKParameters	Julia's split parameter object (tunable, discrete, constant and nonnumeric buffers); problems in R carry the named numeric vector prob$p.

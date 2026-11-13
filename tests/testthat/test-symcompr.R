@@ -80,3 +80,66 @@ test_that("Differential delegates differential geometry to symcompR", {
   expect_equal(format(Differential(x)), format(getExportedValue("symcompR", "Differential")(x)))
   expect_s3_class(Differential(t_nounits), "Differential")
 })
+
+# every name both packages export: a call that is not for modelcompR reaches
+# symcompR exactly as written, named arguments and all
+test_that("shared names forward symcompR calls with their original arguments", {
+  sc <- function(name) getExportedValue("symcompR", name)
+  has <- function(name) name %in% getNamespaceExports("symcompR")
+  x <- symcompR::Symbol("x"); y <- symcompR::Symbol("y")
+  nested <- list(1, list(2, list(3)))
+  expect_identical(flatten(x = nested), symcompR::flatten(x = nested))
+  expect_identical(flatten(nested), symcompR::flatten(nested))
+  expect_equal(format(compose(f = x^2, g = x + 1)), format(symcompR::compose(f = x^2, g = x + 1)))
+  expect_equal(format(compose(g = x + 1, f = x^2)), "x^2 + 2*x + 1")
+  expect_equal(format(compose(x^2, y + 1, x = x)), format(symcompR::compose(x^2, y + 1, x = x)))
+  k <- symcompR::Symbol("k")
+  A <- symcompR::MatrixSymbol("A", k, k); B <- symcompR::MatrixSymbol("B", k, k)
+  expect_equal(format(hadamard_product(A, B)), format(symcompR::hadamard_product(A, B)))
+  # numeric matrices stay modelcompR's g-convex atom
+  expect_equal(hadamard_product(matrix(1:4, 2), diag(2)), diag(c(1, 4)))
+  if (length(formals(symcompR::hadamard_product)) == 1L)
+    expect_equal(format(hadamard_product(B, A, A)), format(symcompR::hadamard_product(B, A, A)))
+  p <- symcompR::Point(c(0, 0)); q <- symcompR::Point(c(3, 4))
+  expect_equal(format(distance(p, q)), "5")
+  expect_equal(format(distance(p = p, q = q)), "5")
+  expect_equal(format(distance(p, q = q)), "5")
+  expect_equal(format(distance(q = q, p = p)), "5")
+  expect_s3_class(WienerProcess(0, 0), "WienerProcess")
+  expect_s3_class(Differential(t_nounits), "Differential")
+  if (has("WienerProcess")) {
+    expect_equal(format(WienerProcess(sym = "W")), format(sc("WienerProcess")(sym = "W")))
+    expect_equal(format(WienerProcess("W")), format(sc("WienerProcess")("W")))
+  }
+  if (has("Differential")) {
+    rn <- getExportedValue("symcompR", "diffgeom_rn")()
+    f <- getExportedValue("symcompR", "base_scalar")(rn$R2_r, 0L)
+    expect_equal(format(Differential(form_field = f)), format(sc("Differential")(form_field = f)))
+    expect_equal(format(Differential(f^2)), format(sc("Differential")(f^2)))
+  }
+  # a dependent variable is a modelcompR operator, whatever symcompR exports
+  xt <- Variable("xdg", t_nounits)
+  Dx <- Differential(xt)
+  expect_s3_class(Dx, "Differential")
+  expect_equal(format(Dx(xt^2)), format(Derivative(xt^2, xt, 1L)))
+  if (has("extend")) {
+    ds <- sc("DimensionSystem")(list(symcompR::Dimension("length")))
+    e1 <- extend(x = ds, new_base_dims = list(symcompR::Dimension("time")))
+    e2 <- sc("extend")(x = ds, new_base_dims = list(symcompR::Dimension("time")))
+    expect_s3_class(e1, "DimensionSystem")
+    expect_equal(e1, e2)
+  }
+  if (has("Variable")) {
+    expect_equal(Variable(symbol = x), sc("Variable")(symbol = x))
+    expect_equal(Variable(x), sc("Variable")(x))
+    real <- getExportedValue("symcompR", "real")
+    expect_equal(Variable("x", real), sc("Variable")("x", real))
+    expect_equal(getdefault(Variable("vsc", t_nounits, default = 2)), 2)
+  }
+  if (has("Stream")) expect_equal(format(Stream("stdout")), format(sc("Stream")("stdout")))
+  expect_identical(Stream, "Stream")
+  if (has("System")) {
+    expect_s3_class(System(), "physics_obj")
+    expect_equal(class(System(frame = NULL)), class(sc("System")(frame = NULL)))
+  }
+})

@@ -102,14 +102,9 @@ System <- function(eqs = list(), iv = NULL, unknowns = NULL, ps = NULL, brownian
                    inputs = list(), outputs = list(), state_priorities = NULL,
                    irreducibles = NULL, is_discrete = FALSE,
                    discover_from_metadata = TRUE, checks = TRUE, frame = NULL, fixed_point = NULL) {
-  if ((nargs() == 0L || !is.null(frame) || !is.null(fixed_point) || inherits(eqs, "physics_obj")) &&
-      "System" %in% getNamespaceExports("symcompR")) {
-    if (inherits(eqs, "physics_obj")) {
-      frame <- eqs
-      if (inherits(iv, "physics_obj")) fixed_point <- iv
-    }
-    return(getExportedValue("symcompR", "System")(frame = frame, fixed_point = fixed_point))
-  }
+  if ((nargs() == 0L || !missing(frame) || !missing(fixed_point) || inherits(eqs, "physics_obj")) &&
+      .symcompr_has("System"))
+    return(.symcompr_forward("System", sys.call(), parent.frame()))
   if (is.null(name)) stop("a system needs a name: System(..., name = \"sys\")", call. = FALSE)
   name <- as.character(name)
   if (!is.null(iv) && !is_sym(iv)) {
@@ -316,7 +311,10 @@ System <- function(eqs = list(), iv = NULL, unknowns = NULL, ps = NULL, brownian
     if (!is.null(d) && !smap_has(ics, v) && !smap_has(binds, v)) {
       if (is.numeric(d) && length(d) == 1L && !is.na(d)) ics <- smap_set(ics, v, d)
       else if (.is_num(d)) ics <- smap_set(ics, v, as.numeric(d))
-      else binds <- smap_set(binds, v, d)
+      else if (is_sym(d) || (is.atomic(d) && length(d) == 1L && is.na(d))) binds <- smap_set(binds, v, d)
+      # a nonnumeric value (a function, a string, a list, a matrix) is a
+      # constant, an initial condition
+      else ics <- smap_set(ics, v, d)
     }
     g <- .meta_get(v, "guess")
     if (!is.null(g) && !smap_has(guesses, v)) guesses <- smap_set(guesses, v, g)
@@ -490,6 +488,17 @@ iscomplete <- function(sys) isTRUE(.f(sys, "complete"))
 
 # a ModelingToolkit system, not the multibody System of symcompR
 .is_mtk_system <- function(x) inherits(x, "System") && !inherits(x, "physics_obj")
+
+# Names modelcompR shares with symcompR. A call meant for symcompR is handed
+# to it exactly as written: the caller's call, with its argument names, order
+# and dots, evaluated again in the caller's frame with symcompR's function.
+# Older symcompR versions lack some of the names.
+.symcompr_has <- function(name) name %in% getNamespaceExports("symcompR")
+
+.symcompr_forward <- function(name, call, env) {
+  call[[1L]] <- call("::", as.name("symcompR"), as.name(name))
+  eval(call, env)
+}
 
 #' @export
 `$.System` <- function(x, name) {
@@ -880,7 +889,7 @@ has_alg_eqs <- function(sys) length(get_alg_eqs(sys)) > 0L
 #' @return A `System`.
 #' @export
 compose <- function(sys, ..., name = NULL) {
-  if (!.is_mtk_system(sys)) return(symcompR::compose(sys, ...))
+  if (missing(sys) || !.is_mtk_system(sys)) return(.symcompr_forward("compose", sys.call(), parent.frame()))
   if (is.null(name)) name <- nameof(sys)
   subs <- list(...)
   if (length(subs) == 1L && is.list(subs[[1L]]) && !inherits(subs[[1L]], "System")) subs <- subs[[1L]]
@@ -892,11 +901,8 @@ compose <- function(sys, ..., name = NULL) {
 extend <- function(sys, base, name = nameof(sys), ...) {
   # symcompR's extend() generic (unit and dimension systems) gets the call as
   # written
-  if (!.is_mtk_system(sys) && "extend" %in% getNamespaceExports("symcompR")) {
-    cl <- sys.call()
-    cl[[1L]] <- getExportedValue("symcompR", "extend")
-    return(eval(cl, parent.frame()))
-  }
+  if ((missing(sys) || !.is_mtk_system(sys)) && .symcompr_has("extend"))
+    return(.symcompr_forward("extend", sys.call(), parent.frame()))
   if (iscomplete(base) || iscomplete(sys)) stop("cannot extend a complete system", call. = FALSE)
   iv <- .f(base, "iv") %||% .f(sys, "iv")
   out <- System(
@@ -930,7 +936,7 @@ extend <- function(sys, base, name = nameof(sys), ...) {
 #' @rdname compose
 #' @export
 flatten <- function(sys, ...) {
-  if (!.is_mtk_system(sys)) return(symcompR::flatten(sys, ...))
+  if (missing(sys) || !.is_mtk_system(sys)) return(.symcompr_forward("flatten", sys.call(), parent.frame()))
   if (!length(.f(sys, "systems"))) return(sys)
   .update_system(sys,
     eqs = equations(sys),
