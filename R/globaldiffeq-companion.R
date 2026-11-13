@@ -327,9 +327,10 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
     if (im == ip) {
       if (!deriv) return(U[im, ])
       # at the end with continuity = :right Julia differentiates the last
-      # step with dt = 0, which is NaN for the Hermite and Rodas forms; the
-      # derivative is taken from the last step (its value at theta = 1)
-      im <- n - 1L
+      # step's interpolant with dt = 0 and y0 = y1 = u(tf): NaN or Inf for
+      # most forms, which the companion solver then steps around
+      st <- steps[[n - 1L]]
+      return(as.numeric(.gde_dinterp_of(st$interp)(1, 0, U[n, ], U[n, ], st$k)))
     }
     dt <- ts[ip] - ts[im]
     theta <- if (dt == 0) 1 else (t - ts[im]) / dt
@@ -337,7 +338,19 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
     fn <- if (deriv) .gde_dinterp_of(st$interp) else st$interp
     as.numeric(fn(theta, dt, U[im, ], U[ip, ], st$k))
   }
-  list(value = function(t) eval_at(t, FALSE), deriv = function(t) eval_at(t, TRUE))
+  # the interpolant of the step that holds t, evaluated at any time (the
+  # step a ForwardDiff dual in t differentiates)
+  pin <- function(t) {
+    ix <- locate(t)
+    im <- ix[1L]; ip <- ix[2L]
+    if (im == ip) return(list(value = function(s) U[n, ], deriv = function(s) rep(NaN, ncol(U))))
+    dt <- ts[ip] - ts[im]
+    st <- steps[[im]]
+    dfn <- .gde_dinterp_of(st$interp)
+    list(value = function(s) as.numeric(st$interp((s - ts[im]) / dt, dt, U[im, ], U[ip, ], st$k)),
+         deriv = function(s) as.numeric(dfn((s - ts[im]) / dt, dt, U[im, ], U[ip, ], st$k)))
+  }
+  list(value = function(t) eval_at(t, FALSE), deriv = function(t) eval_at(t, TRUE), pin = pin)
 }
 
 # The live dense output of an integrator inside its last step (Julia's
@@ -442,27 +455,46 @@ GlobalAdjointControl <- list(ToleranceRefinement = ToleranceRefinement, StepGrid
 }
 
 .gde_rhs_builder <- function(equation, autodiff) {
-  if (identical(equation, DefectCorrection)) {
-    return(function(dense, prob) {
+  mk <- if (identical(equation, DefectCorrection)) {
+    function(dense, prob) {
       foop <- .gde_oop_rhs(prob)
       p <- prob$p
       function(e, t) foop(dense$value(t) + e, p, t) - dense$deriv(t)
-    })
+    }
+  } else {
+    function(dense, prob) {
+      foop <- .gde_oop_rhs(prob)
+      jvp <- .gde_jvp(prob, autodiff)
+      p <- prob$p
+      function(e, t) {
+        u <- dense$value(t)
+        jvp(u, e, t) + (foop(u, p, t) - dense$deriv(t))
+      }
+    }
   }
   function(dense, prob) {
-    foop <- .gde_oop_rhs(prob)
-    jvp <- .gde_jvp(prob, autodiff)
-    p <- prob$p
-    function(e, t) {
-      u <- dense$value(t)
-      jvp(u, e, t) + (foop(u, p, t) - dense$deriv(t))
+    rhs <- mk(dense, prob)
+    # the time gradient a Rosenbrock companion takes: Julia differentiates
+    # the rhs in t with a ForwardDiff dual, inside the step that holds t; a
+    # central difference of that step's interpolant stands in, so that the
+    # stencil never crosses a node (or the final time, where the right
+    # continuous derivative is NaN)
+    if (!is.null(dense$pin)) {
+      attr(rhs, "tgrad") <- function(e, t) {
+        r <- mk(dense$pin(t), prob)
+        h <- .Machine$double.eps^(1 / 3) * max(1, abs(t))
+        (r(e, t + h) - r(e, t - h)) / (2 * h)
+      }
     }
+    rhs
   }
 }
 
 # Solve eps' = rhs(eps, t), eps(t0) = e0 over [t0, t1] and return eps(t1).
 .gde_advance <- function(rhs, e0, t0, t1, alg, abstol, reltol, tstops = NULL) {
-  cprob <- ODEProblem(function(u, p, t) rhs(u, t), e0, c(t0, t1))
+  tg <- attr(rhs, "tgrad")
+  fn <- function(u, p, t) rhs(u, t)
+  cprob <- ODEProblem(if (is.null(tg)) fn else ODEFunction(fn, tgrad_fn = function(u, p, t) tg(u, t)), e0, c(t0, t1))
   csol <- solve(cprob, alg, abstol = abstol, reltol = reltol, tstops = tstops, dense = FALSE,
                 save_everystep = FALSE, save_start = FALSE, save_end = TRUE)
   if (!successful_retcode(csol))

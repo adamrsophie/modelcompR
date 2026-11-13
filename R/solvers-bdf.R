@@ -628,6 +628,8 @@
   cache$fsal <- ctx$du
   cache$fsalprev <- ctx$du
   cache$nf0 <- 0L
+  # k[1] of initialize!: the derivative after the DAE initialization
+  cache$k1 <- ctx$du
   cache
 }
 
@@ -642,7 +644,9 @@
     du <- (unew - u) / dt
     cache$fsal <- du
     cache$fsalprev <- du
-    return(c(out, list(u = unew, EEst = 1, du = du, k = list(ctx$du, du, ctx$differential_vars))))
+    kprev <- cache$k1
+    cache$k1 <- du
+    return(c(out, list(u = unew, EEst = 1, du = du, k = list(du, kprev, ctx$differential_vars))))
   }
   rho <- dt / cache$dtprev
   den <- .fma(2, rho, 1)
@@ -662,11 +666,18 @@
     cache$dtprev <- dt
   }
   if (!ctx$adaptive || EEst <= 1) cache$fsal <- du
-  c(out, list(u = unew, EEst = EEst, du = du, k = list(ctx$du, du, ctx$differential_vars)))
+  # perform_step! shifts k[1] into k[2] and stores du in k[1], also on steps
+  # that are then rejected; the generic hermite_interpolant takes them as the
+  # derivatives at the start and the end of the step (as DImplicitEuler)
+  kprev <- cache$k1
+  cache$k1 <- du
+  c(out, list(u = unew, EEst = EEst, du = du, k = list(du, kprev, ctx$differential_vars)))
 }
 
 # hermite_interpolant (generic_dense.jl, out of place, @muladd) with
-# k = list(du(t0), du(t1), differential_vars): the algebraic components are
+# k = list(du(t1), du(t0), differential_vars), the order of integrator.k
+# after perform_step! (the start slope is the new derivative and the end
+# slope the previous one, as upstream): the algebraic components are
 # interpolated linearly. With some algebraic components @muladd sums
 # theta * y1 + ((1 - theta) * y0 + dv .* h).
 .dabdf2_interp <- function(theta, dt, y0, y1, k) {

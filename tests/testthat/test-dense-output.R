@@ -166,7 +166,7 @@ test_that("the dense values and derivatives match OrdinaryDiffEq", {
 
 
 test_that("the DAE and second order dense output matches OrdinaryDiffEq", {
-  # dense41_DImplicitEuler and dense41_DPRKN6, dense41_NewmarkBeta of
+  # dense41_DImplicitEuler, dense41_DABDF2, dense41_DPRKN6 and dense41_NewmarkBeta of
   # tools/globaldiffeq-probe.jl
   F <- function(du, u, p, t) c(du[1] - u[2], u[2]^3 + u[2] + u[1]^3 + u[1])
   J <- function(du, u, p, gamma, t) matrix(c(gamma, 3 * u[1]^2 + 1, -1, 3 * u[2]^2 + 1), 2)
@@ -177,6 +177,13 @@ test_that("the DAE and second order dense output matches OrdinaryDiffEq", {
   if (ref_platform()) expect_identical(c(length(sol$t), sol$stats$nreject), c(226L, 219L))
   expect_equal(unlist(lapply(tq, sol)), c(0.9999990000025001, -0.999999000002, 0.7418351717745889, -0.7418566125053673, 0.33454109690377826, -0.33455306307178223), tolerance = ref_tol(1e-12))
   expect_equal(unlist(lapply(tq, dn$deriv)), c(-0.9999974999730377, 0.999998000017488, -0.7385112205217308, 0.7403094219354723, -0.3321280983492811, 0.33385366263719085), tolerance = ref_tol(1e-12))
+  # dense41_DABDF2: the same Hermite form over the BDF2 derivatives
+  sol <- solve(prob, DABDF2(), reltol = 1e-4, abstol = 1e-6, initializealg = NoInit())
+  dn <- .gde_sol_dense(sol, right = FALSE)
+  tq <- c(sol$t[2] / 2, 0.3, 1.1)
+  if (ref_platform()) expect_identical(length(sol$t), 39L)
+  expect_equal(unlist(lapply(tq, sol)), c(0.9999990000025001, -0.999999000002, 0.7413506080073026, -0.7409738350163033, 0.3325965564469806, -0.33250058659534243), tolerance = ref_tol(1e-12))
+  expect_equal(unlist(lapply(tq, dn$deriv)), c(-0.9999974999730377, 0.999998000017488, -0.7348524113734815, 0.7381189086232178, -0.3195118841394274, 0.3262003472600303), tolerance = ref_tol(1e-12))
   p1 <- DynamicalODEProblem(function(v, u, p, t) -u - u * u * u, function(v, u, p, t) v, c(0.5, -0.3), c(1, 0.2), c(0, 1))
   tq <- c(0.03, 0.47, 0.71)
   ref <- list(DPRKN6 = list(c(0.43913005709309505, -0.30608825212947993, 1.0140912239409472, 0.19090791613224078, -0.5149368921237758, -0.35921084827801864, 0.9961954818027238, 0.042023878432265585, -0.9215091272324223, -0.3589037003062537, 0.8208598258829548, -0.04456637097140155),

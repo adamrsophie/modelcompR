@@ -35,8 +35,8 @@ test_that("the options print as Julia enums", {
 test_that("the dense first derivatives match Julia", {
   # dense_<alg>_n, _d (t = 0.3 and 1.1), _node_left and _node_right
   # (sol$t[3]) and _T_right; Julia's end point derivative with continuity =
-  # :right is NaN or Inf for BS3, Rodas5P, ImplicitEuler and FBDF (a step of
-  # length zero), R's is the left limit, which no estimator reads
+  # :right differentiates a step of length zero, NaN or Inf for BS3, Rodas5P,
+  # ImplicitEuler and FBDF (gee_end_<alg>), and R's is the same
   ref <- list(
     DP5 = list(16L, c(1.1656135589562262, -0.9925309801273862, 3.9011257225804705, 0.03602317072214835),
                c(0.7304758501158342, -1.5750548043419463), c(0.7304758501158342, -1.5750548043419463),
@@ -73,6 +73,7 @@ test_that("the dense first derivatives match Julia", {
     expect_equal(dn$deriv(sol$t[3]), r[[3]], tolerance = ref_tol(ntol[[nm]]), info = nm)
     expect_equal(dr$deriv(sol$t[3]), r[[4]], tolerance = ref_tol(ntol[[nm]]), info = nm)
     if (!is.null(r[[5]])) expect_equal(dr$deriv(2), r[[5]], tolerance = ref_tol(1e-12), info = nm)
+    else expect_false(all(is.finite(dr$deriv(2))), info = nm)
     expect_equal(dr$value(sol$t[3]), sol$u[[3]], info = nm)
   }
   # Tsit5 and Trapezoid against finite differences of the dense output
@@ -131,8 +132,9 @@ test_that("other dense solvers and companion solvers match Julia", {
               FBDF = c(0.0004783912639103742, 0.0004784206231572864, 6.776751529559152, 2.012560981355187))
   # the forward solves match; the estimates on the dense output of the
   # Rosenbrock and BDF methods differ from Julia's by up to 4e-5 of
-  # themselves although the slopes match at the probed points (an open
-  # item: dense5_<alg> of the probe prints the slopes at every step)
+  # themselves: the companion error estimates are near the rounding of the
+  # defect, and a relative change of 1e-15 in the defect moves the
+  # Rodas5P estimate by 4e-6 of itself and its step count by 11
   etol <- c(DP5 = 5e-11, Vern7 = 5e-11, BS3 = 5e-11, Rosenbrock23 = ref_tol(1e-8, 1e-6), Rodas5P = ref_tol(1e-8, 1e-6),
             FBDF = ref_tol(1e-8, 1e-6))
   # off the reference platform the implicit solves round differently in the last bits
@@ -147,6 +149,11 @@ test_that("other dense solvers and companion solvers match Julia", {
     expect_equal(gec_last(solve(gec_prob(), get(nm)(), abstol = 1e-5, reltol = 1e-5)), r[3:4],
                  tolerance = ref_tol(1e-13, 1e-9), info = nm)
   }
+  # the implicit Euler self companion (gee_alg_ImplicitEuler): its steps end
+  # on the forward nodes, where the defect is zero, until the NaN defect at
+  # the final time makes it step inside the last forward step
+  gec_near(global_error_estimate(gec_prob(), GlobalErrorEstimation(ImplicitEuler()), abstol = 1e-5, reltol = 1e-5),
+           4.5671271858330515e-5, ref_tol(1e-15, 1e-8))
   # an implicit Euler forward solve with an explicit companion
   # (gee_alg_ImplicitEuler_tsit5companion, _tsit5companion_1e-3, _uT and _1e-3_uT)
   gec_near(global_error_estimate(gec_prob(), GlobalErrorEstimation(ImplicitEuler(), companion_alg = Tsit5()),

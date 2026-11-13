@@ -458,3 +458,16 @@ for (name, alg) in ("SSPRK33" => SSPRK33(), "RKO65" => RKO65(), "SSPRK53" => SSP
             csol.stats.nreject, csol.stats.nf, csol.u[end], csol.t[1:8], evals[1:20])
     end
 end
+# The ImplicitEuler self companion at 1e-3 (R stalls near t = 0.0195 and
+# reaches maxiters): the stats and the steps around t = 0.0195
+tryp("gee_ie_trace4") do
+    jl(u, p, t) = [1.5 - u[2] -u[1]; u[2] -3.0+u[1]]
+    probj = ODEProblem(ODEFunction(lvc; jac = jl), [1.0, 1.0], (0.0, 2.0))
+    fsol = solve(probj, ImplicitEuler(); abstol = 1.0e-3, reltol = 1.0e-3, dense = true)
+    rhs = GlobalDiffEq._defect_correction_rhs(probj, fsol, true)
+    csol = solve(ODEProblem{false}(rhs, zeros(2), (0.0, 2.0)), ImplicitEuler(); abstol = 1.0e-10,
+        reltol = 1.0e-8, tstops = fsol.t)
+    i = searchsortedfirst(csol.t, 0.0194)
+    (length(fsol.t), csol.retcode, csol.stats.naccept, csol.stats.nreject, csol.stats.nnonlinconvfail,
+        csol.u[end], i, csol.t[max(1, i - 5):(i + 20)], reduce(vcat, csol.u[max(1, i - 5):(i + 20)]))
+end

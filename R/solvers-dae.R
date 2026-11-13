@@ -346,7 +346,7 @@ print.DAESolution <- function(x, ...) {
   # takes them as the derivatives at the start and the end of the step
   kprev <- cache$k1
   cache$k1 <- (unew - u) / dt
-  c(out, list(u = unew, EEst = EEst, du = nl$z / dt, k = list(cache$k1, kprev, ctx$differential_vars)))
+  c(out, list(u = unew, EEst = EEst, du = cache$k1, k = list(cache$k1, kprev, ctx$differential_vars)))
 }
 
 #' DAE algorithms
