@@ -169,7 +169,7 @@ function traced_refinement!(kktsolver, ldlsolver, rec)
         isfinite(norme) || return false
         improved_ratio = lastnorme / norme
         if improved_ratio < settings.iterative_refinement_stop_ratio
-            if improved_ratio > one(T)
+            if improved_ratio > one(improved_ratio)
                 (x, dx) = (dx, x)
             end
             break
