@@ -1213,8 +1213,12 @@ print.DynamicOptProblem <- function(x, ...) {
   evalf <- function(z, level, lamE = NULL, lamI = NULL, obj = 1) .dopt_eval(ctx, z, level, dense = FALSE, lamE, lamI, obj)
   r <- .nlp_interior_point(evalf, ctx$z0, ctx$lower, ctx$upper, ctx$var_key, keys$keyE, keys$keyI, tol = tol,
                            maxiter = maxiter, verbose = verbose)
+  # successful_solve of ModelingToolkit: Ipopt's Solve_Succeeded,
+  # Solved_To_Acceptable_Level and Feasible_Point_Found (LOCALLY_SOLVED and
+  # ALMOST_LOCALLY_SOLVED with a feasible point); otherwise ConvergenceFailure
+  status <- if (r$status %in% c("Success", "Acceptable", "FeasiblePointFound")) "Success" else "ConvergenceFailure"
   list(z = r$z, v = .dopt_eval(ctx, r$z, level = 0L), lambda = r$lamE, nu = r$lamI, violation = r$violation,
-       stationarity = NA_real_, iterations = r$iterations, status = r$status)
+       stationarity = NA_real_, iterations = r$iterations, status = status)
 }
 
 # The augmented Lagrangian of the optimization module (AugLag() in
@@ -1393,9 +1397,10 @@ print.DynamicOptProblem <- function(x, ...) {
 #' @param optimizer `"interior_point"` is a primal dual interior point
 #'   method in the manner of Ipopt; `"optimization"` uses the augmented
 #'   Lagrangian of the optimization module (`AugLag()`) and `"native"` an
-#'   augmented Lagrangian of this file. `"auto"` (the default) runs the
-#'   interior point method and, when it does not converge, the augmented
-#'   Lagrangian of the optimization module.
+#'   augmented Lagrangian of this file. `"auto"` (the default) is the
+#'   interior point method, with Ipopt's restoration phase; a solve that
+#'   does not converge has the retcode `ConvergenceFailure`, as with the
+#'   JuMP backend of ModelingToolkit.
 #' @export
 solve.DynamicOptProblem <- function(a, b, tol = NULL, maxiter = NULL, inner_maxit = 2000L, verbose = FALSE,
                                     optimizer = c("auto", "interior_point", "native", "optimization"), ...) {
@@ -1405,18 +1410,12 @@ solve.DynamicOptProblem <- function(a, b, tol = NULL, maxiter = NULL, inner_maxi
   sys <- .subset2(a, "sys")
   ip <- optimizer %in% c("auto", "interior_point")
   tol <- tol %||% if (ip) 1e-8 else 1e-6
-  maxiter <- maxiter %||% if (ip) 300L else 30L
+  maxiter <- maxiter %||% if (ip) 3000L else 30L
   evalf <- function(z) .dopt_eval(ctx, z)
   res <- if (ip) .dopt_solve_ip(ctx, tol, maxiter, verbose)
   else if (optimizer == "optimization") .dopt_shared_auglag(evalf, ctx, tol, maxiter, inner_maxit)
   else .dopt_auglag(evalf, ctx$z0, ctx$lower, ctx$upper, tol = tol, maxiter = maxiter,
                     inner_maxit = inner_maxit, verbose = verbose)
-  if (optimizer == "auto" && res$status != "Success") {
-    # the interior point method has no restoration phase; the augmented
-    # Lagrangian with its feasibility phase is tried next
-    alt <- .dopt_shared_auglag(evalf, ctx, 1e-6, 30L, inner_maxit)
-    if (alt$status == "Success" || alt$violation < res$violation) res <- alt
-  }
   v <- .dopt_eval(ctx, res$z, level = 0L)
   nodes <- ctx$node_pt
   times <- v$t[nodes]

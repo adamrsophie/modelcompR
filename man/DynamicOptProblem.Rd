@@ -77,9 +77,10 @@ of the augmented Lagrangian methods.}
 \item{optimizer}{\code{"interior_point"} is a primal dual interior point
 method in the manner of Ipopt; \code{"optimization"} uses the augmented
 Lagrangian of the optimization module (\code{AugLag()}) and \code{"native"} an
-augmented Lagrangian of this file. \code{"auto"} (the default) runs the
-interior point method and, when it does not converge, the augmented
-Lagrangian of the optimization module.}
+augmented Lagrangian of this file. \code{"auto"} (the default) is the
+interior point method, with Ipopt's restoration phase; a solve that
+does not converge has the retcode \code{ConvergenceFailure}, as with the
+JuMP backend of ModelingToolkit.}
 }
 \value{
 An object of class \code{DynamicOptProblem}.

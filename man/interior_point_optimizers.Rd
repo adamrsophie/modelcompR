@@ -26,13 +26,13 @@ An algorithm object for \code{\link[=solve]{solve()}}.
 \deqn{\min f(u) \quad \textrm{subject to} \quad lcons \le cons(u) \le ucons,
 \; lb \le u \le ub}{min f(u) subject to lcons <= cons(u) <= ucons, lb <= u <= ub}
 with the primal dual interior point method and filter line search of
-Waechter and Biegler (2006), the algorithm of both solvers: a logarithmic
+Waechter and Biegler (2006), ported from Ipopt 3.14: a logarithmic
 barrier for the bounds and for slacks of the inequalities, the monotone
-barrier update, gradient based scaling of the problem, inertia free
-regularization of the Newton system and second order corrections. The
-restoration phase of the solvers is replaced by a minimum norm step toward
-feasibility, so iterates and counts differ from Ipopt and MadNLP while
-the solutions agree.
+or adaptive barrier update, gradient based scaling of the problem,
+Ipopt's inertia correction of the Newton system, the backtracking filter
+line search with second order corrections, the watchdog and the soft
+restoration phase, and Ipopt's restoration phase, which minimizes the
+1-norm of the infeasibility when the line search fails.
 }
 \details{
 Gradients, Hessians and constraint Jacobians and Hessians come from the
@@ -40,10 +40,17 @@ problem when it has them and from finite differences otherwise.
 \code{reltol} (Ipopt) or \code{abstol} (MadNLP) sets the convergence tolerance
 (default \code{1e-8}) and \code{maxiters} the iteration limit (default 3000); for
 Ipopt, \code{tol} and \code{max_iter} in \code{additional_options} take precedence, as in
-OptimizationIpopt.jl. The other fields of the Julia structs (linear
-solvers, printing, scaling, barrier strategy, acceptable point
-tolerances) are accepted and stored but do not change the native method,
-which uses Ipopt's defaults for them.
+OptimizationIpopt.jl. The fields of \code{IpoptOptimizer} and Ipopt options in
+\code{additional_options} act as in Ipopt (tolerances, scaling,
+\code{mu_strategy}, \code{mu_oracle}, \code{hessian_approximation},
+\code{warm_start_init_point} and the others); a linear solver or scaling
+library that Ipopt_jll lacks (the HSL solvers, MC19) ends the solve
+before the first iteration, as Ipopt's Invalid_Option does. Options that
+only change printing or the linear algebra library are accepted without
+effect on the iterates. The penalty line searches of Ipopt
+(\code{line_search_method = "penalty"} or \code{"cg-penalty"}) are not ported: they
+run the filter line search. \code{MadNLPOptimizer()} runs the same Ipopt
+algorithm, not MadNLP's own implementation.
 }
 \examples{
 prob <- OptimizationProblem(function(u, p) (u[1] - 2) * (u[1] - 2) + (u[2] - 1) * (u[2] - 1),
