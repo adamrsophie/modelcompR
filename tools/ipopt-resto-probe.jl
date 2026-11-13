@@ -62,12 +62,13 @@ small("hs071_far", m -> begin
     x
 end)
 
-# The cart pole of ModelingToolkit's tests (dynamic_optimization.jl)
-try
-    @eval using ModelingToolkit
-    @eval import InfiniteOpt
-    @eval import OrdinaryDiffEqExplicitTableaus as ExplicitTableaus
-    @eval begin
+# The cart pole of ModelingToolkit's tests (dynamic_optimization.jl);
+# include_string evaluates one top level statement at a time, so the macros
+# expand after ModelingToolkit is loaded
+cartpole_code = raw"""
+        using ModelingToolkit
+        import InfiniteOpt
+        import OrdinaryDiffEqExplicitTableaus as ExplicitTableaus
         using ModelingToolkit: t_nounits as t, D_nounits as D
         const MTK = ModelingToolkit
         MTK.@parameters g l mₚ mₖ
@@ -102,7 +103,9 @@ try
             end
             flush(stdout)
         end
-    end
+"""
+try
+    Base.include_string(Main, cartpole_code)
 catch err
     println("error ", sprint(showerror, err))
 end
