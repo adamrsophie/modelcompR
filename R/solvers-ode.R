@@ -493,6 +493,18 @@ solve.ODEProblem <- function(a, b, ...) {
   # below by the spacing of t, timedepentdtmin of DiffEqBase
   dtmin <- opts$dtmin %||% 0
   dtmin_at <- function(t) max(dtmin, .Machine$double.eps * abs(t), .Machine$double.xmin)
+  # de_check_error of DiffEqBase after a rejected step, on the dt that
+  # fix_dt_at_bounds! raised to max(eps(t), dtmin): at the user's dtmin it is
+  # DtLessThanMin, at eps(t) Unstable
+  fail_code <- function(dt) {
+    e <- .eps64(integ$t)
+    d <- abs(dtmin)
+    dt <- max(dt, e, d)
+    if (dt <= d) "DtLessThanMin" else if (dt <= e) "Unstable"
+  }
+  fail_msg <- function(code) {
+    if (code == "DtLessThanMin") "step size fell below dtmin at t = " else "step size fell below eps(t) at t = "
+  }
   is_dae <- inherits(prob, "DAEProblem")
   algs <- if (inherits(alg, "CompositeAlgorithm")) alg$algs else list(alg)
   adaptive <- (opts$adaptive %||% TRUE) && all(vapply(algs, function(a) isTRUE(a$adaptive), TRUE))
@@ -705,7 +717,8 @@ solve.ODEProblem <- function(a, b, ...) {
 # state environment I (set up by .INTEG_INIT), so these names are bindings
 # of I, not globals.
 utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "alg_choice", "algs", "cbs",
-                         "dense", "dtmax", "dtmin", "dtmin_at", "finish", "is_dae", "maxiters", "mm", "opts", "prob",
+                         "dense", "dtmax", "dtmin", "dtmin_at", "fail_code", "fail_msg", "finish", "is_dae",
+                         "maxiters", "mm", "opts", "prob",
                          "push_save", "reltol", "disc_next", "add_init", "save_end", "save_everystep",
                          "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us"))
 
@@ -810,10 +823,9 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       # a method that finishes the failed step keeps its error estimate
       if (!is.null(res$EEst)) EEst_prev <- res$EEst
       dt <- if (!is.null(a$newton_fail)) a$newton_fail(caches[[cur]], dtcur, co) else dtcur / co$failfactor
-      if (dt <= dtmin_at(integ$t)) {
-        retcode <- "DtLessThanMin"
-        warning("step size fell below dtmin at t = ", integ$t,
-                "; the nonlinear solver does not converge", call. = FALSE)
+      if (!is.null(fc <- fail_code(dt))) {
+        retcode <- fc
+        warning(fail_msg(fc), integ$t, "; the nonlinear solver does not converge", call. = FALSE)
         done <- TRUE
         break
       }
@@ -842,10 +854,9 @@ utils::globalVariables(c("AS", "M", "abstol", "adaptive", "add_stats", "alg", "a
       }
       dt <- if (ddt > 0) ddt else .ctrl_reject(co, css[[cur]], dtcur, EEst, a, caches[[cur]])
       if (!is.null(a$on_reject)) a$on_reject(caches[[cur]])
-      if (dt <= dtmin_at(integ$t)) {
-        retcode <- "DtLessThanMin"
-        warning("step size fell below dtmin at t = ", integ$t, "; the problem may be stiff or singular",
-                call. = FALSE)
+      if (!is.null(fc <- fail_code(dt))) {
+        retcode <- fc
+        warning(fail_msg(fc), integ$t, "; the problem may be stiff or singular", call. = FALSE)
         done <- TRUE
         break
       }

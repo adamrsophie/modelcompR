@@ -249,7 +249,11 @@ test_that("the default algorithm follows OrdinaryDiffEqDefault", {
 
 test_that("retcodes and statistics follow SciMLBase", {
   prob <- ODEProblem(function(u, p, t) u^2, 1, c(0, 2))
-  expect_warning(sol <- solve(prob, Tsit5()), "dtmin")
+  # de_check_error: a rejected step below eps(t) is Unstable, below a
+  # dtmin given by the user DtLessThanMin
+  expect_warning(sol <- solve(prob, Tsit5()), "eps\\(t\\)")
+  expect_equal(sol$retcode, "Unstable")
+  expect_warning(sol <- solve(prob, Tsit5(), dtmin = 1e-10), "dtmin")
   expect_equal(sol$retcode, "DtLessThanMin")
   expect_warning(sol <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 100)), Tsit5(), maxiters = 3), "maximum")
   expect_equal(sol$retcode, "MaxIters")
@@ -267,18 +271,18 @@ test_that("retcodes and statistics follow SciMLBase", {
     expect_true(sol$retcode %in% c("Success", "DtLessThanMin", "Unstable"), label = alg$name)
   }
   # a right-hand side that turns NaN (as a failed assertion does) rejects the
-  # steps of every adaptive path until dt falls below its minimum
+  # steps of every adaptive path until dt falls below eps(t)
   nanf <- ODEProblem(function(u, p, t) if (t > 0.5) c(NaN, NaN) else c(-u[1], -1000 * (u[2] - u[1])),
                      c(1, 0), c(0, 1))
   for (alg in list(DefaultODEAlgorithm(), AutoTsit5(Rosenbrock23()), Tsit5(), Rosenbrock23(), Rodas5P(),
                    FBDF(), ImplicitEuler(), Trapezoid())) {
-    expect_warning(sol <- solve(nanf, alg), "dtmin", label = alg$name)
-    expect_equal(sol$retcode, "DtLessThanMin", label = alg$name)
+    expect_warning(sol <- solve(nanf, alg), "eps\\(t\\)", label = alg$name)
+    expect_equal(sol$retcode, "Unstable", label = alg$name)
     expect_equal(tail(sol$t, 1), 0.5, tolerance = 1e-6, label = alg$name)
   }
   nand <- DAEProblem(function(du, u, p, t) if (t > 0.5) NaN else du + u, -1, 1, c(0, 1), differential_vars = TRUE)
-  expect_warning(sol <- solve(nand, DFBDF()), "dtmin")
-  expect_equal(sol$retcode, "DtLessThanMin")
+  expect_warning(sol <- solve(nand, DFBDF()), "eps\\(t\\)")
+  expect_equal(sol$retcode, "Unstable")
   # a constant state does not count as stiff for the default algorithm
   sol <- solve(ODEProblem(function(u, p, t) c(-u[1], 0), c(1, 1), c(0, 5)))
   expect_true(all(sol$alg_choice == 1L))

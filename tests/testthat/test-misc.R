@@ -40,8 +40,8 @@ test_that("debug_system reports the failing call and assertions reject steps", {
   asys <- mtkcompile(System(eqs, t, initial_conditions = ics, name = "sys",
                             assertions = list(list(u1 + u2 >= 2, "Oh no!"))))
   prob <- ODEProblem(asys, list(), c(0, 10))
-  expect_warning(sol <- solve(prob, Tsit5()), "dtmin")
-  expect_identical(sol$retcode, "DtLessThanMin")
+  expect_warning(sol <- solve(prob, Tsit5()), "eps\\(t\\)")
+  expect_identical(sol$retcode, "Unstable")
   expect_equal(tail(sol$t, 1), 2 * s, tolerance = 1e-3)
   dprob <- ODEProblem(debug_system(asys, functions = character()), list(), c(0, 10))
   msgs <- character()
