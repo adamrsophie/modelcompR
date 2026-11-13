@@ -23,8 +23,16 @@
 # every step (their step counter stops at 2, 3 and 4); this is reproduced.
 
 # fma(a, b, c): Julia's muladd of two Float64 scalars, which LLVM fuses on
-# processors with a fused multiply add. The product is split exactly
-# (Dekker and Veltkamp) and summed with its rounding error (Knuth's TwoSum).
+# processors with a fused multiply add, correctly rounded. The product is
+# split exactly (Dekker and Veltkamp) into p + e, and p + c into s + u
+# (Knuth's TwoSum), so the exact result is s + (u + e). Rounding u + e to t
+# and then s + t to r rounds twice only when t is inexact and s + t falls on
+# a rounding tie (r + 2d, d the error of s + t, is then the neighbor of r).
+# A zero factor gives s, except for a zero result, whose sign the sum may
+# lose. The ties, the zero results of a zero factor, a tiny product (whose
+# low parts underflow) and a huge result (where the split may overflow,
+# which a NaN shows) go to the exact .pw_fma() (rounding to odd,
+# R/optimization-prima-powell.R).
 .fma <- function(a, b, c) {
   p <- a * b
   ta <- a * 134217729; ah <- ta - (ta - a); al <- a - ah
@@ -32,7 +40,27 @@
   e <- ((ah * bh - p) + ah * bl + al * bh) + al * bl
   s <- p + c
   z <- s - p
-  s + (((p - (s - z)) + (c - z)) + e)
+  u <- (p - (s - z)) + (c - z)
+  t <- u + e
+  r <- s + t
+  z <- t - u
+  w <- r - s
+  d <- (s - (r - w)) + (t - w)
+  ok <- (abs(p) >= 0x1p-960 | (a == 0 | b == 0) & r != 0) & abs(r) <= 0x1p1000 &
+    ((u - (t - z)) + (e - z) == 0 | d == 0 | (r + 2 * d) - r != 2 * d)
+  if (!anyNA(ok) && all(ok)) return(r)
+  bad <- which(!ok | is.na(ok))
+  m <- length(r)
+  a <- rep_len(a, m)[bad]
+  b <- rep_len(b, m)[bad]
+  # a zero factor gives the exact zero product plus c
+  zero <- which((a == 0 | b == 0) & rep_len(p, m)[bad] == 0)
+  if (length(zero)) {
+    r[bad[zero]] <- s[bad[zero]]
+    bad <- bad[-zero]; a <- a[-zero]; b <- b[-zero]
+  }
+  if (length(bad)) r[bad] <- .pw_fma(a, b, rep_len(c, m)[bad])
+  r
 }
 
 # ---------------------------------------------------------------------------

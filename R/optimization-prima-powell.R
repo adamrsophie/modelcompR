@@ -36,8 +36,8 @@
 }
 
 # fma(a, b, c) correctly rounded, the operation that gfortran emits.
-# `.fma()` (R/solvers-abm.R) rounds twice when the low parts of the exact
-# sum fall on a rounding tie (as for squares of 1 + 2^-52); this version
+# `.fma()` (R/solvers-abm.R) keeps a faster double rounding sum and calls
+# this one where that sum falls on a rounding tie or out of range; this version
 # (Boldo and Melquiond, Emulation of FMA and correctly rounded sums: proved
 # algorithms using rounding to odd, IEEE Trans. Comput. 57, 2008) sums the
 # low parts rounded to odd, which leaves one rounding. A factor above 2^995,
