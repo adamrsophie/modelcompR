@@ -1665,8 +1665,8 @@ OptimizationOptimisers	WeightDecay	ported
 OptimizationPRIMA	BOBYQA	missing (constructor raises)
 OptimizationPRIMA	COBYLA	ported
 OptimizationPRIMA	LINCOA	missing (constructor raises)
-OptimizationPRIMA	NEWUOA	missing (constructor raises)
-OptimizationPRIMA	UOBYQA	missing (constructor raises)
+OptimizationPRIMA	NEWUOA	ported
+OptimizationPRIMA	UOBYQA	ported
 OptimizationPolyalgorithms	PolyOpt	ported
 OptimizationPyCMA	PyCMAOpt	ported
 OptimizationQuadDIRECT	QuadDirect	ported

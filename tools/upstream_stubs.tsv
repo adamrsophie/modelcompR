@@ -6,7 +6,5 @@ ScipyTrustConstr	_trustregion_constr
 ScipyTrustKrylov	trlib
 ScipyShgo	_shgo.py (needs SLSQP)
 ScipyDirect	DIRect.c and DIRsubrout.c
-UOBYQA	libprima uobyqa
-NEWUOA	libprima newuoa
 BOBYQA	libprima bobyqa
 LINCOA	libprima lincoa

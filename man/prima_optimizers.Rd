@@ -41,16 +41,26 @@ ones (numerically when the problem has no constraint Hessian).
 }
 
 \code{maxiters} sets the largest number of function evaluations (\code{maxfun});
-further arguments of \code{\link[=solve]{solve()}} such as \code{rhobeg}, \code{rhoend}, \code{ftarget} or
-\code{npt} go to the solver. \code{abstol}, \code{reltol} and \code{maxtime} are not
-supported, as in the Julia wrapper.
+further arguments of \code{\link[=solve]{solve()}} such as \code{rhobeg}, \code{rhoend}, \code{ftarget},
+\code{npt} (not for \code{UOBYQA()}, whose \code{npt} is \code{(n + 1)(n + 2)/2}), \code{scale} or
+\code{iprint} go to the solver. \code{iprint} is a level of PRIMA.jl's \code{Message}:
+0 (\code{"MSG_NONE"}), 1 (\code{"MSG_EXIT"}, the exit message), 2 (\code{"MSG_RHO"},
+also each reduction of the trust region bound) or 3 (\code{"MSG_FEVL"}, also
+each function evaluation); the messages of \code{UOBYQA()} and \code{NEWUOA()} are
+those of libprima, printed to the console. Invalid \code{maxfun}, \code{npt},
+\code{ftarget} or \code{rhoend} values are revised with a warning, as in libprima.
+\code{abstol}, \code{reltol} and \code{maxtime} are not supported, as in the Julia
+wrapper.
 
-Only \code{COBYLA()} is ported so far; the other four raise an error on
-\code{\link[=solve]{solve()}}.
+\code{UOBYQA()}, \code{NEWUOA()} and \code{COBYLA()} are ported; \code{BOBYQA()} and
+\code{LINCOA()} are not yet ported and raise an error on \code{\link[=solve]{solve()}}.
 }
 \examples{
 prob <- OptimizationProblem(function(u, p) (u[1] - 1) * (u[1] - 1) + (u[2] + 2) * (u[2] + 2),
                             c(0, 0), numeric(), cons = function(u, p) u[1] + u[2],
                             lcons = -2, ucons = 0)
 solve(prob, COBYLA())$u
+rosen <- function(u, p) (1 - u[1]) * (1 - u[1]) + 100 * (u[2] - u[1] * u[1]) * (u[2] - u[1] * u[1])
+solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), UOBYQA())$u
+solve(OptimizationProblem(rosen, c(-1.2, 1), numeric()), NEWUOA(), npt = 4)$u
 }

@@ -266,7 +266,7 @@ test_that("COBYLA follows SciPy and PRIMA", {
   expect_equal(unname(s1$u), unname(s2$u), tolerance = ref_tol(1e-3, 1e-2))
   expect_equal(sum(s2$u), 1, tolerance = 1e-8)
   expect_lte(sum(s2$u * s2$u), 4 + 1e-8)
-  expect_error(solve(pr, NEWUOA()), "not yet ported")
+  expect_error(solve(pr, NEWUOA()), "does not support constraints")
 })
 
 test_that("COBYLA evaluates the same points as SciPy and libprima at the start", {
