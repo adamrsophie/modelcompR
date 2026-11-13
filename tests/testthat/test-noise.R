@@ -59,6 +59,14 @@ test_that("path noises", {
   expect_equal(nt(3), 6)
 })
 
+test_that("the first solve keeps a NoiseTransport's supplied realization", {
+  nt <- NoiseTransport(0, function(u, p, t, rv) rv * t, function() 9, rv = 2)
+  q <- SDEProblem(function(u, p, t) 0, function(u, p, t) 1, 0, c(0, 1), noise = nt)
+  expect_equal(tail(solve(q, EM(), dt = 0.5)$u, 1)[[1]], 2)
+  # the process was used, so the next solve reinitializes it
+  expect_equal(tail(solve(q, EM(), dt = 0.5)$u, 1)[[1]], 9)
+})
+
 test_that("SDE and RODE solves take noise processes", {
   f <- function(u, p, t) -u
   g <- function(u, p, t) 0.1

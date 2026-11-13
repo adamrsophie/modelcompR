@@ -114,9 +114,8 @@ solve.RODEProblem <- function(a, b = RandomEM(), ...) {
   if (isTRUE(b$needs_grid) && !(inherits(noise, "NoiseGrid") && ncol(.np_env(noise)$grid_W) == 1L))
     stop("RandomTaylor15 needs a scalar NoiseGrid", call. = FALSE)
   .with_seed(seed, {
-    proc <- .np_copy(noise)
+    proc <- .np_start(noise, a$tspan[1L])
     pe <- .np_env(proc)
-    if (isTRUE(pe$reset)) .np_reinit(pe, a$tspan[1L])
     ns <- .noise_new(a$tspan[1L], length(pe$W0), FALSE, proc = proc)
     ff <- a$f$f
     grid <- if (isTRUE(b$needs_grid)) list(grid_t = pe$grid_t, grid_W = as.numeric(pe$grid_W))

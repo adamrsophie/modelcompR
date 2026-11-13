@@ -795,9 +795,12 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
 
 # The core driver problem, algorithm and options of an SDE solve, and the
 # post processing of its solution (the Brownian path); init() uses it too.
+# `rng` (see .rng_new) is the integrator's own random number generator; the
+# default NULL draws from the global stream. reinit_noise(t0) restarts the
+# noise at t0 (reinit_noise! of OrdinaryDiffEqCore, called by reinit!).
 .sde_setup <- function(prob, alg, opts, f = prob$f$f, g = prob$f$g, u0 = prob$u0,
                        type = prob$noise_type %||% prob$f$noise_type %||% "diagonal",
-                       m = NULL) {
+                       m = NULL, rng = NULL) {
   if (!inherits(alg, "SDEAlgorithm")) stop("not an SDE algorithm: ", class(alg)[1L], call. = FALSE)
   # methods that read the parts of a structured problem (BAOAB, the IIF
   # methods) bind to it; noise_dim is the length of their Wiener process
@@ -815,23 +818,22 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   m <- m %||% alg$noise_dim %||% switch(type, diagonal = length(u0), scalar = 1L,
                      general = prob$f$nbrownians %||% ncol(as.matrix(g(u0, prob$p, prob$tspan[1L]))))
   proc <- prob$noise_process
-  if (!is.null(proc)) {
-    proc <- .np_copy(proc)
-    if (isTRUE(.np_env(proc)$reset)) .np_reinit(.np_env(proc), prob$tspan[1L])
-  }
+  if (!is.null(proc)) proc <- .rng_run(rng, .np_start(proc, prob$tspan[1L]))
   # algorithms with a second process of another length (RKMilGeneral) give it
   mz <- if (is.function(alg$z_length)) alg$z_length(m, opts$dt) else m
   ns <- .noise_new(prob$tspan[1L], m, alg$needs_dZ, proc = proc, mz = mz)
   delta <- opts$delta %||% alg$delta
   adaptive <- alg$adaptive && (opts$adaptive %||% TRUE)
-  run_step <- function(a, ctx, t, u, dt, cache) {
+  run_step <- function(a, ctx, t, u, dt, cache) .rng_run(rng, {
     inc <- .noise_take(ns, t, dt, u, ctx$p)
-    if (!is.null(a$step))
-      return(a$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ, tspan = prob$tspan, ns = ns))
-    res <- a$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
-    list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf,
-         eigen_sri = res$eigen_sri, eigen_sra = res$eigen_sra)
-  }
+    if (!is.null(a$step)) {
+      a$step(ctx, g, u, t, dt, inc$dW, type, delta, cache, dZ = inc$dZ, tspan = prob$tspan, ns = ns)
+    } else {
+      res <- a$perform(ctx$f, g, u, ctx$p, t, dt, inc$dW, inc$dZ, type, delta)
+      list(u = res$u, err = res$err, k = NULL, cache = cache, nf = res$nf,
+           eigen_sri = res$eigen_sri, eigen_sra = res$eigen_sra)
+    }
+  })
   runner <- if (inherits(alg, "StochasticCompositeAlgorithm")) .sde_composite_runner(alg, adaptive, run_step, mm) else
     .new_alg(alg$name, alg$order, adaptive = adaptive,
       step = function(ctx, t, u, dt, cache) run_step(alg, ctx, t, u, dt, cache),
@@ -858,7 +860,7 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
   post <- function(sol) {
     env <- .sol_env(sol)
     # the last attempt was accepted, truncated or rejected where the driver stopped
-    .noise_settle(ns, t_last$t)
+    .rng_run(rng, .noise_settle(ns, t_last$t))
     env$W <- list(t = ns$log_t, W = do.call(rbind, ns$log_W))
     if (!is.null(ns$proc)) env$noise <- ns$proc
     if (is.function(runner$alg_choice)) env$alg_choice <- runner$alg_choice(env$t)
@@ -866,7 +868,42 @@ ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito
     env$prob <- prob
     sol
   }
-  list(prob = dprob, alg = runner, opts = opts, post = post)
+  reinit_noise <- function(t0) .rng_run(rng, {
+    if (!is.null(proc)) .np_reinit(.np_env(proc), t0)
+    fresh <- .noise_new(t0, m, alg$needs_dZ, proc = proc, mz = mz)
+    rm(list = ls(ns, all.names = TRUE), envir = ns)
+    list2env(as.list(fresh, all.names = TRUE), envir = ns)
+    t_last$t <- t0
+    invisible()
+  })
+  list(prob = dprob, alg = runner, opts = opts, post = post, reinit_noise = reinit_noise)
+}
+
+# The random number generator of one integrator: StochasticDiffEq gives each
+# integrator its own Xoshiro seeded with `seed`. Here `state` is the
+# .Random.seed of the generator, swapped into the global stream only while
+# the integrator draws, so other integrators and other draws between steps
+# neither change its path nor see its draws.
+.rng_new <- function(seed) {
+  rng <- new.env(parent = emptyenv())
+  .with_seed(seed, rng$state <- get(".Random.seed", envir = globalenv()))
+  rng$active <- FALSE
+  rng
+}
+
+# Evaluate `expr` drawing from `rng` (the global stream when NULL).
+.rng_run <- function(rng, expr) {
+  if (is.null(rng) || rng$active) return(expr)
+  g <- globalenv()
+  old <- if (exists(".Random.seed", envir = g, inherits = FALSE)) get(".Random.seed", envir = g)
+  assign(".Random.seed", rng$state, envir = g)
+  rng$active <- TRUE
+  on.exit({
+    rng$active <- FALSE
+    rng$state <- get(".Random.seed", envir = g)
+    if (is.null(old)) rm(".Random.seed", envir = g) else assign(".Random.seed", old, envir = g)
+  })
+  expr
 }
 
 # Run `expr` with the random number generator seeded, restoring the state.

@@ -91,11 +91,13 @@ init.SDEProblem <- function(prob, alg = NULL, ...) {
   opts <- utils::modifyList(prob$kwargs %||% list(), list(...))
   alg <- alg %||% .sde_default_alg(prob, opts$alg_hints)
   opts$alg_hints <- NULL
-  seed <- opts$seed
+  # its own generator, seeded with `seed` or, as _resolve_rng of
+  # StochasticDiffEq does without one, with a seed drawn from the global stream
+  seed <- opts$seed %||% sample.int(.Machine$integer.max, 1L)
   opts$seed <- NULL
-  if (!is.null(seed)) set.seed(seed)
-  setup <- .sde_setup(prob, alg, opts)
+  setup <- .sde_setup(prob, alg, opts, rng = .rng_new(seed))
   I <- .integ_init(setup$prob, setup$alg, setup$opts)
+  I$reinit_noise <- setup$reinit_noise
   I$post <- function(sol) .as_rode_solution(setup$post(sol))
   integ <- .integ_public(I)
   class(integ) <- c("SDEIntegrator", class(integ))
@@ -293,6 +295,8 @@ reinit <- function(integ, u0 = NULL, t0 = NULL, tf = NULL, erase_sol = TRUE, p =
   I$done <- FALSE
   I$early <- NULL
   I$final <- NULL
+  # reinit_noise! of an SDE integrator: the noise restarts at the new t0
+  if (is.function(I$reinit_noise)) I$reinit_noise(prob$tspan[1L])
   # .INTEG_INIT is the package's own initialization code (R/solvers-ode.R)
   eval(.INTEG_INIT, I)
   # the user's handle stays the same environment

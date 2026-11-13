@@ -761,6 +761,22 @@ NoiseProblem <- function(noise, tspan, seed = 0L, ...)
   .np_object(e2, class(W))
 }
 
+# The process a solve runs on (the noise setup of StochasticDiffEq's
+# __init): a copy of the problem's process, reinitialized at t only when it
+# is not there. Upstream the problem's process is aliased, so a solve leaves
+# it at the end of the span and the next solve reinitializes it (and a
+# NoiseTransport draws a new realization); `solved` on the original stands
+# for that, since here every solve runs on a copy. The first solve keeps a
+# NoiseTransport's supplied realization.
+.np_start <- function(W, t) {
+  e0 <- .np_env(W)
+  proc <- .np_copy(W)
+  e <- .np_env(proc)
+  if (isTRUE(e$reset) && (isTRUE(e0$solved) || e$curt != t)) .np_reinit(e, t)
+  e0$solved <- TRUE
+  proc
+}
+
 #' @export
 solve.NoiseProblem <- function(a, b = NULL, ...) {
   opts <- utils::modifyList(a$kwargs, list(...))

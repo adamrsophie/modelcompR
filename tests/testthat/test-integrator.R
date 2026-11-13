@@ -43,3 +43,34 @@ test_that("init, step and solve! follow SciMLBase's integrator interface", {
   expect_true(length(ss$W$t) > 1)
   expect_error(init(DiscreteProblem(1, c(0, 1))), "not for DiscreteProblem")
 })
+
+test_that("SDE integrators own their generator and reinit restarts the noise", {
+  # reinit_noise!: the second run starts the noise at t0 again
+  p <- SDEProblem(function(u, p, t) 0, function(u, p, t) 1, 0, c(0, 1),
+                  noise = NoiseFunction(0, function(u, p, t) t))
+  i <- init(p, EM(), dt = 0.5)
+  expect_equal(tail(solve_integrator(i)$u, 1)[[1]], 1)
+  reinit(i)
+  expect_equal(tail(solve_integrator(i)$u, 1)[[1]], 1)
+  sp <- SDEProblem(function(u, p, t) -u, function(u, p, t) 0.1 * u, 1, c(0, 1))
+  i <- init(sp, EM(), dt = 0.1, seed = 3)
+  solve_integrator(i)
+  reinit(i)
+  s <- solve_integrator(i)
+  expect_equal(s$W$W[1, ], 0)
+  expect_length(s$W$t, 11L)
+  # a seeded integrator follows its own stream: other integrators and other
+  # draws do not change its path, and the caller's stream is left alone
+  ref <- solve(sp, SOSRI(), seed = 1)
+  set.seed(99)
+  i1 <- init(sp, SOSRI(), seed = 1)
+  step_integrator(i1)
+  i2 <- init(sp, SOSRI(), seed = 2)
+  step_integrator(i2)
+  junk <- stats::rnorm(10)
+  expect_equal(solve_integrator(i1)$u, ref$u)
+  after <- stats::runif(1)
+  set.seed(99)
+  stats::rnorm(10)
+  expect_identical(after, stats::runif(1))
+})
