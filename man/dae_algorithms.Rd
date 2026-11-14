@@ -26,7 +26,7 @@ range of factors that keep the step size.}
 symbolic Jacobian: \code{AutoForwardDiff()} (dual numbers, as ForwardDiff;
 central differences when the function cannot run on them),
 \code{AutoFiniteDiff(fdtype)} or \code{AutoSparse(ad)}; see \code{\link[=AutoForwardDiff]{AutoForwardDiff()}}.
-The default uses forward differences.}
+The default is \code{AutoForwardDiff()}, as in OrdinaryDiffEq.}
 }
 \value{
 An algorithm object.

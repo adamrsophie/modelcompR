@@ -59,7 +59,9 @@ test_that("NLFunctional and NLAnderson match OrdinaryDiffEq", {
 })
 
 test_that("NLNewton relax and always_new match OrdinaryDiffEq", {
-  # method, naccept, nreject, njacs, nsolve, nf less the Jacobian calls, u(2)
+  # method, naccept, nreject, njacs, nsolve, nf, u(2); with the default
+  # AutoForwardDiff nf matches tools/nlfunctional-probe.jl (the in place
+  # always_new references are given less their one call per Jacobian)
   relax <- list(
     list("ImplicitEuler", 114, 51, 165, 1026, 1359, c(0.21120475723512905, 0.3919037304155836)),
     list("Trapezoid", 24, 4, 27, 199, 257, c(0.20800163058978657, 0.39152278857950396)),
@@ -79,7 +81,7 @@ test_that("NLNewton relax and always_new match OrdinaryDiffEq", {
       sol <- solve(nlf_prob, get(r[[1]])(nlsolve = case[[2]]))
       st <- sol$stats
       info <- r[[1]]
-      expect_equal(c(st$naccept, st$nreject, st$njacs, st$nsolve, st$nf - 2L * st$njacs),
+      expect_equal(c(st$naccept, st$nreject, st$njacs, st$nsolve, st$nf),
                    unlist(r[2:6]), info = info)
       expect_equal(sol$u[[length(sol$u)]], r[[7]], tolerance = 1e-10, info = info)
     }

@@ -40,10 +40,14 @@
   J
 }
 
+# The autodiff choice of the integration: the algorithm's, else
+# AutoForwardDiff(), the default of the OrdinaryDiffEq implicit methods.
+.ctx_autodiff <- function(ctx) ctx$autodiff %||% AutoForwardDiff()
+
 .calc_J <- function(ctx, u, t, f0 = NULL) {
   if (!is.null(ctx$jac)) return(list(J = as.matrix(ctx$jac(u, ctx$p, t)), nf = 0L))
   fn <- function(x) ctx$f(x, ctx$p, t)
-  ad <- ctx$autodiff
+  ad <- .ctx_autodiff(ctx)
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
   # AutoForwardDiff without a symbolic Jacobian differentiates f with dual
   # numbers (R/forwarddiff.R, ForwardDiff.jacobian; stats.nf counts one call
@@ -610,7 +614,7 @@
 #'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
 #'   central differences when the function cannot run on them),
 #'   `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see [AutoForwardDiff()].
-#'   The default uses forward differences.
+#'   The default is `AutoForwardDiff()`, as in OrdinaryDiffEq.
 #' @return An algorithm object.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -1000 * (u - cos(t)), 0, c(0, 1))

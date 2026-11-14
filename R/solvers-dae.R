@@ -143,7 +143,7 @@ DefaultInit <- function() structure(list(), class = c("DefaultInit", "DAEInitial
   # AutoForwardDiff differentiates the residual with dual numbers
   # (ForwardDiff.jacobian of the residual in u and in du), or with finite
   # differences when it cannot run on duals
-  ad <- ctx$autodiff
+  ad <- .ctx_autodiff(ctx)
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
   if (inherits(ad, "AutoForwardDiff") && !inherits(ad, "AutoFiniteDiff")) {
     ju <- .ad_try_jacobian(function(x) ctx$f(du, x, ctx$p, t), u)
@@ -378,7 +378,7 @@ print.DAESolution <- function(x, ...) {
 #'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
 #'   central differences when the function cannot run on them),
 #'   `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see [AutoForwardDiff()].
-#'   The default uses forward differences.
+#'   The default is `AutoForwardDiff()`, as in OrdinaryDiffEq.
 #' @return An algorithm object.
 #' @examples
 #' f <- function(du, u, p, t) c(du[1] + p * u[1], u[2] - u[1]^2)

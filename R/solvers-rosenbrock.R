@@ -77,7 +77,7 @@
 .rosen_tgrad <- function(ctx, u, t) {
   if (!is.null(ctx$tgrad)) return(list(dT = .as_num(ctx$tgrad(u, ctx$p, t)), nf = 0L, f0 = NULL))
   f0 <- ctx$f(u, ctx$p, t)
-  ad <- ctx$autodiff
+  ad <- .ctx_autodiff(ctx)
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
   # AutoForwardDiff: ForwardDiff.derivative of f in t with a dual number,
   # or finite differences when f cannot run on duals
@@ -556,7 +556,7 @@
 #'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
 #'   central differences when the function cannot run on them),
 #'   `AutoFiniteDiff(fdtype)` or `AutoSparse(ad)`; see [AutoForwardDiff()].
-#'   The default uses forward differences.
+#'   The default is `AutoForwardDiff()`, as in OrdinaryDiffEq.
 #' @param concrete_jac,linsolve Accepted for compatibility with
 #'   OrdinaryDiffEq.jl; the linear systems are always solved densely.
 #' @param step_limiter A function `limiter(u, integrator, p, t)` returning

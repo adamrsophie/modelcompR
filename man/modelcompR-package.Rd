@@ -6,11 +6,14 @@
 \alias{modelcompR-package}
 \title{modelcompR: Symbolic Numeric Modeling in R}
 \description{
+\if{html}{\figure{logo.svg}{options: style='float: right' alt='logo' width='120'}}
+
 A native R port of the Julia library 'ModelingToolkit.jl'. Models are written as symbolic equations with variables, parameters and hierarchical components; 'mtkcompile' simplifies them structurally (alias elimination, index reduction, tearing) and generates R functions for ordinary and differential algebraic equations, nonlinear systems, optimization, stochastic, jump, delay, discrete and boundary value problems, which are solved by pure R integrators. Symbolic computation is provided by 'symcompR'. The design and algorithms follow 'ModelingToolkit.jl' \url{https://github.com/SciML/ModelingToolkit.jl}, whose MIT license notice is retained in the package.
 }
 \seealso{
 Useful links:
 \itemize{
+  \item \url{https://adamrsophie.github.io/modelcompR/}
   \item \url{https://github.com/adamrsophie/modelcompR}
   \item Report bugs at \url{https://github.com/adamrsophie/modelcompR/issues}
 }

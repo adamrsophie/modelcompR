@@ -484,6 +484,8 @@ Summary.fdual <- function(..., na.rm = FALSE) {
 # ForwardDiff.jacobian of f at x with the number of chunks (the f calls
 # OrdinaryDiffEq counts), or NULL when f cannot run on dual numbers
 .ad_try_jacobian <- function(f, x) {
+  # dual numbers are real; complex states fall back to finite differences
+  if (is.complex(x)) return(NULL)
   x <- as.numeric(x)
   r <- tryCatch(suppressWarnings(.ad_jacobian(function(z) {
     y <- f(z)

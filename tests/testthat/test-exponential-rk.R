@@ -251,13 +251,13 @@ test_that("the finite difference Jacobian matches AutoFiniteDiff upstream", {
   # A u differs from Julia's in the last bit at some states (the order of
   # the sums), which the differences magnify by 1 / sqrt(eps)
   npfd <- ODEProblem(exprk_fn, exprk_u0, c(0, 1))
-  exprk_check(solve(npfd, ETDRK4(krylov = TRUE, m = 3), dt = 0.1), "npfdk_ETDRK4")
-  exprk_check(solve(npfd, LawsonEuler(krylov = TRUE), dt = 0.25), "npfdk_LawsonEuler", tol = 1e-9)
-  exprk_check(solve(npfd, EPIRK4s3A(), dt = 0.1), "npfd_EPIRK4s3A", tol = 1e-9)
+  exprk_check(solve(npfd, ETDRK4(krylov = TRUE, m = 3, autodiff = AutoFiniteDiff()), dt = 0.1), "npfdk_ETDRK4")
+  exprk_check(solve(npfd, LawsonEuler(krylov = TRUE, autodiff = AutoFiniteDiff()), dt = 0.25), "npfdk_LawsonEuler", tol = 1e-9)
+  exprk_check(solve(npfd, EPIRK4s3A(autodiff = AutoFiniteDiff()), dt = 0.1), "npfd_EPIRK4s3A", tol = 1e-9)
   exprk_check(solve(npfd, EPIRK5P2(autodiff = AutoFiniteDiff()), dt = 0.1), "npfd_EPIRK5P2", tol = 1e-9)
-  exprk_check(solve(exprk_sp1, EPIRK4s3A(), dt = 0.1), "sp1fd_EPIRK4s3A", tol = 1e-9)
-  exprk_check(solve(npfd, Exprb32()), "npfda_Exprb32", tol = 1e-6)
-  exprk_check(solve(npfd, Exprb43()), "npfda_Exprb43", tol = 1e-6)
+  exprk_check(solve(exprk_sp1, EPIRK4s3A(autodiff = AutoFiniteDiff()), dt = 0.1), "sp1fd_EPIRK4s3A", tol = 1e-9)
+  exprk_check(solve(npfd, Exprb32(autodiff = AutoFiniteDiff())), "npfda_Exprb32", tol = 1e-6)
+  exprk_check(solve(npfd, Exprb43(autodiff = AutoFiniteDiff())), "npfda_Exprb43", tol = 1e-6)
 })
 
 test_that("an operator with an update function is used as constructed, as upstream out of place", {
@@ -266,7 +266,7 @@ test_that("an operator with an update function is used as constructed, as upstre
   exprk_check(solve(spu, ETDRK4(), dt = 0.1), "spu_ETDRK4")
   exprk_check(solve(spu, ETDRK4(krylov = TRUE, m = 3), dt = 0.1), "spuk_ETDRK4")
   exprk_check(solve(spu, LawsonEuler(krylov = TRUE), dt = 0.25), "spuk_LawsonEuler")
-  exprk_check(solve(spu, EPIRK4s3A(), dt = 0.1), "spu_EPIRK4s3A", tol = 1e-9)
+  exprk_check(solve(spu, EPIRK4s3A(autodiff = AutoFiniteDiff()), dt = 0.1), "spu_EPIRK4s3A", tol = 1e-9)
 })
 
 test_that("exponential methods check their problems", {
