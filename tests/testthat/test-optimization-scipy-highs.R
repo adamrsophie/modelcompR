@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("the HiGHS simplex solver settles the status of linprog", {
   A <- rbind(c(1, 1, 1), c(2, 0.5, 0), c(0, 1, -1), c(1, -1, 2))
   s <- .hs_lp_solve(c(-1, -2, 0.5), A, c(-Inf, -Inf, -Inf, 0.5), c(4, 5, 1.5, 0.5), c(0, -1, -Inf), c(3, Inf, 2))

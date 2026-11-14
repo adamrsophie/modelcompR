@@ -1,6 +1,9 @@
 # SDE problems backward in time (StochasticDiffEq test/tdir_tests.jl) and
 # zero length spans; reference values from tools/review-tdir-probe.jl.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .tdir_z <- function(k) (37 * k) %% 101 / 50 - 1
 .tdir_fd <- function(u, p, t) -0.5 * u + 0.1 * t
 .tdir_gd <- function(u, p, t) 0.3 * u

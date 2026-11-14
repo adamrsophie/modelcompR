@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("parallel ensembles give the serial law and per trajectory streams", {
   prob <- SDEProblem(function(u, p, t) -u, function(u, p, t) 0.5 + 0 * u, 1, c(0, 1))
   ens <- EnsembleProblem(prob)

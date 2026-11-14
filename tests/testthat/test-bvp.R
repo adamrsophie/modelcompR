@@ -1,5 +1,8 @@
 # Boundary value problems: collocation and shooting against y = sin(t).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("y'' = -y, y(0) = 0, y(pi/2) = 1 gives sin(t) for every solver", {
   t <- t_nounits; D <- D_nounits
   y <- Variable("y", t)

@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("saving, function calling and integrating callbacks", {
   prob <- ODEProblem(function(u, p, t) -u, c(1, 2), c(0, 1))
   sv <- SavedValues()

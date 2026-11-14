@@ -11,6 +11,9 @@
 #   inside a composite runs unsplit upstream; the reference for
 #   LambaEM(split = FALSE) here is upstream's AutoSOSRI2(LambaEM()).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 sdecomp_run <- function(alg, g = function(u, p, t) 0.1 * u) {
   gr <- sdeprobe_grid(2, 1 / 2048, 2150)
   prob <- SDEProblem(function(u, p, t) -(1 + 8000 * t * t * (1 - t) * (1 - t)) * u, g, c(1, 0.5), c(0, 1),

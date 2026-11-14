@@ -1,6 +1,9 @@
 # Discontinuity detection (disco.jl and the handle_disco_* functions of
 # OrdinaryDiffEqCore). Reference values from tools/disco-probe.jl.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 disco_f1 <- function(u, p, t) c(if (u[2] < 0.5) u[1] else -u[1] * u[1], 1)
 disco_f2 <- function(u, p, t) c(if (u[2] < 0.5) u[1] else if (u[2] < 0.7) -u[1] * u[1] else 2 * u[1], 1)
 disco_cbA <- ContinuousCallback(function(u, t, integ) u[2] - 0.5, function(integ) NULL)

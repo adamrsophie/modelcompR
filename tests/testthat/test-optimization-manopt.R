@@ -4,6 +4,9 @@
 # 3e-16 also absorbs the last digit that R's parser can lose on 17 digit
 # literals.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 mo_f <- function(M, p) 2 * p[1]^2 + p[2]^2 + 3 * p[3]^2 + p[1] * p[2] + 0.2 * p[1] * p[3] + 0.6 * p[2] * p[3] +
   p[1] * p[2] * p[3]
 mo_egrad <- function(p) c(4 * p[1] + p[2] + 0.2 * p[3] + p[2] * p[3],

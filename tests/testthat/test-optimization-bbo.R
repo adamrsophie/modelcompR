@@ -4,6 +4,9 @@
 # the numbers come from tools/bbo-probe.jl. The runs use R's random
 # numbers and are checked as the OptimizationBBO tests check them.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 bbo_fun <- function(name) get(name, envir = asNamespace("modelcompR"))
 
 bbo_replay <- function(draws, expr) {

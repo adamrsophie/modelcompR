@@ -1,6 +1,9 @@
 # Symbolic events (ModelingToolkitBase callbacks.jl, imperative_affect.jl and
 # docs/src/basics/Events.md), checked against analytic solutions.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("bouncing ball: continuous event with Pre", {
   t <- t_nounits; D <- D_nounits
   x <- Variable("x", t, default = 1); v <- Variable("v", t, default = 0)

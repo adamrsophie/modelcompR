@@ -2,6 +2,9 @@
 
 # y' = -y(t - 1) with history 1: y = 1 - t on [0, 1] and
 # y = t^2/2 - 2t + 3/2 on [1, 2], so y(2) = -1/2.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 dde_exact <- function(t) ifelse(t <= 1, 1 - t, t^2 / 2 - 2 * t + 1.5)
 
 test_that("y' = -y(t - 1) matches the method of steps polynomial", {

@@ -4,6 +4,9 @@
 # rejections and the final state, plain, with a tstop and with a discrete
 # callback that halves the state at the tstop.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 heat_n <- 8
 heat_f <- function(u, p, t) {
   l <- c(0, u[-heat_n]); r <- c(u[-1], 0)

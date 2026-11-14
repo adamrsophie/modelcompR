@@ -2,6 +2,9 @@
 # points, function evaluations and final state of the adaptive, fixed step,
 # backward and callback solves of a semilinear heat equation.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 stab_heat_setup <- function() {
   N <- 8
   heat <- function(u, p, t) {

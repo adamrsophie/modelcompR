@@ -1,6 +1,9 @@
 # Reference values from tools/scimlsensitivity-probe.jl (SciMLSensitivity
 # 7.119.14).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 dae1_res <- function(du, u, p, t) {
   c(-p[1] * u[1] + p[2] * u[1] * u[2] - du[1], p[3] * u[1] - u[2] * u[3] - du[2], u[3] - u[1]^2 - p[4] * u[2])
 }

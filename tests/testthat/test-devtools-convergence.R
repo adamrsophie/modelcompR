@@ -1,6 +1,9 @@
 # Convergence tools of DiffEqDevTools.jl (src/convergence.jl,
 # src/test_solution.jl). Reference values from tools/DiffEqDevTools-probe.jl.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 dv_ode_prob <- function(analytic = TRUE) {
   f <- function(u, p, t) c(-u[1] * u[1], u[1] * u[2])
   an <- function(u0, p, t) c(1 / (1 + t), 2 * (1 + t))

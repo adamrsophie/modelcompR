@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("every tableau method solves a smooth problem at its order", {
   prob <- ODEProblem(function(u, p, t) c(u[2], -u[1]), c(0, 1), c(0, 1))
   exact <- c(sin(1), cos(1))

@@ -38,6 +38,12 @@ function exports_of(dir)
         walk(e) = if e isa Expr
             if e.head in (:export, :public)
                 append!(out, string.(filter(x -> x isa Symbol, e.args)))
+            elseif e.head == :macrocall && length(e.args) >= 3 && e.args[1] == Symbol("@public")
+                # SciMLPublic's @public a, b (a tuple) or @public a
+                for a in e.args[3:end]
+                    a isa Symbol && push!(out, string(a))
+                    a isa Expr && a.head == :tuple && append!(out, string.(filter(x -> x isa Symbol, a.args)))
+                end
             elseif e.head == :macrocall && length(e.args) >= 3 && e.args[1] == Symbol("@reexport")
                 u = e.args[end]
                 if u isa Expr && u.head == :using

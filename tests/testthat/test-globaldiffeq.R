@@ -1,6 +1,9 @@
 # Reference values from tools/globaldiffeq-probe.jl (GlobalDiffEq 1.7.3,
 # OrdinaryDiffEqCore 4.19.1, Richardson 1.4).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 glee_lv <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
 glee_prob <- function() ODEProblem(glee_lv, c(1, 1), c(0, 5), c(1.5, 1, 3, 1))
 glee_last <- function(sol) sol$u[[length(sol$t)]]

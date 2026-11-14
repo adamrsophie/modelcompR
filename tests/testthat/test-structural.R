@@ -3,6 +3,9 @@
 # Expected values are analytic or are the expectations of the
 # ModelingToolkit.jl test suite, cited by file and line at each test.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 t <- t_nounits; D <- D_nounits
 fmt <- function(xs) vapply(xs, format, "")
 lhs <- function(eqs) fmt(lapply(eqs, `[[`, "lhs"))

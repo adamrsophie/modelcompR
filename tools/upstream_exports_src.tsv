@@ -2,6 +2,7 @@ package	name
 DelayDiffEq	@reexport SciMLBase
 DelayDiffEq	Discontinuity
 DelayDiffEq	MethodOfSteps
+DiffEqBase	@reexport SciMLBase
 DiffEqBase	AutoDePSpecialize
 DiffEqBase	AutoDespecialize
 DiffEqBase	AutoRespecialize
@@ -110,6 +111,7 @@ OrdinaryDiffEqBDF	SBDF3
 OrdinaryDiffEqBDF	SBDF4
 OrdinaryDiffEqCore	Predictor
 OrdinaryDiffEqCore	set_discontinuity
+OrdinaryDiffEqDefault	@reexport SciMLBase
 OrdinaryDiffEqDefault	DefaultImplicitODEAlgorithm
 OrdinaryDiffEqDefault	DefaultODEAlgorithm
 OrdinaryDiffEqExplicitRK	@reexport SciMLBase
@@ -133,6 +135,7 @@ OrdinaryDiffEqExponentialRK	Friedli
 OrdinaryDiffEqExponentialRK	HochOst4
 OrdinaryDiffEqExponentialRK	LawsonEuler
 OrdinaryDiffEqExponentialRK	NorsettEuler
+OrdinaryDiffEqExtrapolation	@reexport SciMLBase
 OrdinaryDiffEqExtrapolation	AitkenNeville
 OrdinaryDiffEqExtrapolation	ExtrapolationMidpointDeuflhard
 OrdinaryDiffEqExtrapolation	ExtrapolationMidpointHairerWanner
@@ -146,15 +149,18 @@ OrdinaryDiffEqFIRK	GaussLegendre
 OrdinaryDiffEqFIRK	RadauIIA3
 OrdinaryDiffEqFIRK	RadauIIA5
 OrdinaryDiffEqFIRK	RadauIIA9
+OrdinaryDiffEqFeagin	@reexport SciMLBase
 OrdinaryDiffEqFeagin	Feagin10
 OrdinaryDiffEqFeagin	Feagin12
 OrdinaryDiffEqFeagin	Feagin14
+OrdinaryDiffEqFunctionMap	@reexport SciMLBase
 OrdinaryDiffEqFunctionMap	FunctionMap
 OrdinaryDiffEqHighOrderRK	@reexport SciMLBase
 OrdinaryDiffEqHighOrderRK	DP8
 OrdinaryDiffEqHighOrderRK	PFRK87
 OrdinaryDiffEqHighOrderRK	TanYam7
 OrdinaryDiffEqHighOrderRK	TsitPap8
+OrdinaryDiffEqIMEXMultistep	@reexport SciMLBase
 OrdinaryDiffEqIMEXMultistep	CNAB2
 OrdinaryDiffEqIMEXMultistep	CNLF2
 OrdinaryDiffEqLinear	@reexport SciMLBase
@@ -283,14 +289,32 @@ OrdinaryDiffEqNewmark	@reexport DiffEqBase
 OrdinaryDiffEqNewmark	GeneralizedAlpha
 OrdinaryDiffEqNewmark	NewmarkBeta
 OrdinaryDiffEqNonlinearSolve	BrownFullBasicInit
+OrdinaryDiffEqNonlinearSolve	HomotopyNonlinearSolveAlg
+OrdinaryDiffEqNonlinearSolve	NLAnderson
+OrdinaryDiffEqNonlinearSolve	NLFunctional
+OrdinaryDiffEqNonlinearSolve	NLNewton
+OrdinaryDiffEqNonlinearSolve	NonlinearSolveAlg
 OrdinaryDiffEqNonlinearSolve	ShampineCollocationInit
+OrdinaryDiffEqNonlinearSolve	anderson
+OrdinaryDiffEqNonlinearSolve	anderson!
+OrdinaryDiffEqNonlinearSolve	build_nlsolver
+OrdinaryDiffEqNonlinearSolve	can_smooth_est
+OrdinaryDiffEqNonlinearSolve	compute_step!
+OrdinaryDiffEqNonlinearSolve	du_alias_or_new
+OrdinaryDiffEqNonlinearSolve	initial_η
+OrdinaryDiffEqNonlinearSolve	markfirststage!
+OrdinaryDiffEqNonlinearSolve	nlsolve!
+OrdinaryDiffEqNonlinearSolve	nlsolvefail
 OrdinaryDiffEqNordsieck	@reexport SciMLBase
 OrdinaryDiffEqNordsieck	AN5
 OrdinaryDiffEqNordsieck	JVODE
 OrdinaryDiffEqNordsieck	JVODE_Adams
 OrdinaryDiffEqNordsieck	JVODE_BDF
+OrdinaryDiffEqPDIRK	@reexport SciMLBase
 OrdinaryDiffEqPDIRK	PDIRK44
+OrdinaryDiffEqPRK	@reexport SciMLBase
 OrdinaryDiffEqPRK	KuttaPRK2p5
+OrdinaryDiffEqQPRK	@reexport SciMLBase
 OrdinaryDiffEqQPRK	QPRK98
 OrdinaryDiffEqRKIP	RKIP
 OrdinaryDiffEqRKN	@reexport SciMLBase
@@ -484,6 +508,7 @@ OrdinaryDiffEqSymplecticRK	SymplecticEuler
 OrdinaryDiffEqSymplecticRK	VelocityVerlet
 OrdinaryDiffEqSymplecticRK	VerletLeapfrog
 OrdinaryDiffEqSymplecticRK	Yoshida6
+OrdinaryDiffEqTaylorSeries	@reexport SciMLBase
 OrdinaryDiffEqTaylorSeries	ExplicitTaylor
 OrdinaryDiffEqTaylorSeries	ExplicitTaylor2
 OrdinaryDiffEqTaylorSeries	ExplicitTaylorAdaptiveOrder
@@ -770,6 +795,7 @@ OptimizationBase	AutoEnzyme
 OptimizationBase	AutoFiniteDiff
 OptimizationBase	AutoForwardDiff
 OptimizationBase	AutoMooncake
+OptimizationBase	AutoReactant
 OptimizationBase	AutoReverseDiff
 OptimizationBase	AutoSparse
 OptimizationBase	AutoSymbolics
@@ -970,22 +996,36 @@ SimpleOptimization	SimpleGradientDescent
 SimpleOptimization	SimpleLBFGS
 SimpleOptimization	SimpleNewton
 SimpleOptimization	SimpleSOAP
+SciMLOperators	AbstractSciMLOperator
+SciMLOperators	AbstractSciMLScalarOperator
+SciMLOperators	AbstractWOperator
 SciMLOperators	AddVector
+SciMLOperators	AddedOperator
+SciMLOperators	AddedScalarOperator
+SciMLOperators	AdjointOperator
 SciMLOperators	AffineOperator
 SciMLOperators	BlockDiagonalOperator
+SciMLOperators	ComposedOperator
+SciMLOperators	ComposedScalarOperator
 SciMLOperators	DiagonalOperator
 SciMLOperators	FunctionOperator
 SciMLOperators	IdentityOperator
+SciMLOperators	InvertedOperator
+SciMLOperators	InvertedScalarOperator
 SciMLOperators	InvertibleOperator
 SciMLOperators	MatrixOperator
 SciMLOperators	NullOperator
 SciMLOperators	ScalarOperator
+SciMLOperators	ScaledOperator
 SciMLOperators	StaticWOperator
 SciMLOperators	TensorProductOperator
 SciMLOperators	TensorSumOperator
+SciMLOperators	TransposedOperator
 SciMLOperators	WOperator
+SciMLOperators	adopt_cache
 SciMLOperators	cache_operator
 SciMLOperators	concretize
+SciMLOperators	getcache
 SciMLOperators	has_adjoint
 SciMLOperators	has_concretization
 SciMLOperators	has_exp
@@ -995,6 +1035,7 @@ SciMLOperators	has_ldiv
 SciMLOperators	has_ldiv!
 SciMLOperators	has_mul
 SciMLOperators	has_mul!
+SciMLOperators	has_tensor_outer_mul_fast
 SciMLOperators	iscached
 SciMLOperators	isconstant
 SciMLOperators	isconvertible
@@ -1004,6 +1045,8 @@ SciMLOperators	jacobian_stale
 SciMLOperators	kronsum
 SciMLOperators	mark_jacobian_current!
 SciMLOperators	mark_jacobian_updated!
+SciMLOperators	tensor_outer_mul_fast!
+SciMLOperators	update_cache
 SciMLOperators	update_coefficients
 SciMLOperators	update_coefficients!
 DiffEqNoiseProcess	BoxWedgeTail

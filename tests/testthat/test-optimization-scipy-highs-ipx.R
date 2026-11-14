@@ -6,6 +6,9 @@
 # probes are in fixtures/highs-ipx-probe-data.txt. Iteration counts and bit
 # patterns are compared on the reference platform only.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ipx_case <- function(c, Aub = NULL, bub = NULL, Aeq = NULL, beq = NULL, lo = 0, up = Inf) {
   n <- length(c)
   Aub <- if (is.null(Aub)) matrix(0, 0, n) else rbind(Aub)

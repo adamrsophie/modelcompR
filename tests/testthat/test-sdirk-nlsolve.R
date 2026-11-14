@@ -2,6 +2,9 @@
 # (NLNewton settings and a callable stage predictor). The Julia references
 # are the _nlk, _nlpred and _nlnodiv cases of test-sdirk.R.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 nls_prob <- ODEProblem(function(u, p, t) -50 * (u - cos(t)), c(0, 1), c(0, 1))
 
 test_that("NLNewton settings reach the Newton iteration", {
@@ -101,6 +104,30 @@ test_that("a line search relaxation scales the Newton step", {
 })
 
 test_that("unsupported nonlinear solvers are refused", {
-  expect_error(KenCarp4(nlsolve = NonlinearSolveAlg()), "NLNewton")
+  expect_error(KenCarp4(nlsolve = list()), "NLNewton")
   expect_error(ImplicitEuler(nlsolve = NLNewton(relax = "a")), "relax")
+  expect_error(NonlinearSolveAlg(alg = 1), "nonlinear solver")
+})
+
+test_that("NonlinearSolveAlg and HomotopyNonlinearSolveAlg solve the stages", {
+  rob <- function(u, p, t) c(-0.04 * u[1] + 1e4 * u[2] * u[3], 0.04 * u[1] - 1e4 * u[2] * u[3] - 3e7 * u[2]^2,
+                             3e7 * u[2]^2)
+  prob <- ODEProblem(rob, c(1, 0, 0), c(0, 10))
+  ref <- solve(prob, Rodas5P(), abstol = 1e-12, reltol = 1e-12)
+  ref <- ref$u[[length(ref$u)]]
+  seen <- 0L
+  nls <- list(NonlinearSolveAlg(), NonlinearSolveAlg(TrustRegion()), HomotopyNonlinearSolveAlg(),
+              NonlinearSolveAlg(postcondition = function(u, up, p, cache) { seen <<- seen + 1L; pmax(u, 0) }),
+              NonlinearSolveAlg(precondition = function(fu, u, p) 2 * fu))
+  for (mk in list(ImplicitEuler, Trapezoid, TRBDF2, KenCarp4, Kvaerno5)) {
+    tol <- if (identical(mk, ImplicitEuler)) 2e-4 else 5e-5
+    for (nl in nls) {
+      sol <- solve(prob, mk(nlsolve = nl), abstol = 1e-8, reltol = 1e-6)
+      expect_identical(sol$retcode, "Success")
+      expect_lt(max(abs(sol$u[[length(sol$u)]] - ref)), tol)
+    }
+  }
+  expect_gt(seen, 0L)
+  expect_error(solve(ODEProblem(ODEFunction(function(u, p, t) c(-u[1] + u[2], u[1] - u[2]), mass_matrix = diag(c(1, 0))),
+                                c(1, 1), c(0, 1)), ImplicitEuler(nlsolve = HomotopyNonlinearSolveAlg())), "DAE")
 })

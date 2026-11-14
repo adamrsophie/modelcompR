@@ -1,6 +1,9 @@
 # Nonlinear, interval, linear, SCC, steady state and homotopy problems.
 # Reference values are analytic.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("a nonlinear system is solved by every algorithm", {
   x <- Variable("x"); y <- Variable("y"); a <- Parameter("a")
   sys <- complete(System(list(0 ~ x^2 + y^2 - a, 0 ~ x - y), name = "ns"))
@@ -407,4 +410,31 @@ test_that("Klement returns Unstable when its diagonal Jacobian turns NaN", {
   expect_identical(sol$retcode, "Unstable")
   expect_identical(sol$stats$nsteps, 166L)
   expect_equal(sol$u, c(-0.5014300321370808, 0.6507150160685404), tolerance = 1e-12)
+})
+
+test_that("AutoFiniteDiff gives the nonlinear solvers a finite difference Jacobian", {
+  rf <- function(u, p) c(u[1]^2 + u[2]^2 - 4, exp(u[1]) - u[2])
+  prob <- NonlinearProblem(rf, c(1, 1))
+  ref <- solve(prob, NewtonRaphson())$u
+  calls <- character()
+  orig <- .nl_fd_jacobian
+  local_mocked_bindings(.nl_fd_jacobian = function(F, x, fdtype = "forward") {
+    calls <<- c(calls, fdtype)
+    orig(F, x, fdtype)
+  })
+  for (alg in list(NewtonRaphson(autodiff = AutoFiniteDiff()), GaussNewton(autodiff = AutoFiniteDiff("central")),
+                   TrustRegion(autodiff = AutoFiniteDiff()), LevenbergMarquardt(autodiff = AutoFiniteDiff()),
+                   SimpleNewtonRaphson(autodiff = AutoFiniteDiff("complex")))) {
+    n0 <- length(calls)
+    sol <- solve(prob, alg)
+    expect_identical(sol$retcode, "Success", label = alg$name)
+    expect_equal(sol$u, ref, tolerance = 1e-8, label = alg$name)
+    expect_gt(length(calls), n0, label = alg$name)
+  }
+  expect_true(all(c("forward", "central", "complex") %in% calls))
+  n0 <- length(calls)
+  solve(prob, NewtonRaphson())
+  expect_identical(length(calls), n0)
+  J <- .nl_fd_jacobian(function(x) c(x[1]^2, x[1] * x[2]), c(3, 2), "complex")
+  expect_equal(J, matrix(c(6, 2, 0, 3), 2), tolerance = 1e-14)
 })

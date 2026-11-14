@@ -3,6 +3,9 @@
 # tools/irkc-gen-test.R: steps, evaluations of f1 and f2, Jacobians,
 # factorizations, linear solves, rejections and the final state.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 irkc_n <- 8
 irkc_f1 <- function(u, p, t) {
   l <- c(0, u[-irkc_n]); r <- c(u[-1], 0)

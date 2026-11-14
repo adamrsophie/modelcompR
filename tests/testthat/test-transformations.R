@@ -1,5 +1,8 @@
 # Transformations of basic_transformations.jl. Reference values are analytic.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("change_independent_variable reproduces the projectile tutorial", {
   t <- t_nounits; D <- D_nounits
   x <- Variable("x", t); y <- Variable("y", t)

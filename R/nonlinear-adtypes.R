@@ -2,28 +2,27 @@
 # src/legacy.jl) reexported by NonlinearSolve, and NonlinearSolveBase's
 # pickchunksize (ForwardDiff.pickchunksize, src/prelude.jl).
 #
-# The nonlinear solvers have no automatic differentiation (the dual numbers
-# of R/forwarddiff.R serve the ODE solvers and the optimizers). Every backend that differentiates
-# exactly (forward, reverse or symbolic mode) is a subclass of
-# AutoForwardDiff here, so the solvers use the problem's Jacobian when it has
-# one and central differences otherwise, as for AutoForwardDiff(). The
-# finite difference backends of other packages are subclasses of
-# AutoFiniteDiff with central differences.
+# Every backend that differentiates exactly (forward, reverse or symbolic
+# mode) is a subclass of AutoForwardDiff here: the solvers use the problem's
+# Jacobian when it has one and the dual numbers of R/forwarddiff.R
+# otherwise. The finite difference backends of other packages are
+# subclasses of AutoFiniteDiff with central differences.
 
 #' Automatic differentiation choices
 #'
 #' The backends of ADTypes.jl, for the `autodiff` arguments of the solvers.
-#' The nonlinear solvers do not differentiate with dual numbers (the ODE
-#' solvers and the optimizers do for `AutoForwardDiff()`): every backend
-#' that differentiates exactly (`AutoZygote()`, `AutoEnzyme()`, `AutoReverseDiff()`,
-#' `AutoSymbolics()`, ...) uses the problem's Jacobian when it has one and
-#' central differences otherwise, as [AutoForwardDiff()] does, and
-#' `AutoFiniteDifferences()` uses central differences (the bounded solvers
-#' use their bound aware differences only for `AutoFiniteDiff()` itself).
+#' Without a Jacobian in the problem, [AutoForwardDiff()] and every backend
+#' that differentiates exactly (`AutoZygote()`, `AutoEnzyme()`,
+#' `AutoReverseDiff()`, `AutoSymbolics()`, ...) differentiate with dual
+#' numbers, falling back to forward differences when the residual cannot run
+#' on them. [AutoFiniteDiff()] uses finite differences (forward, central or
+#' complex step, with the steps of FiniteDiff.jl) and
+#' `AutoFiniteDifferences()` central differences; the bounded solvers use
+#' their bound aware differences for `AutoFiniteDiff()` itself.
 #' `NoAutoDiff()` selects no differentiation: the bounded solvers
 #' ([TrustRegionReflective()] and the others) signal
 #' `NoAutoDiffSelectedError()` when the problem has no Jacobian; the other
-#' solvers fall back to central differences.
+#' solvers fall back to the default.
 #'
 #' The deprecated constructors of ADTypes return their replacements:
 #' `AutoSparseForwardDiff()` is `AutoSparse(AutoForwardDiff())` and so on,

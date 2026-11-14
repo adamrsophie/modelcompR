@@ -94,9 +94,13 @@ print.SteadyStateAlgorithm <- function(x, ...) print.NonlinearAlgorithm(x, ...)
 #'   Settings of the [GenericTrustRegionScheme()]; 0 selects the scheme's
 #'   own value.
 #' @param max_shrink_times Largest number of consecutive radius shrinks.
-#' @param concrete_jac,linsolve,autodiff,vjp_autodiff,jvp_autodiff,jacobian_reuse
-#'   Options of the Julia signature; Jacobians come from the problem or from
-#'   finite differences.
+#' @param autodiff How the Jacobian is computed when the problem has none:
+#'   `NULL` or [AutoForwardDiff()] (the default of NonlinearSolve: dual
+#'   numbers, with forward differences when the residual cannot run on duals)
+#'   or [AutoFiniteDiff()] (forward, central or complex step differences,
+#'   with the steps of FiniteDiff.jl).
+#' @param concrete_jac,linsolve,vjp_autodiff,jvp_autodiff,jacobian_reuse
+#'   Options of the Julia signature without an effect here.
 #' @param damping_initial Initial damping of Levenberg Marquardt.
 #' @param alpha_geodesic,disable_geodesic,finite_diff_step_geodesic Geodesic
 #'   acceleration of `LevenbergMarquardt()`: the correction is kept when
@@ -131,10 +135,12 @@ NULL
 
 #' @rdname nonlinear_algorithms
 #' @export
-NewtonRaphson <- function(linesearch = NULL) .nl_alg("NewtonRaphson", linesearch = linesearch)
+NewtonRaphson <- function(concrete_jac = NULL, linsolve = NULL, linesearch = NULL, autodiff = NULL,
+                          vjp_autodiff = NULL, jvp_autodiff = NULL)
+  .nl_alg("NewtonRaphson", linesearch = linesearch, autodiff = autodiff)
 #' @rdname nonlinear_algorithms
 #' @export
-SimpleNewtonRaphson <- function() .nl_alg("SimpleNewtonRaphson", linesearch = NULL)
+SimpleNewtonRaphson <- function(autodiff = NULL) .nl_alg("SimpleNewtonRaphson", linesearch = NULL, autodiff = autodiff)
 #' @rdname nonlinear_algorithms
 #' @export
 TrustRegion <- function(concrete_jac = NULL, linsolve = NULL, radius_update_scheme = NULL,
@@ -172,8 +178,10 @@ TrustRegion <- function(concrete_jac = NULL, linsolve = NULL, radius_update_sche
 }
 #' @rdname nonlinear_algorithms
 #' @export
-SimpleTrustRegion <- function(nlsolve_update_rule = FALSE, max_trust_radius = NULL, initial_trust_radius = NULL) {
-  .nl_alg("SimpleTrustRegion", radius_update_scheme = if (isTRUE(nlsolve_update_rule)) "NLsolve" else "Simple",
+SimpleTrustRegion <- function(nlsolve_update_rule = FALSE, max_trust_radius = NULL, initial_trust_radius = NULL,
+                              autodiff = NULL) {
+  .nl_alg("SimpleTrustRegion", autodiff = autodiff,
+          radius_update_scheme = if (isTRUE(nlsolve_update_rule)) "NLsolve" else "Simple",
           nlsolve_update_rule = isTRUE(nlsolve_update_rule), max_trust_radius = max_trust_radius,
           initial_trust_radius = initial_trust_radius)
 }
@@ -186,14 +194,16 @@ LevenbergMarquardt <- function(linsolve = NULL, damping_initial = 1, alpha_geode
   .nl_alg("LevenbergMarquardt", damping_initial = damping_initial, alpha_geodesic = alpha_geodesic,
           disable_geodesic = disable_geodesic, damping_increase_factor = damping_increase_factor,
           damping_decrease_factor = damping_decrease_factor, finite_diff_step_geodesic = finite_diff_step_geodesic,
-          b_uphill = b_uphill, min_damping_D = min_damping_D)
+          b_uphill = b_uphill, min_damping_D = min_damping_D, autodiff = autodiff)
 #' @rdname nonlinear_algorithms
 #' @export
-GaussNewton <- function(linesearch = NULL) .nl_alg("GaussNewton", linesearch = linesearch)
+GaussNewton <- function(concrete_jac = NULL, linsolve = NULL, linesearch = NULL, autodiff = NULL,
+                        vjp_autodiff = NULL, jvp_autodiff = NULL)
+  .nl_alg("GaussNewton", linesearch = linesearch, autodiff = autodiff)
 #' @rdname nonlinear_algorithms
 #' @export
 Broyden <- function(max_resets = 100L, linesearch = NULL, reset_tolerance = NULL, init_jacobian = "identity",
-                    alpha = NULL, update_rule = "good_broyden") {
+                    alpha = NULL, update_rule = "good_broyden", autodiff = NULL) {
   init_jacobian <- match.arg(init_jacobian, c("identity", "true_jacobian"))
   update_rule <- match.arg(update_rule, c("good_broyden", "bad_broyden", "diagonal"))
   if (update_rule == "diagonal" && init_jacobian != "identity")
@@ -201,14 +211,14 @@ Broyden <- function(max_resets = 100L, linesearch = NULL, reset_tolerance = NULL
          "Please choose a valid combination.", call. = FALSE)
   .nl_alg("Broyden", max_resets = as.integer(max_resets), linesearch = linesearch,
           reset_tolerance = reset_tolerance, init_jacobian = init_jacobian, alpha = alpha,
-          update_rule = update_rule)
+          update_rule = update_rule, autodiff = autodiff)
 }
 #' @rdname nonlinear_algorithms
 #' @export
-Klement <- function(max_resets = 100L, linesearch = NULL, alpha = NULL, init_jacobian = "identity") {
+Klement <- function(max_resets = 100L, linesearch = NULL, alpha = NULL, init_jacobian = "identity", autodiff = NULL) {
   init_jacobian <- match.arg(init_jacobian, c("identity", "true_jacobian", "true_jacobian_diagonal"))
   .nl_alg("Klement", max_resets = as.integer(max_resets), linesearch = linesearch, alpha = alpha,
-          init_jacobian = init_jacobian)
+          init_jacobian = init_jacobian, autodiff = autodiff)
 }
 #' @rdname nonlinear_algorithms
 #' @export
@@ -283,6 +293,40 @@ FastShortcutNLLSPolyalg <- function() {
   jr <- .ad_try_jacobian(F, x)
   if (!is.null(jr)) return(jr$jacobian)
   .fd_jacobian(F, x, fx)
+}
+
+# The Jacobian of FiniteDiff.jl: steps max(relstep |x_j|, absstep) with
+# relstep sqrt(eps) (forward) or cbrt(eps) (central); the complex step uses
+# h = eps and falls back to central differences when F rejects complex input.
+.nl_fd_jacobian <- function(F, x, fdtype = "forward") {
+  x <- .as_num(x)
+  if (identical(fdtype, "complex")) {
+    h <- .Machine$double.eps
+    J <- tryCatch({
+      cols <- lapply(seq_along(x), function(j) {
+        xc <- complex(real = x, imaginary = 0)
+        xc[j] <- complex(real = x[j], imaginary = h)
+        y <- F(xc)
+        if (!is.complex(y)) stop("not complex")
+        Im(y) / h
+      })
+      do.call(cbind, cols)
+    }, error = function(e) NULL)
+    if (!is.null(J)) return(J)
+    fdtype <- "central"
+  }
+  central <- identical(fdtype, "central")
+  rel <- if (central) .Machine$double.eps^(1 / 3) else sqrt(.Machine$double.eps)
+  fx <- if (central) NULL else .as_num(F(x))
+  cols <- lapply(seq_along(x), function(j) {
+    h <- max(rel * abs(x[j]), rel)
+    xp <- x; xp[j] <- x[j] + h
+    if (central) {
+      xm <- x; xm[j] <- x[j] - h
+      (.as_num(F(xp)) - .as_num(F(xm))) / (2 * h)
+    } else (.as_num(F(xp)) - fx) / h
+  })
+  do.call(cbind, cols)
 }
 
 .nl_project <- function(x, lb, ub) {
@@ -815,6 +859,16 @@ FastShortcutNLLSPolyalg <- function() {
     if (is.null(best)) stop("every algorithm of ", alg$name, " failed", call. = FALSE)
     best$total_iters <- total
     return(best)
+  }
+  # autodiff = AutoFiniteDiff(): the Jacobian by finite differences; the
+  # bounded solvers difference within the bounds themselves (.nb_jacobian)
+  if (is.null(J) && !isTRUE(alg$allows_bounds)) {
+    ad <- alg$autodiff
+    if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
+    if (inherits(ad, "AutoFiniteDiff")) {
+      fdtype <- ad$fdtype %||% "forward"
+      J <- function(x) .nl_fd_jacobian(F, x, fdtype)
+    }
   }
   core <- c("NewtonRaphson", "SimpleNewtonRaphson", "GaussNewton", "SimpleTrustRegion", "Broyden", "Klement",
             "LimitedMemoryBroyden", "LevenbergMarquardt")

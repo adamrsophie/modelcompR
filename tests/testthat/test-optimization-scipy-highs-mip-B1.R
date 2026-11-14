@@ -4,6 +4,9 @@
 # by hand from the C++ (mip/HighsMipSolverData.cpp, HighsObjectiveFunction.cpp,
 # util/HighsIntegers.h, pdqsort.h, libstdc++ stl_algo.h).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("pdqsort, partial_sort and partition follow the C++ algorithms", {
   set.seed(1)
   for (n in c(0, 1, 5, 23, 24, 50, 129, 300, 1000)) {

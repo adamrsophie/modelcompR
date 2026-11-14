@@ -4,6 +4,9 @@
 # dense41_* keys of tools/globaldiffeq-probe.jl record the Julia values on the
 # same problem (pRRK33 with kappa = 0.5).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 dno_lv <- function(u, p, t) c(1.5 * u[1] - u[1] * u[2], -3 * u[2] + u[1] * u[2] + 0.1 * t)
 dno_prob <- function() ODEProblem(dno_lv, c(1, 1), c(0, 1))
 

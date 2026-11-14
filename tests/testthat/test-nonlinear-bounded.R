@@ -5,6 +5,9 @@
 # they stall at a minimum on a bound with a singular Jacobian, where the
 # unpivoted QR of LAPACK and the one of R differ in the last bits and the
 # trajectories part at the rounding level (their final points agree to 2e-9).
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 bounded_reference <- "
 rosen_in BGN_ls 1000 Success 1.0;1.0 33 12 10 10 10
 rosen_in BGN_ls 3 MaxIters -0.69189453125;0.05187187194824233 15 5 3 3 3

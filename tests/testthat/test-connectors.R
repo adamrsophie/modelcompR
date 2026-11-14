@@ -1,6 +1,9 @@
 # Connectors, components and connection expansion. The electrical library
 # follows docs/src/tutorials/acausal_components.md of ModelingToolkit.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .rc_library <- function() {
   t <- t_nounits; D <- D_nounits
   Pin <- connector(function(name) {

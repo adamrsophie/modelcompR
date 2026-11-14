@@ -1,6 +1,9 @@
 # QuasiMonteCarlo.jl and GlobalSensitivity.jl against the Julia references of
 # tools/globalsensitivity-probe.jl (raw Float64, read in the probe's order).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ref_con <- function() {
   f <- test_path("fixtures", "julia", "globalsensitivity.bin")
   skip_if_not(file.exists(f))

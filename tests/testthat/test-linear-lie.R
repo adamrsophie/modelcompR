@@ -3,6 +3,9 @@
 # and CayleyEuler with dt = 0.1 upstream steps past tf (they cannot change dt)
 # and appends tf; the values are those of its step before, and the counts
 # leave that extra step out.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .LIN_REF <- list(
   `p1_MagnusMidpoint` = list(u = c(0.55510091148288254, -0.41021880944654437, -0.22476123164128201),
     stats = c(11, 10, 0), nt = 11, tend = 1),

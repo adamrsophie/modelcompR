@@ -1,6 +1,9 @@
 # Reference values: one fixed noise path (NoiseGrid) through StochasticDiffEq
 # 6 (StochasticDiffEqWeak), two steps of size 0.1.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 weak_f <- function(u, p, t) c(-0.5 * u[1] + 0.2 * u[2] * u[1], 0.3 * u[1] - u[2])
 weak_gG <- function(u, p, t) matrix(c(0.3 * u[1], 0.05 * u[1] * u[2], 0.1 * u[2], 0.2 * u[2]), 2, 2)
 weak_gD <- function(u, p, t) c(0.3 * u[1] + 0.1, 0.2 * u[2]^2)

@@ -11,6 +11,9 @@
 # InterpolatingMode the companion steps end on the forward nodes, where the
 # derivative of the dense output jumps, and the estimates agree to 5e-11.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 gec_lv <- function(u, p, t) c(1.5 * u[1] - u[1] * u[2], -3 * u[2] + u[1] * u[2])
 gec_jac <- function(u, p, t) matrix(c(1.5 - u[2], u[2], -u[1], -3 + u[1]), 2, 2)
 gec_prob <- function(...) ODEProblem(ODEFunction(gec_lv, jac_fn = gec_jac), c(1, 1), c(0, 2), ...)

@@ -4,6 +4,9 @@
 # checked by convergence with fixed seeds, as the tests of
 # OptimizationMetaheuristics do with Julia's.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 mh <- function(name) get(name, envir = asNamespace("modelcompR"))
 
 test_that("the operators match Metaheuristics.jl with the same random numbers", {

@@ -2,6 +2,9 @@
 # constrained Rosenbrock optimum, which is the solution reported by the
 # Optimization.jl documentation for the same problem.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 rosenbrock_system <- function(constraints = list(), name = "rosenbrock") {
   x <- Variable("x"); y <- Variable("y"); a <- Parameter("a"); b <- Parameter("b")
   list(x = x, y = y, a = a, b = b,

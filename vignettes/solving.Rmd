@@ -638,12 +638,21 @@ limit), the fixed point iteration `NLFunctional()` and its Anderson
 accelerated form `NLAnderson()`. The fixed point iterations need no
 Jacobian, and so only converge on mildly stiff problems; Anderson
 acceleration combines the previous iterates and here needs fewer function
-evaluations than the plain iteration.
+evaluations than the plain iteration. `NonlinearSolveAlg(alg)` hands each
+stage system to a nonlinear solver of the package (with the integrator's
+`W` as its Jacobian; `postcondition` corrects the stage state, for
+instance to keep it positive), and `HomotopyNonlinearSolveAlg()` solves it
+by continuation in the step size, which converges where Newton's method
+fails from a poor guess. ImplicitEuler, Trapezoid and the implicit SDE
+methods take the same choices.
 
 ```{r}
 mild <- ODEProblem(function(u, p, t) c(-20 * u[1] + u[2]^2, -u[2] + u[1]), c(1, 1), c(0, 1))
 nl <- list(newton = NLNewton(), tight = NLNewton(kappa = 1e-6),
-           functional = NLFunctional(), anderson = NLAnderson())
+           functional = NLFunctional(), anderson = NLAnderson(),
+           inner_trust = NonlinearSolveAlg(TrustRegion()),
+           positive = NonlinearSolveAlg(postcondition = function(u, uprev, p, cache) pmax(u, 0)),
+           homotopy = HomotopyNonlinearSolveAlg())
 sapply(nl, function(n) {
   s <- solve(mild, TRBDF2(nlsolve = n))
   unlist(s$stats[c("nf", "njacs", "nsolve", "naccept")])

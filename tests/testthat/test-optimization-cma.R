@@ -5,6 +5,9 @@
 # tools/pycma-probe.py); the runs are random and checked as in the
 # Optimization.jl tests, with fixed R seeds.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 cma_rosen <- function(x, p) (p[1] - x[1])^2 + p[2] * (x[2] - x[1]^2)^2
 cma_rgrad <- function(x, p) c(-2 * (p[1] - x[1]) - 4 * p[2] * (x[2] - x[1]^2) * x[1], 2 * p[2] * (x[2] - x[1]^2))
 

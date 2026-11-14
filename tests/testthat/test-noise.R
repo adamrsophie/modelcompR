@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("Wiener processes simulate, bridge and replay", {
   sol <- solve(NoiseProblem(WienerProcess(0, 0), c(0, 1)), dt = 0.1, seed = 1)
   expect_s3_class(sol, "NoiseProcess")

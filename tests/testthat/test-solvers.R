@@ -4,6 +4,9 @@
 # an index 1 DAE, Lotka Volterra), analytic solutions, and the asymptotic
 # Van der Pol relaxation period (3 - 2 log 2) mu.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 rober <- function(u, p, t) c(-0.04 * u[1] + 1e4 * u[2] * u[3],
                              0.04 * u[1] - 1e4 * u[2] * u[3] - 3e7 * u[2]^2,
                              3e7 * u[2]^2)

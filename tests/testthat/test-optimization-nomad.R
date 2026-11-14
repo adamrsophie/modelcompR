@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("NOMADOpt reaches the minimizers of NOMAD", {
   # NOMAD_jll has no build for this platform, so the references are the
   # exact minimizers: unconstrained (10/7, -6/7), with x1 >= 1.5 at

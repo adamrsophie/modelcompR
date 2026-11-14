@@ -3,6 +3,9 @@
 # naccept, nreject). With dt = 0.1 the classical methods cannot change dt
 # upstream and step past tf, then append tf; the values are those of the
 # step before, and the counts leave that extra step out.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .EXPRK_REF <- list(
   `sp1_LawsonEuler` = list(u = c(0.16918173581494322, 0.1479958823573061, -0.1335572580803068, -0.002904450331952464),
     stats = c(11, 10, 0, 10, 0), nt = 11, tend = 1),

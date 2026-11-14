@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 nl_poly3 <- function(x, p) {
   a <- x[1] - 1; b <- x[2] - 2; c <- x[3] + 1
   a * a + 2 * b * b + 3 * c * c + a * a * b * b + 0.5 * a * c

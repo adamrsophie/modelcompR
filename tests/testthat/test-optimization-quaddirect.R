@@ -2,6 +2,9 @@
 # The method is deterministic; every evaluation of the runs below matches
 # Julia bit for bit (numbers from tools/quaddirect-probe.jl).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 qd_fun <- function(name) get(name, envir = asNamespace("modelcompR"))
 
 qd_run <- function(f, splits, lower, upper, ...) {

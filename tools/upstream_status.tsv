@@ -1379,6 +1379,17 @@ OrdinaryDiffEqMultirateImplicit	MRIGARKESDIRK46a	ported
 OrdinaryDiffEqMultirateImplicit	MRIGARKIRK21a	ported
 OrdinaryDiffEqNewmark	GeneralizedAlpha	ported
 OrdinaryDiffEqNewmark	NewmarkBeta	ported
+OrdinaryDiffEqNonlinearSolve	HomotopyNonlinearSolveAlg	ported
+OrdinaryDiffEqNonlinearSolve	anderson	not applicable
+OrdinaryDiffEqNonlinearSolve	anderson!	not applicable
+OrdinaryDiffEqNonlinearSolve	build_nlsolver	not applicable
+OrdinaryDiffEqNonlinearSolve	can_smooth_est	not applicable
+OrdinaryDiffEqNonlinearSolve	compute_step!	not applicable
+OrdinaryDiffEqNonlinearSolve	du_alias_or_new	not applicable
+OrdinaryDiffEqNonlinearSolve	initial_η	not applicable
+OrdinaryDiffEqNonlinearSolve	markfirststage!	not applicable
+OrdinaryDiffEqNonlinearSolve	nlsolve!	not applicable
+OrdinaryDiffEqNonlinearSolve	nlsolvefail	not applicable
 OrdinaryDiffEqNordsieck	AN5	ported
 OrdinaryDiffEqNordsieck	JVODE	ported
 OrdinaryDiffEqNordsieck	JVODE_Adams	ported
@@ -1750,11 +1761,28 @@ SimpleOptimization	SimpleGradientDescent	ported
 SimpleOptimization	SimpleLBFGS	ported
 SimpleOptimization	SimpleNewton	ported
 SimpleOptimization	SimpleSOAP	ported
+SciMLOperators	AbstractSciMLOperator	not applicable
+SciMLOperators	AbstractSciMLScalarOperator	not applicable
+SciMLOperators	AbstractWOperator	not applicable
+SciMLOperators	AddedOperator	ported
+SciMLOperators	AddedScalarOperator	ported
+SciMLOperators	AdjointOperator	ported
+SciMLOperators	ComposedOperator	ported
+SciMLOperators	ComposedScalarOperator	ported
+SciMLOperators	InvertedOperator	ported
+SciMLOperators	InvertedScalarOperator	ported
+SciMLOperators	ScaledOperator	ported
 SciMLOperators	StaticWOperator	ported
+SciMLOperators	TransposedOperator	ported
 SciMLOperators	WOperator	ported
+SciMLOperators	adopt_cache	not applicable
+SciMLOperators	getcache	not applicable
+SciMLOperators	has_tensor_outer_mul_fast	not applicable
 SciMLOperators	jacobian_stale	ported
 SciMLOperators	mark_jacobian_current!	ported as mark_jacobian_current
 SciMLOperators	mark_jacobian_updated!	ported as mark_jacobian_updated
+SciMLOperators	tensor_outer_mul_fast!	not applicable
+SciMLOperators	update_cache	not applicable
 SciMLSensitivity	AdjointLSS	ported
 SciMLSensitivity	AdjointLSSProblem	ported
 SciMLSensitivity	AdjointSensitivityIntegrand	ported

@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ip_hs071 <- function() {
   OptimizationProblem(function(x, p) x[1] * x[4] * (x[1] + x[2] + x[3]) + x[3], c(1, 5, 5, 1), numeric(),
                       cons = function(x, p) c(x[1] * x[2] * x[3] * x[4], sum(x * x)), lcons = c(25, 40),

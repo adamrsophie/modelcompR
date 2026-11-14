@@ -565,20 +565,35 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
 # equations then hold at the end of each step.
 
 .sde_implicit_alg <- function(name, kind, theta, symplectic, order, interpretation = "Ito",
-                              noise = c("diagonal", "scalar", "general"), split = FALSE) {
+                              noise = c("diagonal", "scalar", "general"), split = FALSE, solver = list()) {
   if (symplectic) theta <- 1 / 2
   alg <- .new_sde_alg(name, order, TRUE, perform = NULL, noise = noise, interpretation = interpretation,
                       theta = theta, symplectic = symplectic, kind = kind, split = split)
   alg$mass_matrix_ok <- symplectic || theta == 1
+  # the solver options of the implicit methods: the Jacobian backend, the
+  # nonlinear solver and the stored linsolve, concrete_jac, extrapolant and
+  # new_jac_conv_bound (the out of place step starts every stage from the
+  # same guess whatever the extrapolant)
+  for (nm in names(solver)) alg[[nm]] <- solver[[nm]]
+  alg$nlsolve <- .check_nlsolve(alg$nlsolve)
   alg$init <- function(ctx, t, u) {
     cache <- new.env(parent = emptyenv())
-    cache$nl <- .new_nlsolver()
+    cache$nl <- .new_nlsolver(alg$nlsolve)
     cache
   }
   alg$step <- function(ctx, g, u, t, dt, dW, type, delta, cache, ...)
-    .sde_implicit_step(alg, ctx, g, u, t, dt, dW, type, delta, cache)
+    .sde_implicit_step(alg, .sde_ad_ctx(ctx, alg), g, u, t, dt, dW, type, delta, cache)
   alg
 }
+
+.sde_ad_ctx <- function(ctx, alg) {
+  if (!is.null(alg$autodiff)) ctx$autodiff <- alg$autodiff
+  ctx
+}
+
+.sde_solver_opts <- function(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound, ...)
+  c(list(autodiff = autodiff %||% AutoForwardDiff(), concrete_jac = concrete_jac, linsolve = linsolve,
+         nlsolve = nlsolve, extrapolant = extrapolant, new_jac_conv_bound = new_jac_conv_bound), list(...))
 
 .sde_implicit_step <- function(alg, ctx, g, u, t, dt, dW, type, delta, cache) {
   p <- ctx$p
@@ -664,29 +679,37 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
   chi2 <- (dW + dZ / sqrt(3)) / 2
   out <- list(nf = 1L, njacs = 0L, nsolve = 0L, nw = 0L, cache = cache, k = NULL)
   # one stage: U = tmp + gamma z, M z = dt f(U, tc); extrapolant :min_correct
-  stage <- function(tmp, tc) {
-    nl <- .nlsolve(cache$nl, ctx, t, dt, tmp, .mass_mul(ctx$mass, tmp) / (gam * dt), gam, 1, tc, u)
+  # extrapolant "trivial" starts a stage from z of the stage before (z1 for
+  # the second stage, z2 for the last two), "min_correct" from z = 0
+  trivial <- identical(alg$extrapolant, "trivial")
+  stage <- function(tmp, tc, zprev = NULL) {
+    z0 <- if (trivial && !is.null(zprev)) tmp + gam * zprev else tmp
+    nl <- .nlsolve(cache$nl, ctx, t, dt, z0, .mass_mul(ctx$mass, tmp) / (gam * dt), gam, 1, tc, u)
     for (s in c("nf", "njacs", "nsolve", "nw")) out[[s]] <<- out[[s]] + as.integer(nl[[s]] %||% 0L)
     if (!nl$ok) return(NULL)
     (nl$z - tmp) / gam
   }
   z1 <- dt * ctx$f(u, p, t)
   g1 <- g(u, p, t)
-  z2 <- stage(u + gam * z1 + S$nb021 * .gdw(g1, chi2, type), t + S$c2 * dt)
+  z2 <- stage(u + gam * z1 + S$nb021 * .gdw(g1, chi2, type), t + S$c2 * dt, z1)
   if (is.null(z2)) return(c(out, list(fail = TRUE, u = u)))
-  z3 <- stage(u + S$a31 * z1 + S$a32 * z2, t + S$c3 * dt)
+  z3 <- stage(u + S$a31 * z1 + S$a32 * z2, t + S$c3 * dt, z2)
   if (is.null(z3)) return(c(out, list(fail = TRUE, u = u)))
   # g3 = g1 since the noise stage times c13 = 0
-  z4 <- stage(u + S$a41 * z1 + S$a42 * z2 + S$a43 * z3 + S$nb043 * .gdw(g1, chi2, type), t + dt)
+  z4 <- stage(u + S$a41 * z1 + S$a42 * z2 + S$a43 * z3 + S$nb043 * .gdw(g1, chi2, type), t + dt, z2)
   if (is.null(z4)) return(c(out, list(fail = TRUE, u = u)))
   g4 <- g(u, p, t + dt)
   E2 <- .gdw(g1 - g4, chi2, type)
   unew <- u + S$a41 * z1 + S$a42 * z2 + S$a43 * z3 + gam * z4 + .gdw(g4, dW, type) + E2
   if (!isTRUE(ctx$adaptive)) return(c(out, list(u = unew)))
-  tmp <- S$btilde[1L] * z1 + S$btilde[2L] * z2 + S$btilde[3L] * z3 + S$btilde[4L] * z4 + E2
-  # smooth_est (Shampine): (M - gamma dt J)^-1 tmp; W = J - M / W_gdt
-  E1 <- if (!is.null(cache$nl$W)) -.wsolve(cache$nl$W, tmp) / cache$nl$W_gdt else tmp
-  out$nsolve <- out$nsolve + 1L
+  E1 <- if (isFALSE(alg$ode_error_est)) z1 + z2 + z3 + z4 else {
+    tmp <- S$btilde[1L] * z1 + S$btilde[2L] * z2 + S$btilde[3L] * z3 + S$btilde[4L] * z4 + E2
+    # smooth_est (Shampine): (M - gamma dt J)^-1 tmp; W = J - M / W_gdt
+    if (!isFALSE(alg$smooth_est)) {
+      out$nsolve <- out$nsolve + 1L
+      if (.can_smooth_est(cache$nl)) -.wsolve(cache$nl$W, tmp) / cache$nl$W_gdt else tmp
+    } else tmp
+  }
   c(out, list(u = unew, err = delta * E1 + E2))
 }
 
@@ -717,6 +740,20 @@ RKMilCommute <- function(interpretation = c("Ito", "Stratonovich")) {
 #' @param theta Implicitness of the drift.
 #' @param symplectic Use the implicit midpoint rule.
 #' @param interpretation `"Ito"` or `"Stratonovich"` for `ImplicitRKMil()`.
+#' @param autodiff The Jacobian backend of the Newton iteration (default
+#'   [AutoForwardDiff()]).
+#' @param nlsolve The nonlinear solver of the implicit stages: [NLNewton()],
+#'   [NLFunctional()], [NLAnderson()], [NonlinearSolveAlg()] or
+#'   [HomotopyNonlinearSolveAlg()].
+#' @param concrete_jac,linsolve,new_jac_conv_bound Stored as upstream; the
+#'   stage systems are solved densely.
+#' @param extrapolant The start of the stage solves; `SKenCarp()` takes
+#'   `"min_correct"` (from zero) or `"trivial"` (from the previous stage).
+#'   The other methods start from the same guess for every value, as the out
+#'   of place methods of StochasticDiffEq do.
+#' @param smooth_est Smooth the error estimate of `SKenCarp()` with `W`.
+#' @param ode_error_est Use the embedded drift error estimate of
+#'   `SKenCarp()`; `FALSE` takes the sum of the stage increments.
 #' @return An algorithm object.
 #' @examples
 #' f <- function(u, p, t) c(-u[1] + u[2], u[2] - 2 * u[1])
@@ -729,50 +766,68 @@ NULL
 
 #' @rdname sde_implicit_algorithms
 #' @export
-ImplicitEM <- function(theta = 1, symplectic = FALSE)
-  .sde_implicit_alg("ImplicitEM", "EM", theta, symplectic, 0.5)
+ImplicitEM <- function(theta = 1, symplectic = FALSE, autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
+  .sde_implicit_alg("ImplicitEM", "EM", theta, symplectic, 0.5, solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound))
 
 #' @rdname sde_implicit_algorithms
 #' @export
-STrapezoid <- function() ImplicitEM(theta = 1 / 2)
+STrapezoid <- function(autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
+  ImplicitEM(theta = 1 / 2, autodiff = autodiff, concrete_jac = concrete_jac, linsolve = linsolve,
+             nlsolve = nlsolve, extrapolant = extrapolant, new_jac_conv_bound = new_jac_conv_bound)
 
 #' @rdname sde_implicit_algorithms
 #' @export
-SImplicitMidpoint <- function() ImplicitEM(theta = 1 / 2, symplectic = TRUE)
+SImplicitMidpoint <- function(autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
+  ImplicitEM(theta = 1 / 2, symplectic = TRUE, autodiff = autodiff, concrete_jac = concrete_jac,
+             linsolve = linsolve, nlsolve = nlsolve, extrapolant = extrapolant,
+             new_jac_conv_bound = new_jac_conv_bound)
 
 #' @rdname sde_implicit_algorithms
 #' @export
-ImplicitEulerHeun <- function(theta = 1, symplectic = FALSE)
-  .sde_implicit_alg("ImplicitEulerHeun", "EulerHeun", theta, symplectic, 0.5, interpretation = "Stratonovich")
+ImplicitEulerHeun <- function(theta = 1, symplectic = FALSE, autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
+  .sde_implicit_alg("ImplicitEulerHeun", "EulerHeun", theta, symplectic, 0.5, interpretation = "Stratonovich",
+                    solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound))
 
 #' @rdname sde_implicit_algorithms
 #' @export
-SKenCarp <- function() {
-  alg <- .sde_implicit_alg("SKenCarp", "SKenCarp", 1, FALSE, 1.5)
+SKenCarp <- function(autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(), smooth_est = TRUE,
+                     extrapolant = "min_correct", new_jac_conv_bound = 1e-3, ode_error_est = TRUE) {
+  alg <- .sde_implicit_alg("SKenCarp", "SKenCarp", 1, FALSE, 1.5,
+                           solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant,
+                                                     new_jac_conv_bound, smooth_est = isTRUE(smooth_est),
+                                                     ode_error_est = isTRUE(ode_error_est)))
   alg$order <- 2
   alg$needs_dZ <- TRUE
   alg$step <- function(ctx, g, u, t, dt, dW, type, delta, cache, dZ = NULL, ...)
-    .skencarp_step(alg, ctx, g, u, t, dt, dW, type, delta, cache, dZ)
+    .skencarp_step(alg, .sde_ad_ctx(ctx, alg), g, u, t, dt, dW, type, delta, cache, dZ)
   alg
 }
 
 #' @rdname sde_implicit_algorithms
 #' @export
-ISSEM <- function(theta = 1, symplectic = FALSE)
-  .sde_implicit_alg("ISSEM", "EM", theta, symplectic, 0.5, split = TRUE)
+ISSEM <- function(theta = 1, symplectic = FALSE, autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
+  .sde_implicit_alg("ISSEM", "EM", theta, symplectic, 0.5, split = TRUE, solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound))
 
 #' @rdname sde_implicit_algorithms
 #' @export
-ISSEulerHeun <- function(theta = 1, symplectic = FALSE)
+ISSEulerHeun <- function(theta = 1, symplectic = FALSE, autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3)
   .sde_implicit_alg("ISSEulerHeun", "EulerHeun", theta, symplectic, 0.5, interpretation = "Stratonovich",
-                    split = TRUE)
+                    split = TRUE, solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound))
 
 #' @rdname sde_implicit_algorithms
 #' @export
-ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito", "Stratonovich")) {
+ImplicitRKMil <- function(theta = 1, symplectic = FALSE, interpretation = c("Ito", "Stratonovich"),
+                          autodiff = NULL, concrete_jac = NULL, linsolve = NULL, nlsolve = NLNewton(),
+                       extrapolant = "constant", new_jac_conv_bound = 1e-3) {
   interpretation <- match.arg(interpretation)
   .sde_implicit_alg("ImplicitRKMil", "RKMil", theta, symplectic, 1, interpretation = interpretation,
-                    noise = c("diagonal", "scalar"))
+                    noise = c("diagonal", "scalar"), solver = .sde_solver_opts(autodiff, concrete_jac, linsolve, nlsolve, extrapolant, new_jac_conv_bound))
 }
 
 # ---------------------------------------------------------------------------

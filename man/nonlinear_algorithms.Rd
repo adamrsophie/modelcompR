@@ -15,9 +15,16 @@
 \alias{FastShortcutNLLSPolyalg}
 \title{Nonlinear solver algorithms}
 \usage{
-NewtonRaphson(linesearch = NULL)
+NewtonRaphson(
+  concrete_jac = NULL,
+  linsolve = NULL,
+  linesearch = NULL,
+  autodiff = NULL,
+  vjp_autodiff = NULL,
+  jvp_autodiff = NULL
+)
 
-SimpleNewtonRaphson()
+SimpleNewtonRaphson(autodiff = NULL)
 
 TrustRegion(
   concrete_jac = NULL,
@@ -41,7 +48,8 @@ TrustRegion(
 SimpleTrustRegion(
   nlsolve_update_rule = FALSE,
   max_trust_radius = NULL,
-  initial_trust_radius = NULL
+  initial_trust_radius = NULL,
+  autodiff = NULL
 )
 
 LevenbergMarquardt(
@@ -60,7 +68,14 @@ LevenbergMarquardt(
   jacobian_reuse = NULL
 )
 
-GaussNewton(linesearch = NULL)
+GaussNewton(
+  concrete_jac = NULL,
+  linsolve = NULL,
+  linesearch = NULL,
+  autodiff = NULL,
+  vjp_autodiff = NULL,
+  jvp_autodiff = NULL
+)
 
 Broyden(
   max_resets = 100L,
@@ -68,14 +83,16 @@ Broyden(
   reset_tolerance = NULL,
   init_jacobian = "identity",
   alpha = NULL,
-  update_rule = "good_broyden"
+  update_rule = "good_broyden",
+  autodiff = NULL
 )
 
 Klement(
   max_resets = 100L,
   linesearch = NULL,
   alpha = NULL,
-  init_jacobian = "identity"
+  init_jacobian = "identity",
+  autodiff = NULL
 )
 
 FastShortcutNonlinearPolyalg(u0_len = NULL, must_use_jacobian = FALSE)
@@ -85,10 +102,15 @@ RobustMultiNewton()
 FastShortcutNLLSPolyalg()
 }
 \arguments{
+\item{concrete_jac, linsolve, vjp_autodiff, jvp_autodiff, jacobian_reuse}{Options of the Julia signature without an effect here.}
+
 \item{linesearch}{\code{NULL} or \code{"BackTracking"}.}
 
-\item{concrete_jac, linsolve, autodiff, vjp_autodiff, jvp_autodiff, jacobian_reuse}{Options of the Julia signature; Jacobians come from the problem or from
-finite differences.}
+\item{autodiff}{How the Jacobian is computed when the problem has none:
+\code{NULL} or \code{\link[=AutoForwardDiff]{AutoForwardDiff()}} (the default of NonlinearSolve: dual
+numbers, with forward differences when the residual cannot run on duals)
+or \code{\link[=AutoFiniteDiff]{AutoFiniteDiff()}} (forward, central or complex step differences,
+with the steps of FiniteDiff.jl).}
 
 \item{radius_update_scheme}{One of \code{RadiusUpdateSchemes}; \code{NULL} picks
 the default of the subproblem.}

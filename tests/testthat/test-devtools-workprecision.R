@@ -2,6 +2,9 @@
 # src/autoplot.jl). Reference values from tools/DiffEqDevTools-probe.jl.
 # Only errors, names, tags and counts are compared; times are not.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 dv_wp_prob <- function(analytic = TRUE) {
   f <- function(u, p, t) c(-u[1] * u[1], u[1] * u[2])
   an <- function(u0, p, t) c(1 / (1 + t), 2 * (1 + t))

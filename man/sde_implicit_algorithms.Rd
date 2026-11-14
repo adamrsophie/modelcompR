@@ -12,30 +12,115 @@
 \alias{ImplicitRKMil}
 \title{Implicit SDE solvers}
 \usage{
-ImplicitEM(theta = 1, symplectic = FALSE)
+ImplicitEM(
+  theta = 1,
+  symplectic = FALSE,
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
-STrapezoid()
+STrapezoid(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
-SImplicitMidpoint()
+SImplicitMidpoint(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
-ImplicitEulerHeun(theta = 1, symplectic = FALSE)
+ImplicitEulerHeun(
+  theta = 1,
+  symplectic = FALSE,
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
-SKenCarp()
+SKenCarp(
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  smooth_est = TRUE,
+  extrapolant = "min_correct",
+  new_jac_conv_bound = 0.001,
+  ode_error_est = TRUE
+)
 
-ISSEM(theta = 1, symplectic = FALSE)
+ISSEM(
+  theta = 1,
+  symplectic = FALSE,
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
-ISSEulerHeun(theta = 1, symplectic = FALSE)
+ISSEulerHeun(
+  theta = 1,
+  symplectic = FALSE,
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
+)
 
 ImplicitRKMil(
   theta = 1,
   symplectic = FALSE,
-  interpretation = c("Ito", "Stratonovich")
+  interpretation = c("Ito", "Stratonovich"),
+  autodiff = NULL,
+  concrete_jac = NULL,
+  linsolve = NULL,
+  nlsolve = NLNewton(),
+  extrapolant = "constant",
+  new_jac_conv_bound = 0.001
 )
 }
 \arguments{
 \item{theta}{Implicitness of the drift.}
 
 \item{symplectic}{Use the implicit midpoint rule.}
+
+\item{autodiff}{The Jacobian backend of the Newton iteration (default
+\code{\link[=AutoForwardDiff]{AutoForwardDiff()}}).}
+
+\item{concrete_jac, linsolve, new_jac_conv_bound}{Stored as upstream; the
+stage systems are solved densely.}
+
+\item{nlsolve}{The nonlinear solver of the implicit stages: \code{\link[=NLNewton]{NLNewton()}},
+\code{\link[=NLFunctional]{NLFunctional()}}, \code{\link[=NLAnderson]{NLAnderson()}}, \code{\link[=NonlinearSolveAlg]{NonlinearSolveAlg()}} or
+\code{\link[=HomotopyNonlinearSolveAlg]{HomotopyNonlinearSolveAlg()}}.}
+
+\item{extrapolant}{The start of the stage solves; \code{SKenCarp()} takes
+\code{"min_correct"} (from zero) or \code{"trivial"} (from the previous stage).
+The other methods start from the same guess for every value, as the out
+of place methods of StochasticDiffEq do.}
+
+\item{smooth_est}{Smooth the error estimate of \code{SKenCarp()} with \code{W}.}
+
+\item{ode_error_est}{Use the embedded drift error estimate of
+\code{SKenCarp()}; \code{FALSE} takes the sum of the stage increments.}
 
 \item{interpretation}{\code{"Ito"} or \code{"Stratonovich"} for \code{ImplicitRKMil()}.}
 }

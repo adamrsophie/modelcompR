@@ -2,6 +2,9 @@
 # OrdinaryDiffEqNewmark 2.4.0: the reference values come from
 # tools/newmark-probe.jl (out of place functions, state c(v, u)).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 newmark_test_probs <- list(
   L1 = function() DynamicalODEProblem(function(v, u, p, t) -4 * u, function(v, u, p, t) v,
                                       c(0.5, -0.3), c(1, 0.2), c(0, 1)),

@@ -1,6 +1,9 @@
 # Stochastic differential equations: lowering of brownians, transformations,
 # SDE solvers (strong orders against exact solutions) and ensembles.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("brownians are lowered to diagonal, scalar and general noise", {
   t <- t_nounits; D <- D_nounits
   x <- Variable("x", t); y <- Variable("y", t); z <- Variable("z", t)
@@ -262,4 +265,30 @@ test_that("split step, additive noise and commutative noise methods converge", {
   expect_s3_class(.sde_default_alg(gen, "stiff"), "ISSEM")
   expect_s3_class(.sde_default_alg(gen, "stratonovich"), "LambaEulerHeun")
   expect_s3_class(.sde_default_alg(gen, c("stratonovich", "stiff")), "ImplicitEulerHeun")
+})
+
+test_that("the implicit SDE methods take nonlinear solver and Jacobian options", {
+  gbm <- SDEProblem(function(u, p, t) -20 * u + u^2 / 10, function(u, p, t) 0.3 * u, 1, c(0, 1))
+  ref <- solve(gbm, ImplicitEM(), dt = 1 / 64, adaptive = FALSE, seed = 3)
+  for (alg in list(ImplicitEM(nlsolve = NonlinearSolveAlg()), ImplicitEM(autodiff = AutoFiniteDiff()),
+                   ImplicitEM(nlsolve = NLFunctional(max_iter = 50L)))) {
+    s <- solve(gbm, alg, dt = 1 / 64, adaptive = FALSE, seed = 3)
+    expect_equal(tail(s$u, 1)[[1]], tail(ref$u, 1)[[1]], tolerance = 1e-6)
+  }
+  add <- SDEProblem(function(u, p, t) -5 * u + cos(t), function(u, p, t) 0.3 + 0 * u, 1, c(0, 1))
+  base <- solve(add, SKenCarp(), dt = 1 / 32, adaptive = FALSE, seed = 4)
+  for (alg in list(SKenCarp(extrapolant = "trivial"), SKenCarp(nlsolve = NonlinearSolveAlg()),
+                   SKenCarp(autodiff = AutoFiniteDiff()))) {
+    s <- solve(add, alg, dt = 1 / 32, adaptive = FALSE, seed = 4)
+    expect_equal(tail(s$u, 1)[[1]], tail(base$u, 1)[[1]], tolerance = 1e-6)
+  }
+  # the error estimate options keep the adaptive mean unbiased: E u(1) solves
+  # m' = -5 m + cos(t), m(0) = 1
+  m1 <- exp(-5) + (5 * cos(1) + sin(1) - 5 * exp(-5)) / 26
+  for (alg in list(SKenCarp(smooth_est = FALSE), SKenCarp(ode_error_est = FALSE))) {
+    v <- vapply(1:60, function(i) tail(solve(add, alg, seed = i)$u, 1)[[1]], 0)
+    expect_lt(abs(mean(v) - m1), 4 * 0.3 / sqrt(10 * 60))
+  }
+  expect_identical(ImplicitRKMil(new_jac_conv_bound = 1e-2)$new_jac_conv_bound, 1e-2)
+  expect_error(ISSEM(nlsolve = list()), "nlsolve")
 })

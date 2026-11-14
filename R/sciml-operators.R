@@ -41,6 +41,15 @@ print.AbstractSciMLOperator <- function(x, ...) {
 #' `mark_jacobian_current()` tracking changes of `J`; `StaticWOperator(W)`
 #' a factorized fixed `W`.
 #'
+#' The lazy combinations have constructors of their own:
+#' `AddedOperator(...)` (sum), `ComposedOperator(...)` (product, applied
+#' right to left), `ScaledOperator(lambda, L)` (`lambda L` with a number or
+#' scalar operator `lambda`), `InvertedOperator(L)` (applies `L^-1` through
+#' `solve`), `AdjointOperator(L)` and `TransposedOperator(L)` (equal for the
+#' real operators of R); `AddedScalarOperator(...)`,
+#' `ComposedScalarOperator(...)` and `InvertedScalarOperator(alpha)` are the
+#' sum, product and reciprocal of scalar operators, updated with them.
+#'
 #' Operators combine with `+`, `-`, `*` (composition and scaling) and apply
 #' with `L %*% v` (R 4.4 and later), `op_apply(L, v, u, p, t)`, or `L(v, u,
 #' p, t)` semantics through `op_apply`; `solve(L, b)` applies the inverse,
@@ -68,6 +77,7 @@ print.AbstractSciMLOperator <- function(x, ...) {
 #' @param W,callinv The matrix of `StaticWOperator()` and whether it is applied
 #'   through its factorization.
 #' @param L An operator.
+#' @param lambda A number or scalar operator.
 #' @param v,u,p,t Vector to act on and the state, parameters and time.
 #' @param ... Operators or options. `IdentityOperator()` without a numeric `n` hands its arguments to symcompR's quantum `IdentityOperator()`.
 #' @return An operator, a vector, a matrix or a logical.
@@ -79,6 +89,8 @@ print.AbstractSciMLOperator <- function(x, ...) {
 #' solve(L, c(3, 3))
 #' T <- update_coefficients(MatrixOperator(diag(2), function(A, u, p, t) t * diag(2)), NULL, NULL, 3)
 #' as.matrix(T)
+#' as.matrix(ComposedOperator(L, InvertedOperator(L)))
+#' InvertedScalarOperator(ScalarOperator(4))$value
 #' @name sciml_operators
 NULL
 
@@ -472,3 +484,81 @@ isconvertible <- function(L) !is.null(.as_sop(L)$as_matrix)
 #' @rdname sciml_operators
 #' @export
 has_concretization <- function(L) isconvertible(L)
+
+# ---------------------------------------------------------------------------
+# Lazy combinations by name (basic.jl, scalar.jl)
+
+# `op` under another kind, kept through updates
+.sop_kind <- function(op, kind, scalar = FALSE) {
+  upd <- op$update
+  op$kind <- kind
+  class(op) <- c(kind, if (scalar) "ScalarOperator", "AbstractSciMLOperator")
+  if (!is.null(upd)) op$update <- function(u, p, t, ...) .sop_kind(.sop_upd(list(update = upd), u, p, t, ...), kind, scalar)
+  op
+}
+
+#' @rdname sciml_operators
+#' @export
+AddedOperator <- function(...) .sop_kind(Reduce(.sop_add, lapply(list(...), .as_sop)), "AddedOperator")
+
+#' @rdname sciml_operators
+#' @export
+ComposedOperator <- function(...) .sop_kind(Reduce(.sop_compose, lapply(list(...), .as_sop)), "ComposedOperator")
+
+#' @rdname sciml_operators
+#' @export
+ScaledOperator <- function(lambda, L) {
+  lambda <- .as_sop(lambda)
+  if (!inherits(lambda, "ScalarOperator")) stop("lambda must be a number or a scalar operator", call. = FALSE)
+  .sop_kind(.sop_compose(lambda, .as_sop(L)), "ScaledOperator")
+}
+
+#' @rdname sciml_operators
+#' @export
+InvertedOperator <- function(L) {
+  L <- .as_sop(L)
+  .sop("InvertedOperator", rev(L$size), function(v) .sop_solve(L, v),
+       if (!is.null(L$as_matrix)) function() { m <- .sop_matrix(L); if (length(m) == 1L) 1 / m else solve(m) },
+       function(b) as.numeric(L$apply(b)),
+       update = if (!is.null(L$update)) function(u, p, t, ...) InvertedOperator(.sop_upd(L, u, p, t, ...)),
+       linear = L$linear, constant = L$constant, adjoint = function() InvertedOperator(t(L)), ops = list(L))
+}
+
+.sop_transpose <- function(L, kind) {
+  L <- .as_sop(L)
+  At <- t(L)
+  .sop(kind, rev(L$size), At$apply, At$as_matrix, At$solve_fn,
+       update = if (!is.null(L$update)) function(u, p, t, ...) .sop_transpose(.sop_upd(L, u, p, t, ...), kind),
+       linear = L$linear, constant = L$constant, adjoint = function() L, ops = list(L))
+}
+
+#' @rdname sciml_operators
+#' @export
+AdjointOperator <- function(L) .sop_transpose(L, "AdjointOperator")
+
+#' @rdname sciml_operators
+#' @export
+TransposedOperator <- function(L) .sop_transpose(L, "TransposedOperator")
+
+.sop_scalar_comb <- function(kind, ops, fn) {
+  ops <- lapply(ops, .as_sop)
+  if (!all(vapply(ops, inherits, NA, "ScalarOperator"))) stop(kind, " combines scalar operators", call. = FALSE)
+  op <- ScalarOperator(fn(vapply(ops, function(o) o$value, 0)))
+  op <- .sop_kind(op, kind, scalar = TRUE)
+  op$constant <- all(vapply(ops, function(o) isTRUE(o$constant), NA))
+  op$ops <- ops
+  if (!op$constant) op$update <- function(u, p, t, ...) .sop_scalar_comb(kind, lapply(ops, .sop_upd, u = u, p = p, t = t, ...), fn)
+  op
+}
+
+#' @rdname sciml_operators
+#' @export
+AddedScalarOperator <- function(...) .sop_scalar_comb("AddedScalarOperator", list(...), sum)
+
+#' @rdname sciml_operators
+#' @export
+ComposedScalarOperator <- function(...) .sop_scalar_comb("ComposedScalarOperator", list(...), prod)
+
+#' @rdname sciml_operators
+#' @export
+InvertedScalarOperator <- function(alpha) .sop_scalar_comb("InvertedScalarOperator", list(alpha), function(x) 1 / x)

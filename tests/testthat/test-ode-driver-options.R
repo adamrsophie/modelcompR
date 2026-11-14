@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("isoutofdomain rejects steps, unstable_check ends, internalnorm and force_dtmin are used", {
   pr <- ODEProblem(function(u, p, t) -1, 1, c(0, 2))
   expect_equal(tail(solve(pr, Tsit5())$u, 1)[[1]], -1, tolerance = 1e-12)

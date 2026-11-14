@@ -34,6 +34,15 @@
 \alias{iscached}
 \alias{isconvertible}
 \alias{has_concretization}
+\alias{AddedOperator}
+\alias{ComposedOperator}
+\alias{ScaledOperator}
+\alias{InvertedOperator}
+\alias{AdjointOperator}
+\alias{TransposedOperator}
+\alias{AddedScalarOperator}
+\alias{ComposedScalarOperator}
+\alias{InvertedScalarOperator}
 \title{SciML operators}
 \usage{
 op_apply(L, v, u = NULL, p = NULL, t = NULL)
@@ -106,6 +115,24 @@ iscached(L)
 isconvertible(L)
 
 has_concretization(L)
+
+AddedOperator(...)
+
+ComposedOperator(...)
+
+ScaledOperator(lambda, L)
+
+InvertedOperator(L)
+
+AdjointOperator(L)
+
+TransposedOperator(L)
+
+AddedScalarOperator(...)
+
+ComposedScalarOperator(...)
+
+InvertedScalarOperator(alpha)
 }
 \arguments{
 \item{L}{An operator.}
@@ -139,6 +166,8 @@ named arguments (such as \code{gamma}) passed to \code{update_coefficients()}.}
 
 \item{W, callinv}{The matrix of \code{StaticWOperator()} and whether it is applied
 through its factorization.}
+
+\item{lambda}{A number or scalar operator.}
 }
 \value{
 An operator, a vector, a matrix or a logical.
@@ -163,6 +192,15 @@ implicit solvers, with \code{jacobian_stale()}, \code{mark_jacobian_updated()} a
 a factorized fixed \code{W}.
 }
 \details{
+The lazy combinations have constructors of their own:
+\code{AddedOperator(...)} (sum), \code{ComposedOperator(...)} (product, applied
+right to left), \code{ScaledOperator(lambda, L)} (\verb{lambda L} with a number or
+scalar operator \code{lambda}), \code{InvertedOperator(L)} (applies \code{L^-1} through
+\code{solve}), \code{AdjointOperator(L)} and \code{TransposedOperator(L)} (equal for the
+real operators of R); \code{AddedScalarOperator(...)},
+\code{ComposedScalarOperator(...)} and \code{InvertedScalarOperator(alpha)} are the
+sum, product and reciprocal of scalar operators, updated with them.
+
 Operators combine with \code{+}, \code{-}, \code{*} (composition and scaling) and apply
 with \code{L \%*\% v} (R 4.4 and later), \code{op_apply(L, v, u, p, t)}, or \code{L(v, u, p, t)} semantics through \code{op_apply}; \code{solve(L, b)} applies the inverse,
 \code{as.matrix(L)} or \code{concretize(L)} gives the matrix and \code{exp(L)} its
@@ -182,4 +220,6 @@ as.matrix(L + 2 * D)
 solve(L, c(3, 3))
 T <- update_coefficients(MatrixOperator(diag(2), function(A, u, p, t) t * diag(2)), NULL, NULL, 3)
 as.matrix(T)
+as.matrix(ComposedOperator(L, InvertedOperator(L)))
+InvertedScalarOperator(ScalarOperator(4))$value
 }

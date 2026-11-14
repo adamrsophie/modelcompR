@@ -5,6 +5,9 @@
 # tools/nonlinearsolve-cminpack-reference.cpp (the MINPACK port of Eigen: the
 # cminpack_jll binary Julia loads computes every norm as garbage).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .wx_TT <- c(0, 0.5, 1, 1.5, 2, 2.5)
 .wx_YY <- c(1, 1.6, 2.8, 4.4, 7.6, 12)
 .wx_fun <- list(

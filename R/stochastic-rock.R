@@ -528,9 +528,13 @@ NULL
       Gs1 <- .srock_g(g, uim1, p, th1, type)
       unew <- unew + (Gs1[, i] * dW[i] + (Gs[, i] - Gs1[, i]) * ((dW[i]^2 - abs(dt)) / (eta1 * sqrt_dt)))
     }
-    # as in StochasticDiffEqROCK, the argument accumulates over i from the
-    # last one of the loop above
+    # each channel's argument starts from U1. StochasticDiffEqROCK lets it
+    # accumulate over i from the last argument of the loop above, which
+    # leaves the method without convergence for general noise (strong error
+    # flat at 0.1 and E[X^2] twice the exact value for a three channel
+    # geometric Brownian motion; documentation/PORTING.md)
     for (i in seq_len(m)) {
+      uim1 <- U1
       for (k in seq_len(m)) {
         wik <- if (i > k) 0.5 * (1 + eta2) * dW[k] else if (i < k) 0.5 * (1 - eta2) * dW[k] else 0.5 * (eta1 * sqrt_dt)
         uim1 <- uim1 + Gs[, k] * wik
@@ -660,8 +664,9 @@ NULL
       ttmp <- tim1 + mus3
       Gm <- .srock_g(g, uim1 + mus3 * ys3 - 1 / 4 * S, p, ttmp, type)
       Gp <- .srock_g(g, uim1 + mus3 * ys3 + 1 / 4 * S, p, ttmp, type)
-      # as in StochasticDiffEqROCK, the factor m - 1 compounds over i
-      sqrt_dt <- sqrt_dt * (m - 1)
+      # the factor stays sqrt(dt) for every channel. StochasticDiffEqROCK
+      # multiplies it by m - 1 on each pass, which compounds over i and
+      # breaks convergence for three or more channels (PORTING.md)
       uu <- uu + sqrt_dt * (Gp[, i] - Gm[, i])
     }
   }

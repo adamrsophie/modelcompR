@@ -1,6 +1,9 @@
 # PDESystem, debugging and assertions, units, dynamic optimization and the
 # small API of the misc module. Reference values are analytic.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("PDESystem collects the problem and builds analytic functions", {
   t <- independent_variable("t"); x <- independent_variable("x")
   u <- Variable("u", list(t, x)); a <- Parameter("a")

@@ -1,5 +1,5 @@
 # The nonlinear solver choices of OrdinaryDiffEqNonlinearSolve (src/type.jl:
-# NLFunctional, NLAnderson, NLNewton, NonlinearSolveAlg) that
+# NLFunctional, NLAnderson, NLNewton, NonlinearSolveAlg, HomotopyNonlinearSolveAlg) that
 # StochasticDiffEq reexports for the `nlsolve` argument of its implicit
 # methods, and TauLeapingDrift of StochasticDiffEqCore
 # (src/integrators/integrator_utils.jl), the drift of a regular jump that
@@ -15,7 +15,13 @@
 #' `NLAnderson()` the fixed point iteration with Anderson acceleration over
 #' the last `max_history` iterates from iteration `aa_start`; and
 #' `NonlinearSolveAlg(alg)` hands the stage equations to the nonlinear
-#' solver `alg` (for example [NewtonRaphson()]). Each iteration stops when the
+#' solver `alg` (for example [NewtonRaphson()]), with the Jacobian `W` of the
+#' integrator as its Jacobian unless `precondition` changes the residual; and
+#' `HomotopyNonlinearSolveAlg(alg)` solves each stage by continuation in the
+#' step size, from `lambda = 0` (where the stage solution is known) to
+#' `lambda = 1`, with the continuation algorithm `alg` (for example
+#' [HomotopySweep()] or [ArcLengthContinuation()]); it does not take DAEs.
+#' Each iteration stops when the
 #' scaled increment, multiplied by `eta = theta / (1 - theta)`, is below
 #' `kappa`, and fails after `max_iter` iterations; a rate `theta` below
 #' `fast_convergence_cutoff` counts as fast convergence.
@@ -32,7 +38,14 @@
 #'   value is the step length along the Newton update, or `NULL`.
 #' @param max_history,aa_start,droptol The Anderson acceleration memory,
 #'   first accelerated iteration and drop tolerance.
-#' @param alg A nonlinear solver algorithm.
+#' @param alg A nonlinear solver algorithm, or a continuation algorithm for
+#'   `HomotopyNonlinearSolveAlg()`.
+#' @param precondition A left preconditioner `precondition(fu, u_stage, p)`
+#'   of the stage residual `fu`, or `NULL`.
+#' @param postcondition An iterate corrector `postcondition(u_stage,
+#'   u_stage_prev, p, cache)` in terms of the stage state, or `NULL`.
+#' @param abstol,reltol Tolerances of the continuation solve; `abstol = NULL`
+#'   is `kappa` times the absolute tolerance of the integrator.
 #' @param predictor A function `predictor(uprev, p, t, dt)` giving the start
 #'   of each stage solve, or `NULL`.
 #' @return A nonlinear solver choice (class `AbstractNLSolverAlgorithm`).
@@ -40,6 +53,7 @@
 #' NLNewton(kappa = 1e-3)$kappa
 #' NLAnderson()$max_history
 #' NonlinearSolveAlg()$alg$name
+#' HomotopyNonlinearSolveAlg()$alg$name
 #' @name nl_solver_choices
 NULL
 
@@ -85,12 +99,29 @@ NLNewton <- function(kappa = 1 / 100, max_iter = 10L, fast_convergence_cutoff = 
 
 #' @rdname nl_solver_choices
 #' @export
-NonlinearSolveAlg <- function(alg = NewtonRaphson(), kappa = 1 / 100, max_iter = 10L,
+NonlinearSolveAlg <- function(alg = NewtonRaphson(autodiff = AutoFiniteDiff()), kappa = 1 / 100, max_iter = 10L,
                               fast_convergence_cutoff = 1 / 5, new_W_dt_cutoff = 1 / 5, always_new = FALSE,
-                              check_div = TRUE, predictor = NULL)
+                              check_div = TRUE, precondition = NULL, postcondition = NULL, predictor = NULL) {
+  if (!inherits(alg, "NonlinearAlgorithm")) stop("alg must be a nonlinear solver algorithm", call. = FALSE)
+  if (!is.null(precondition) && !is.function(precondition))
+    stop("precondition is a function precondition(fu, u_stage, p) or NULL", call. = FALSE)
+  if (!is.null(postcondition) && !is.function(postcondition))
+    stop("postcondition is a function postcondition(u_stage, u_stage_prev, p, cache) or NULL", call. = FALSE)
   .nlsolver_alg("NonlinearSolveAlg", kappa = kappa, max_iter = as.integer(max_iter),
                 fast_convergence_cutoff = fast_convergence_cutoff, new_W_dt_cutoff = new_W_dt_cutoff,
-                always_new = always_new, check_div = check_div, alg = alg, predictor = .check_predictor(predictor))
+                always_new = always_new, check_div = check_div, alg = alg, precondition = precondition,
+                postcondition = postcondition, predictor = .check_predictor(predictor))
+}
+
+#' @rdname nl_solver_choices
+#' @export
+HomotopyNonlinearSolveAlg <- function(alg = HomotopySweep(inner = NewtonRaphson(autodiff = AutoFiniteDiff())),
+                                      kappa = 1 / 100, max_iter = 10L, fast_convergence_cutoff = 1 / 5,
+                                      abstol = NULL, reltol = NULL) {
+  if (!inherits(alg, "NonlinearAlgorithm")) stop("alg must be a continuation algorithm", call. = FALSE)
+  .nlsolver_alg("HomotopyNonlinearSolveAlg", kappa = kappa, max_iter = as.integer(max_iter),
+                fast_convergence_cutoff = fast_convergence_cutoff, abstol = abstol, reltol = reltol, alg = alg)
+}
 
 #' Drift of a regular jump
 #'

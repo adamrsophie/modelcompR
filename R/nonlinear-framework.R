@@ -137,7 +137,7 @@ GeneralizedFirstOrderAlgorithm <- function(descent = NewtonDescent(), linesearch
                                            vjp_autodiff = NULL, concrete_jac = NULL, jacobian_reuse = NULL,
                                            name = "GeneralizedFirstOrderAlgorithm") {
   a <- .nl_alg(name, descent = descent, linesearch = linesearch, trustregion = trustregion,
-               max_shrink_times = as.integer(max_shrink_times))
+               max_shrink_times = as.integer(max_shrink_times), autodiff = autodiff)
   a$run <- function(F, J, x0, opts, lb, ub, ls) .nlf_first_order(a, F, J, x0, opts, lb, ub, ls)
   a
 }
@@ -174,7 +174,7 @@ PseudoTransient <- function(alpha_initial = 1e-3, linesearch = NULL, mass_matrix
 {
   d <- DampedNewtonDescent(initial_damping = alpha_initial, damping_fn = "SER")
   d$mass_matrix <- mass_matrix
-  GeneralizedFirstOrderAlgorithm(descent = d, linesearch = linesearch, name = "PseudoTransient")
+  GeneralizedFirstOrderAlgorithm(descent = d, linesearch = linesearch, autodiff = autodiff, name = "PseudoTransient")
 }
 
 # ---------------------------------------------------------------------------

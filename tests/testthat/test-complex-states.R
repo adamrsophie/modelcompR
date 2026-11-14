@@ -3,6 +3,9 @@
 # allowscomplex trait, interpolant derivatives and the keyword checks of SDE
 # and DDE solves. Reference values: tools/complex-probe.jl.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 cx_H <- function(t) -1i * matrix(c(t, 1, 1, -t), 2)
 cx_fun <- function(u, p, t) as.vector(cx_H(t) %*% u)
 cx_T <- 0.1
@@ -223,4 +226,22 @@ test_that("interpolant derivatives and linear extrapolation match OrdinaryDiffEq
   expect_equal(sol(-0.25, deriv = 1), c(-0.21690878241481037, -0.05367088412761045), tolerance = 1e-12)
   expect_equal(sol(2.4), c(1.491739599741374, 0.6654722890906228), tolerance = 1e-12)
   expect_equal(sol(2.4, deriv = 1), c(0.33230040683844697, 0.15762931683670756), tolerance = 1e-12)
+})
+
+test_that("the FIRK methods integrate complex states in their real form", {
+  f <- function(u, p, t) c(-1i * u[1], -(2 + 1i) * u[2] + u[1])
+  prob <- ODEProblem(f, c(1 + 0i, 0.5 - 0.2i), c(0, 1))
+  ref <- solve(prob, Vern9(), abstol = 1e-13, reltol = 1e-13)
+  r1 <- ref$u[[length(ref$u)]]
+  for (alg in list(RadauIIA3(), RadauIIA5(), RadauIIA9(), AdaptiveRadau(), GaussLegendre(),
+                   RadauIIA5(autodiff = AutoFiniteDiff()))) {
+    sol <- solve(prob, alg, abstol = 1e-9, reltol = 1e-9)
+    expect_identical(sol$retcode, "Success")
+    expect_true(is.complex(sol$u[[length(sol$u)]]))
+    expect_lt(max(Mod(sol$u[[length(sol$u)]] - r1)), 1e-8)
+    expect_lt(max(Mod(sol(0.37) - ref(0.37))), 1e-6)
+  }
+  pj <- ODEProblem(ODEFunction(f, jac = function(u, p, t) matrix(c(-1i, 1, 0, -(2 + 1i)), 2)), c(1 + 0i, 0.5 - 0.2i), c(0, 1))
+  sj <- solve(pj, RadauIIA5(), abstol = 1e-9, reltol = 1e-9)
+  expect_lt(max(Mod(sj$u[[length(sj$u)]] - r1)), 1e-8)
 })

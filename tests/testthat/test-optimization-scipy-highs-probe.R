@@ -1,6 +1,9 @@
 # Reference results of SciPy 1.18.1 (HiGHS 1.12.0) on Linux x86-64 from
 # tools/highs-probe.py: status, simplex iterations and the bits of x for the
 # dual simplex method with and without presolve and the default linprog.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .hs_probe_lps <- list(
   t_lp1 = list(
     c = c(-0x1p+0, -0x1p+1, 0x1p-1),

@@ -3,6 +3,9 @@
 # values are the presolved models HiGHS 1.12.0 gives on Linux x86-64
 # (tools/highs-probe.py raw_presolve, CI run highsE2u), compared bit for bit.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 hx_same <- function(a, b) {
   length(a) == length(b) && all(sprintf("%a", as.numeric(a)) == sprintf("%a", as.numeric(b)))
 }

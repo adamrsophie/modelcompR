@@ -106,17 +106,18 @@ An ADType object; \code{NoAutoDiffSelectedError()} a condition;
 }
 \description{
 The backends of ADTypes.jl, for the \code{autodiff} arguments of the solvers.
-The nonlinear solvers do not differentiate with dual numbers (the ODE
-solvers and the optimizers do for \code{AutoForwardDiff()}): every backend
-that differentiates exactly (\code{AutoZygote()}, \code{AutoEnzyme()}, \code{AutoReverseDiff()},
-\code{AutoSymbolics()}, ...) uses the problem's Jacobian when it has one and
-central differences otherwise, as \code{\link[=AutoForwardDiff]{AutoForwardDiff()}} does, and
-\code{AutoFiniteDifferences()} uses central differences (the bounded solvers
-use their bound aware differences only for \code{AutoFiniteDiff()} itself).
+Without a Jacobian in the problem, \code{\link[=AutoForwardDiff]{AutoForwardDiff()}} and every backend
+that differentiates exactly (\code{AutoZygote()}, \code{AutoEnzyme()},
+\code{AutoReverseDiff()}, \code{AutoSymbolics()}, ...) differentiate with dual
+numbers, falling back to forward differences when the residual cannot run
+on them. \code{\link[=AutoFiniteDiff]{AutoFiniteDiff()}} uses finite differences (forward, central or
+complex step, with the steps of FiniteDiff.jl) and
+\code{AutoFiniteDifferences()} central differences; the bounded solvers use
+their bound aware differences for \code{AutoFiniteDiff()} itself.
 \code{NoAutoDiff()} selects no differentiation: the bounded solvers
 (\code{\link[=TrustRegionReflective]{TrustRegionReflective()}} and the others) signal
 \code{NoAutoDiffSelectedError()} when the problem has no Jacobian; the other
-solvers fall back to central differences.
+solvers fall back to the default.
 }
 \details{
 The deprecated constructors of ADTypes return their replacements:

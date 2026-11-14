@@ -1,3 +1,6 @@
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 nl_prob <- function() NonlinearProblem(function(u, p) c(u[1]^2 + u[2]^2 - 2, u[1] - u[2]), c(2, 0.5))
 
 test_that("composed first order methods converge", {
@@ -90,3 +93,4 @@ test_that("TrustRegion takes the defaults of NonlinearSolveFirstOrder", {
   expect_identical(sol$retcode, "Success")
   expect_equal(as.numeric(sol$u), c(1, 1), tolerance = 1e-10)
 })
+

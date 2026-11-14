@@ -10,6 +10,9 @@
 # MREIL. The solves of the probe that take thousands of steps at tight
 # tolerances also match; they are left out here for time.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 mr_f1 <- function(u, p, t) c(-p[1] * u[1] + u[2] * u[2] + 0.5 * t, -p[1] * (u[2] - u[1]) - 0.5 * t * u[2])
 mr_f2 <- function(u, p, t) c(u[2] - 0.1 * u[1] * u[1] * u[1] + t, -u[1] + 0.2 * u[2] * t)
 mr_g1 <- function(u, p, t) c(-2 * u[1] + u[2] + 0.25 * t, u[1] - 3 * u[2])

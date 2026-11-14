@@ -128,6 +128,10 @@
     nl$kind <- class(nlsolve)[1L]
     nl$always_new <- isTRUE(nlsolve$always_new)
     nl$relax <- nlsolve$relax
+    nl$alg <- nlsolve$alg
+    nl$precondition <- nlsolve$precondition
+    nl$postcondition <- nlsolve$postcondition
+    nl$homotopy_tol <- nlsolve[c("abstol", "reltol")]
     if (nl$kind == "NLAnderson") {
       # NLAndersonConstantCache; dz, dzold and z_old start as u (set on the
       # first solve) and the history restarts at every solve
@@ -154,12 +158,13 @@
 }
 
 # The `nlsolve` argument of ImplicitEuler, Trapezoid and the SDIRK methods:
-# NLNewton(), NLFunctional() or NLAnderson().
+# NLNewton(), NLFunctional(), NLAnderson(), NonlinearSolveAlg() or
+# HomotopyNonlinearSolveAlg().
 .check_nlsolve <- function(nlsolve) {
   if (is.null(nlsolve)) return(NULL)
-  if (!inherits(nlsolve, c("NLNewton", "NLFunctional", "NLAnderson")))
-    stop("nlsolve must be NLNewton(), NLFunctional() or NLAnderson(); ", class(nlsolve)[1L],
-         " is not available for this method", call. = FALSE)
+  if (!inherits(nlsolve, c("NLNewton", "NLFunctional", "NLAnderson", "NonlinearSolveAlg", "HomotopyNonlinearSolveAlg")))
+    stop("nlsolve must be NLNewton(), NLFunctional(), NLAnderson(), NonlinearSolveAlg() or ",
+         "HomotopyNonlinearSolveAlg(); ", class(nlsolve)[1L], " is not available for this method", call. = FALSE)
   if (inherits(nlsolve, "NLNewton") && !is.null(nlsolve$relax) && !is.numeric(nlsolve$relax) &&
       !is.function(nlsolve$relax))
     stop("relax is a number in [0, 1), a line search function or NULL", call. = FALSE)
@@ -217,6 +222,7 @@
       if (is.null(ctx$mass)) nl$J - diag(1 / gdt, nrow(nl$J)) else nl$J - ctx$mass / gdt
     } else nl$J + dae$cj * nl$Jdu
     nl$W <- .factorize(W)
+    nl$Wmat <- W
     nl$W_gdt <- if (is.null(dae)) gdt else dae$cj
     cnt$nw <- 1L
   }
@@ -244,7 +250,14 @@
   nl$isfs <- firststage
   dae <- !is.null(u0)
   dirk <- identical(method, "dirk")
-  newton <- nl$kind == "NLNewton"
+  # NonlinearSolveAlg runs the Newton loop with an inner solve as its step;
+  # its W is the inner Jacobian unless a preconditioner changes the residual
+  nsa <- nl$kind == "NonlinearSolveAlg"
+  if (nl$kind == "HomotopyNonlinearSolveAlg")
+    return(.nlsolve_homotopy(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, dae = !is.null(u0),
+                             dirk = identical(method, "dirk")))
+  newton <- nl$kind %in% c("NLNewton", "NonlinearSolveAlg")
+  usesW <- !nsa || is.null(nl$precondition)
   always_new <- newton && isTRUE(nl$always_new)
   aa <- nl$aa
   cnt <- list(nf = 0L, njacs = 0L, nsolve = 0L, nw = 0L)
@@ -326,7 +339,7 @@
     aa$dzs <- vector("list", m)
   }
   repeat {
-    if (newton && !always_new) {
+    if (newton && usesW && !always_new) {
       # do_newJW measures the step change by 1 / (gamma dt), without alpha
       w <- .update_W(nl, ctx, t, uprev, gdt, dae = dae_w, gdt_test = gamma * dt)
       add(w)
@@ -344,14 +357,22 @@
     converged <- FALSE
     for (it in seq_len(nl$maxiters)) {
       ndzprev <- ndz
-      if (always_new) {
+      if (always_new && usesW) {
         # integrator.u = uprev + gamma z, the state calc_W takes at t + dt
         w <- .update_W(nl, ctx, t, uprev, gdt, dae = dae_w, newJW = c(TRUE, TRUE),
                        ju = if (dae) uprev else uprev + gamma * z, jt = if (dae) t else t + dt)
         add(w)
         if (!is.null(w$eigen_est)) eig <- w$eigen_est
       }
-      if (newton) {
+      if (nsa) {
+        st <- .nsa_step(nl, ctx, rhs, z, tmp, gamma, u0, dae, dirk, usesW)
+        cnt$nf <- cnt$nf + st$nf
+        cnt$nsolve <- cnt$nsolve + st$nsolve
+        ustep <- rhs(z)$ustep
+        ndz <- if (is.null(st$z)) Inf else .err_norm(z - st$z, uprev, ustep, ctx$abstol, ctx$reltol)
+        if (is.finite(ndz) && !is.null(ctx$newton_scale)) ndz <- ndz * ctx$newton_scale
+        znext <- if (is.finite(ndz)) st$z else z
+      } else if (newton) {
         rr <- rhs(z)
         ztmp <- rr$b
         ustep <- rr$ustep
@@ -420,7 +441,7 @@
       eta <- theta / (1 - theta)
       # check_eta_convergence trusts theta on the first iteration only for
       # the Newton method of an adaptive algorithm
-      if ((it == 1L && ndz < 1e-5) || ((it > 1L || (eta_first && newton)) && eta >= 0 && eta * ndz < nl$kappa)) {
+      if ((it == 1L && ndz < 1e-5) || ((it > 1L || (eta_first && newton && usesW)) && eta >= 0 && eta * ndz < nl$kappa)) {
         converged <- TRUE
         break
       }
@@ -436,7 +457,7 @@
       nl$nfails <- nl$nfails + 1L
     }
     # a stale Jacobian gets one retry with a fresh one (Newton only)
-    if (newton && nl$status == "Divergence" && !isTRUE(nl$J_t == t)) {
+    if (newton && usesW && nl$status == "Divergence" && !isTRUE(nl$J_t == t)) {
       nl$status <- "TryAgain"
       nl$nfails <- nl$nfails + 1L
       if (!always_new) next
@@ -446,6 +467,70 @@
   nl$eta_old <- eta
   nl$firstcall <- FALSE
   c(list(z = z, ok = nl$status == "Convergence", eigen_est = eig), cnt)
+}
+
+# compute_step! of NonlinearSolveAlg: a complete solve of the stage residual
+# by the inner algorithm from z (the solve! path of a NonlinearSolve cache).
+# The residual is the Newton residual, whose Jacobian is W = J - M / (gamma
+# dt) of the integrator; the preconditioner G(fu, u_stage, p) changes the
+# residual, and the inner solver then forms its own Jacobian. The corrector
+# H(u_stage, u_stage_prev, p, cache) sees the stage state, mapped from and to
+# z. Returns the new iterate (NULL when the inner solve fails) and counts.
+.nsa_step <- function(nl, ctx, rhs, z, tmp, gamma, u0, dae, dirk, usesW) {
+  to_u <- function(x) if (dae) u0 + x else if (dirk) tmp + gamma * x else x
+  to_z <- function(u) if (dae) u - u0 else if (dirk) (u - tmp) / gamma else u
+  nf <- 0L
+  F <- function(x) {
+    nf <<- nf + 1L
+    rr <- rhs(x)
+    if (is.null(nl$precondition)) rr$b else as.numeric(nl$precondition(rr$b, rr$ustep, ctx$p))
+  }
+  Wm <- nl$Wmat
+  J <- if (usesW && !is.null(Wm)) function(x) Wm else NULL
+  H <- nl$postcondition
+  # only the components the corrector changes are mapped back, so a corrector
+  # that leaves the stage state alone leaves z without roundoff
+  opts <- list(postcondition = if (!is.null(H)) function(xnew, xold) {
+    us <- to_u(xnew)
+    uc <- as.numeric(H(us, to_u(xold), ctx$p, NULL))
+    ch <- uc != us
+    if (any(ch)) xnew[ch] <- to_z(uc)[ch]
+    xnew
+  })
+  res <- tryCatch(.nl_run(nl$alg, F, J, z, opts), error = function(e) NULL)
+  ok <- !is.null(res) && identical(res$retcode, "Success") && all(is.finite(res$u))
+  list(z = if (ok) as.numeric(res$u), nf = nf, nsolve = as.integer(if (is.null(res)) 0L else res$iters %||% 0L))
+}
+
+# HomotopyNonlinearSolveAlg: the stage equation embedded in the step size,
+#   DIRK: (lambda dt f(tmp + gamma z) - M z) / (gamma dt) = 0
+#   multistep: tmp + lambda f(z) - (alpha / (gamma dt)) M z = 0,
+# followed by continuation from lambda = 0 (z = 0, or the linear solve of
+# the multistep form) to lambda = 1. A continuation that does not reach
+# lambda = 1 rejects the step.
+.nlsolve_homotopy <- function(nl, ctx, t, dt, z, tmp, gamma, alpha, tstep, uprev, dae, dirk) {
+  if (dae || (!is.null(ctx$mass) && qr(as.matrix(ctx$mass))$rank < NROW(ctx$mass)))
+    stop("HomotopyNonlinearSolveAlg does not take DAEs (singular mass matrices or DAE problems)", call. = FALSE)
+  invgdt <- 1 / (gamma * dt)
+  nf <- 0L
+  at <- function(lam) list(F = function(x) {
+    nf <<- nf + 1L
+    if (dirk) (lam * dt * ctx$f(tmp + gamma * x, ctx$p, tstep) - .mass_mul(ctx$mass, x)) * invgdt
+    else tmp + lam * ctx$f(x, ctx$p, tstep) - (alpha * invgdt) * .mass_mul(ctx$mass, x)
+  }, J = NULL)
+  z0 <- if (dirk) 0 * z else {
+    b <- tmp / (alpha * invgdt)
+    if (is.null(ctx$mass)) b else as.numeric(solve(as.matrix(ctx$mass), b))
+  }
+  abstol <- nl$homotopy_tol$abstol %||% (nl$kappa * min(ctx$abstol))
+  opts <- list(abstol = abstol, reltol = nl$homotopy_tol$reltol)
+  res <- tryCatch(.nl_sweep(at, z0, nl$alg, opts, 0, 1), error = function(e) NULL)
+  ok <- !is.null(res) && identical(res$retcode, "Success") && all(is.finite(res$u))
+  nl$status <- if (ok) "Convergence" else "Divergence"
+  nl$nfails <- if (ok) 0L else nl$nfails + 1L
+  nl$firstcall <- FALSE
+  list(z = if (ok) as.numeric(res$u) else z, ok = ok, eigen_est = NULL, nf = nf, njacs = 0L,
+       nsolve = min(as.integer(if (is.null(res)) 0L else res$nsteps %||% 0L), nl$maxiters), nw = 0L)
 }
 
 # anderson of utils.jl: the accelerated iterate from the history of the
@@ -1317,3 +1402,8 @@ FBDF <- function(max_order = 5L, stald = TRUE, stald_rrcut = 0.98, stald_vrrtol 
   .new_bdf_alg("FBDF", max_order, dae = FALSE, qmax = qmax, qsteady_min = qsteady_min,
                qsteady_max = qsteady_max, opts = opts, step_limiter = step_limiter)
 })
+
+# can_smooth_est: the smoothed error estimate reuses the W of the Newton
+# iteration, which NonlinearSolveAlg has unless a preconditioner is set
+.can_smooth_est <- function(nl) !is.null(nl$W) && (nl$kind == "NLNewton" ||
+  (nl$kind == "NonlinearSolveAlg" && is.null(nl$precondition)))

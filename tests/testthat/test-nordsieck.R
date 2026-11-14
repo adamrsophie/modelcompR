@@ -12,6 +12,9 @@
 # functional iterations fail (AN5 once, JVODE_Adams 6 times, JVODE_BDF
 # twice; as in Julia these failures do not count as rejections).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ns_setup <- function() {
   lv <- function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2] + 0.1 * t)
   list(prob = ODEProblem(lv, c(1, 1), c(0, 2), c(1.5, 3)),

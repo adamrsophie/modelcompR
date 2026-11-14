@@ -3,6 +3,9 @@
 # 0.1.20), with derivatives that round as ForwardDiff's: problem, method,
 # maxiters (0: the default), retcode, u and objective (hexadecimal),
 # iterations and fevals.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 simple_ref <- c(
   "quad\tSimpleLBFGS\t3\tSuccess\t0x1.3333333333333p-1 -0x1.999999999999ap-1\t-0x1.6666666666666p-1\t3\t0",
   "quad\tSimpleLBFGS\t25\tSuccess\t0x1.3333333333333p-1 -0x1.999999999999ap-1\t-0x1.6666666666666p-1\t3\t0",

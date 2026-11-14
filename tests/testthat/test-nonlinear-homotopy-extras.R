@@ -3,6 +3,9 @@
 # NonlinearSolveBase 2.55.1); LAM is the sequence of distinct lambda values at
 # which the residual was evaluated.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .hx_problems <- list(
   atan = list(function(u, l) c(l * atan(u[1] - 3) + (1 - l) * u[1]),
               function(u, l) matrix(l / (1 + (u[1] - 3)^2) + (1 - l), 1, 1), 12),

@@ -14,6 +14,9 @@
 # 1.3241960614808945e-4), and so does R. The QuadratureAdjoint estimate,
 # which has no such steps, matches to 1e-11.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 gea_lin <- function(...) ODEProblem(function(u, p, t) p * u, 1, c(0, 2), 2, ...)
 gea_lv <- function(u, p, t) c(1.5 * u[1] - u[1] * u[2], -3 * u[2] + u[1] * u[2])
 

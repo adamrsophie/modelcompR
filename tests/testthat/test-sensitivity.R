@@ -5,6 +5,9 @@
 # change parameters, a mass matrix DAE, an SDE path with a fixed seed), and
 # the nilsas_min example of the Julia test suite.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 sensitivity_fd <- function(F, th, h = 1e-6) {
   vapply(seq_along(th), function(j) {
     a <- th; b <- th

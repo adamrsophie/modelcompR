@@ -209,10 +209,55 @@
   out
 }
 
+# Complex states. The FIRK steps split the stage vectors into the real and
+# complex parts of the eigenbasis of the Runge-Kutta matrix, which assumes a
+# real state: OrdinaryDiffEqFIRK returns wrong values or Unstable on complex
+# states (RadauIIA3 integrates u' = -i u to 0.487 + 0i at t = 1). A complex
+# state of length n is stepped as the real state c(Re(u), Im(u)) of length
+# 2n, with f, the Jacobian (the real form [Re J, -Im J; Im J, Re J] of a
+# complex Jacobian), the mass matrix and the tolerances in the same form;
+# the cache keeps the stage values real, and the state, derivatives and
+# stage values the step returns are complex again.
+.cx_re <- function(x) if (is.complex(x)) c(Re(x), Im(x)) else c(x, 0 * x)
+.cx_back <- function(x, n) complex(real = x[seq_len(n)], imaginary = x[n + seq_len(n)])
+.cx_block <- function(A) {
+  A <- as.matrix(A)
+  rbind(cbind(Re(A), -Im(A)), cbind(Im(A), Re(A)))
+}
+.cx_ctx <- function(ctx, n) {
+  f <- ctx$f; jac <- ctx$jac
+  ctx$f <- function(v, p, t) .cx_re(as.vector(f(.cx_back(v, n), p, t)))
+  if (!is.null(jac)) ctx$jac <- function(v, p, t) .cx_block(jac(.cx_back(v, n), p, t))
+  if (!is.null(ctx$mass)) ctx$mass <- .cx_block(ctx$mass)
+  if (length(ctx$abstol) > 1L) ctx$abstol <- rep(ctx$abstol, 2L)
+  if (length(ctx$reltol) > 1L) ctx$reltol <- rep(ctx$reltol, 2L)
+  ctx
+}
+.cx_firk_init <- function(cache) {
+  cache$fsal <- .cx_back(cache$fsal, length(cache$fsal) / 2L)
+  cache
+}
+.cx_firk_step <- function(step, ctx, t, u, dt, cache, alg) {
+  n <- length(u)
+  cache$fsal <- .cx_re(cache$fsal)
+  if (!is.null(cache$ulast)) cache$ulast <- .cx_re(cache$ulast)
+  out <- step(.cx_ctx(ctx, n), t, .cx_re(u), dt, cache, alg)
+  cache$fsal <- .cx_back(cache$fsal, n)
+  if (!is.null(cache$ulast)) cache$ulast <- .cx_back(cache$ulast, n)
+  out$u <- .cx_back(out$u, n)
+  k <- out$k
+  if (!is.null(k)) {
+    for (i in 1:2) k[[i]] <- .cx_back(k[[i]], n)
+    if (!is.null(k$z)) k$z <- lapply(k$z, .cx_back, n = n)
+    out$k <- k
+  }
+  out
+}
+
 # After an event OrdinaryDiffEq evaluates the FSAL derivative again; the
 # Newton state stays and the next step sees a derivative discontinuity.
 .firk_on_event <- function(ctx, t, u, cache) {
-  cache$fsal <- as.numeric(ctx$f(u, ctx$p, t))
+  cache$fsal <- .as_num(ctx$f(u, ctx$p, t))
   cache$ulast <- NULL
   list(cache = cache, nf = 1L)
 }
@@ -228,6 +273,8 @@
 # ConstantCache perform_step!)
 
 .firk_radau_init <- function(ctx, t, u, max_stages, adaptive_tabs = NULL, min_stages = NULL) {
+  if (is.complex(u))
+    return(.cx_firk_init(.firk_radau_init(.cx_ctx(ctx, length(u)), t, .cx_re(u), max_stages, adaptive_tabs, min_stages)))
   cache <- new.env(parent = emptyenv())
   cache$fsal <- as.numeric(ctx$f(u, ctx$p, t))
   cache$etaold <- 1
@@ -327,6 +374,7 @@
 }
 
 .firk_radau_step <- function(ctx, t, u, dt, cache, alg) {
+  if (is.complex(u)) return(.cx_firk_step(.firk_radau_step, ctx, t, u, dt, cache, alg))
   f <- ctx$f; p <- ctx$p; M <- ctx$mass
   kind <- alg$firk_kind
   adaptive_order <- kind == "adaptive"
@@ -492,6 +540,7 @@
 # _gausslegendre_substep_constant)
 
 .firk_gauss_init <- function(ctx, t, u, s) {
+  if (is.complex(u)) return(.cx_firk_init(.firk_gauss_init(.cx_ctx(ctx, length(u)), t, .cx_re(u), s)))
   cache <- new.env(parent = emptyenv())
   cache$fsal <- as.numeric(ctx$f(u, ctx$p, t))
   cache$etaold <- 1
@@ -504,6 +553,7 @@
 }
 
 .firk_gauss_step <- function(ctx, t, u, dt, cache, alg) {
+  if (is.complex(u)) return(.cx_firk_step(.firk_gauss_step, ctx, t, u, dt, cache, alg))
   f <- ctx$f; p <- ctx$p
   tab <- alg$tab
   A <- tab$A; b <- tab$b; cc <- tab$c; e <- tab$e

@@ -8,6 +8,9 @@
 # split of (S + T) u - u^3 + (0.1 t, 0, 0, 0) into a symmetric, a
 # tridiagonal and a diagonal part (sym).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 amf_A1 <- rbind(c(-3, 1, 0.5, 0), c(0, -2, 0.25, 1), c(0, 0, -4, 0.5), c(0, 0, 0, -1))
 amf_A2 <- rbind(c(0, 0, 0, 0), c(0.5, 0, 0, 0), c(0.25, 1, 0, 0), c(0, 0.5, 0.25, 0))
 amf_AA <- amf_A1 + amf_A2

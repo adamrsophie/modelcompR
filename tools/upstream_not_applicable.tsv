@@ -221,3 +221,21 @@ RandomizationMethod	Julia abstract type for dispatch; NoRand(), QMCShift() and t
 SamplingAlgorithm	Julia abstract type for dispatch; every sampler carries the S3 class "SamplingAlgorithm".
 ScrambleMethod	Julia abstract type for dispatch; OwenScramble(), MatousekScramble() and DigitalShift() carry the S3 class "ScrambleMethod".
 _check_sequence	Internal argument check of QuasiMonteCarlo (public but unexported); qmc_sample() runs the same checks.
+AbstractSciMLOperator	Julia abstract type for dispatch; R operators carry the S3 class "AbstractSciMLOperator" and the generic functions dispatch on it.
+AbstractSciMLScalarOperator	Julia abstract type for dispatch; R scalar operators carry the S3 class "ScalarOperator" (with "AbstractSciMLOperator"), on which the generics dispatch.
+AbstractWOperator	Julia abstract type for dispatch; R W operators carry the S3 classes "WOperator" or "StaticWOperator" with "AbstractSciMLOperator".
+getcache	Accessor of the preallocated work arrays of an in place operator; R operators allocate their results and hold no cache.
+adopt_cache	Shares the preallocated work arrays of one in place operator with another; R operators hold no cache.
+update_cache	Resizes the preallocated work arrays of an in place operator; R operators hold no cache.
+has_tensor_outer_mul_fast	Trait of the allocation free outer product kernel of tensor product operators in place; R applies TensorProductOperator through reshaping and matrix products.
+tensor_outer_mul_fast!	In place outer product kernel of tensor product operators; R applies TensorProductOperator through reshaping and matrix products.
+anderson	Solver author hook on the NLAnderson cache of an integrator; the R implicit methods run Anderson acceleration inside their nonlinear loop (NLAnderson()).
+anderson!	In place solver author hook on the NLAnderson cache of an integrator; the R implicit methods run Anderson acceleration inside their nonlinear loop (NLAnderson()).
+build_nlsolver	Builds the typed nonlinear solver cache of an integrator for a new Julia method; the R implicit methods build their solver state from the nlsolve argument.
+can_smooth_est	Query on the nonlinear solver cache of a Julia integrator; the R methods make the same test internally before smoothing the error estimate with W.
+compute_step!	Dispatch hook of the nonlinear iteration on the cache types of a Julia integrator; R selects the step from the nlsolve choice inside the iteration.
+du_alias_or_new	Aliases or allocates the derivative buffer of an in place nonlinear solver cache; R allocates its vectors.
+initial_η	Hook on the nonlinear solver cache of a Julia integrator giving the first convergence rate; the R iteration computes it internally.
+markfirststage!	Marks the first stage on the nonlinear solver cache of a Julia integrator; the R multistage methods pass the first stage flag to their nonlinear loop.
+nlsolve!	Entry of the nonlinear iteration on the cache of a Julia integrator for solver authors; the R implicit methods call their nonlinear loop internally.
+nlsolvefail	Status query on the nonlinear solver cache of a Julia integrator; the R step functions read the convergence status returned by their nonlinear loop.

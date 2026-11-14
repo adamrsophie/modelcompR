@@ -3,6 +3,9 @@
 # saved points, f evaluations, Jacobians, W factorizations, linear solves,
 # rejections, accepted steps and the final state.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 firkt_lv <- function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2])
 firkt_lvprob <- ODEProblem(firkt_lv, c(1, 1), c(0, 2), c(1.5, 3))
 firkt_n <- 8

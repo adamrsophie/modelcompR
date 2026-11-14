@@ -1,6 +1,9 @@
 # Group A of the HiGHS MIP port: HighsHashTree, HighsDomain, HighsConflictPool,
 # HighsCliqueTable and HighsImplications on small hand checked models.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 hmipA_stub <- function(cost, lower, upper, integrality, Astart, Aindex, Avalue, rlo, rup) {
   ncol <- length(cost); nrow <- length(rlo)
   model <- new.env(parent = emptyenv())

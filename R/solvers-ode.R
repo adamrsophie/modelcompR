@@ -364,13 +364,68 @@ RK4 <- function() {
 # sums of two Float32 values are exact in double precision, so every fused
 # multiply add rounds once, as in Julia. Matching it bit for bit keeps the
 # step sizes equal to Julia's.
-.f32 <- function(x) readBin(writeBin(.as_num(x), raw(), size = 4L), "double", n = length(x), size = 4L)
+.f32_io <- function(x) readBin(writeBin(.as_num(x), raw(), size = 4L), "double", n = length(x), size = 4L)
+
+# Rounding to Float32 (round half to even, as the conversion of Julia and
+# C): x / ulp is exact and below 2^24 in magnitude, so R's round (which rounds
+# halves to even) gives the float32 significand. Subnormal, infinite and NaN
+# values go through writeBin/readBin; the arithmetic path is the hot one of
+# the step size controllers (fastpower), where the byte round trip cost half
+# of a Tsit5 step.
+.f32 <- function(x) {
+  if (length(x) == 1L && is.double(x) && !is.na(x)) {
+    a <- abs(x)
+    if (a >= 1.1754943508222875e-38 && a < Inf) {
+      e <- floor(log2(a))
+      p <- 2^e
+      if (p > a) e <- e - 1 else if (2 * p <= a) e <- e + 1
+      ulp <- 2^(e - 23)
+      r <- round(x / ulp) * ulp
+      return(if (abs(r) >= 2^128) sign(r) * Inf else r)
+    }
+    if (x == 0) return(x)
+  }
+  x <- .as_num(x)
+  a <- abs(x)
+  ok <- is.finite(x) & a >= 1.1754943508222875e-38
+  if (!all(ok | x == 0, na.rm = TRUE) || anyNA(x)) {
+    out <- x
+    out[!ok] <- .f32_io(x[!ok])
+    if (any(ok)) out[ok] <- .f32(x[ok])
+    return(out)
+  }
+  out <- x
+  if (any(ok)) {
+    ao <- a[ok]
+    e <- floor(log2(ao))
+    p <- 2^e
+    e <- e - (p > ao) + (2 * p <= ao)
+    ulp <- 2^(e - 23)
+    r <- round(x[ok] / ulp) * ulp
+    big <- abs(r) >= 2^128
+    r[big] <- sign(r[big]) * Inf
+    out[ok] <- r
+  }
+  out
+}
 
 .f32_bits <- function(x) readBin(writeBin(.as_num(x), raw(), size = 4L), "integer", n = length(x), size = 4L)
 
 .f32_from_bits <- function(b) readBin(writeBin(as.integer(b), raw(), size = 4L), "double", n = length(b), size = 4L)
 
 .fastlog2 <- function(x) {
+  x <- .f32(x)
+  if (length(x) == 1L && is.finite(x) && x >= 1.1754943508222875e-38) {
+    # the bit manipulations below on a positive normal float32: exponent and
+    # significand, with the significand folded to [0.75, 1.5)
+    e <- floor(log2(x))
+    p <- 2^e
+    e <- e - (p > x) + (2 * p <= x)
+    sig <- x / 2^e
+    if (sig >= 1.5) { sig <- sig / 2; e <- e + 1 }
+    quot <- .f32(.f32(sig * .f32_log2c[1L] + .f32_log2c[2L]) / .f32(sig + .f32_log2c[3L]))
+    return(.f32((sig - 1) * quot + e))
+  }
   u <- .f32_bits(x)
   hi <- bitwAnd(u, 0x00400000L) == 0L
   e <- bitwShiftR(bitwAnd(u, 0x7F800000L), 23L) - ifelse(hi, 127L, 126L)
@@ -379,15 +434,19 @@ RK4 <- function() {
   .f32((sig - 1) * quot + e)
 }
 
+.f32_log2c <- .f32_io(c(0.338953, 1.8596461, 0.523692))
+.f32_exp2c <- .f32_io(c(1, 0.6931472, 0.2402265, 0.05550411, 0.009618025, 0.0013333423, 0.00015469732, 1.5316464e-5))
+.f32_exp2_lo <- .f32_io(-126.00001)
+
 .exp2_f32 <- function(x) {
-  cf <- .f32(c(1, 0.6931472, 0.2402265, 0.05550411, 0.009618025, 0.0013333423, 0.00015469732, 1.5316464e-5))
+  cf <- .f32_exp2c
   N <- round(x)
   r <- x - N
   s <- rep(cf[8L], length(x))
   for (i in 7:1) s <- .f32(r * s + cf[i])
   out <- .f32(2^N * s)
   out[x >= 128] <- Inf
-  out[x <= .f32(-126.00001)] <- 0
+  out[x <= .f32_exp2_lo] <- 0
   out
 }
 

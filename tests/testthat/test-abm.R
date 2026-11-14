@@ -7,6 +7,9 @@
 # VCAB*, VCABM* values are those of the Julia methods with the corrections
 # of R/solvers-abm.R (the "fix" runs of the probe).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 abm_setup <- function() {
   lv <- function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2] + 0.1 * t)
   list(prob = ODEProblem(lv, c(1, 1), c(0, 2), c(1.5, 3)),

@@ -3,6 +3,9 @@
 # (lib/ModelingToolkitBase/test/analysis_points.jl) and documentation
 # (docs/src/tutorials/linear_analysis.md, the linearize docstring).
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 .blocks <- function() {
   t <- t_nounits; D <- D_nounits
   RealInput <- connector("RealInput", variables = list(list("u(t)", input = TRUE)))

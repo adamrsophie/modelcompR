@@ -1,6 +1,9 @@
 # Jump processes: symbolic jumps, poissonians, SSA aggregators and jumps
 # coupled to ODEs.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("birth death process mean matches lam/mu (1 - exp(-mu t))", {
   t <- t_nounits
   X <- Variable("X", t)

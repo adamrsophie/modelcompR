@@ -2,6 +2,9 @@
 # HighsHashTable, the Highs lpsolver adapter, HighsLpRelaxation and the
 # objective bound bailout of the dual simplex method.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 ns <- asNamespace("modelcompR")
 hfn <- function(name) get(name, envir = ns)
 

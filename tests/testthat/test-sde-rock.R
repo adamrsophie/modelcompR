@@ -162,6 +162,10 @@ test_that("stabilized SDE methods match StochasticDiffEqROCK on a fixed noise pa
          c(0.58050970553418724, 0.71413876346317784, 0.86284757416892677, 0.70257865576553502, 0.86165855012755077, 0.013014669814919055, 0.91982057361718916, 0.90132571922211124, 0.35264048746976995, 0.28077581769166737, 0.44886431540655691, 0.49520600112336921, 0.42264246266325461, 0.56927020721392252, 0.034474718613180078, 0.014011924665808473, 0.14124043662201824, 0.12334037427029319, 0.85833788490035989, 0.76186976484490299, 0.039731807493901594, 0.60196578474370555, 0.49551789728929496, 0.095760524741986916))
   )
   for (r in ref) {
+    # general noise of TangXiaoSROCK2 and three channel noise of
+    # KomBurSROCK2 follow the corrected methods (see the test below)
+    if ((startsWith(r[[1]], "TangXiao") && startsWith(r[[2]], "gen")) ||
+        (r[[1]] == "KomBurSROCK2" && r[[2]] == "gen3")) next
     draws <- r[[4]]
     pos <- 0L
     local_mocked_bindings(.srock_unif = function(n) {
@@ -196,3 +200,22 @@ test_that("stabilized SDE methods stay stable where Euler-Maruyama does not", {
   expect_identical(KomBurSROCK2()$interpretation, "Stratonovich")
 })
 
+
+test_that("TangXiaoSROCK2 and KomBurSROCK2 converge for general noise", {
+  # three channel geometric Brownian motion, exact on the same path:
+  # Ito exp((a - |b|^2 / 2) t + b'W), Stratonovich exp(a t + b'W)
+  a <- -1; b <- c(0.4, 0.3, 0.5)
+  prob <- SDEProblem(function(u, p, t) a * u, function(u, p, t) matrix(b * u, 1), 1, c(0, 1),
+                     noise_rate_prototype = matrix(0, 1, 3))
+  err <- function(alg, dt, strat) mean(vapply(1:20, function(i) {
+    s <- solve(prob, alg, dt = dt, adaptive = FALSE, seed = i)
+    W <- s$W$W[nrow(s$W$W), ]
+    abs(s$u[[length(s$u)]] - exp(a - (if (strat) 0 else sum(b^2) / 2) + sum(b * W)))
+  }, 0))
+  for (alg in list(TangXiaoSROCK2(version_num = 1), TangXiaoSROCK2(version_num = 5), KomBurSROCK2())) {
+    strat <- alg$interpretation == "Stratonovich"
+    e1 <- err(alg, 1 / 16, strat); e2 <- err(alg, 1 / 64, strat)
+    expect_lt(e2, 0.3 * e1, label = alg$name)
+    expect_lt(e2, 0.005, label = alg$name)
+  }
+})

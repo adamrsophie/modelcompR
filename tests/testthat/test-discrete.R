@@ -2,6 +2,9 @@
 # the shift branch of __mtkcompile, discreteproblem.jl, and the
 # SampledData tutorial), against analytic recursions.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 test_that("Shift, ShiftIndex and shift2term", {
   t <- t_nounits
   x <- Variable("x", t); y <- Variable("y", t)

@@ -5,6 +5,9 @@
 # compiled with the ModelingToolkitBase pipeline so the tests of the
 # initialization system do not depend on state selection; the examples
 # further down use the default pipeline.
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 circle_dae <- function() {
   t <- t_nounits; D <- D_nounits
   x <- Variable("x", t); y <- Variable("y", t)

@@ -6,6 +6,7 @@
 \alias{NLAnderson}
 \alias{NLNewton}
 \alias{NonlinearSolveAlg}
+\alias{HomotopyNonlinearSolveAlg}
 \title{Nonlinear solver choices of implicit methods}
 \usage{
 NLFunctional(
@@ -37,14 +38,25 @@ NLNewton(
 )
 
 NonlinearSolveAlg(
-  alg = NewtonRaphson(),
+  alg = NewtonRaphson(autodiff = AutoFiniteDiff()),
   kappa = 1/100,
   max_iter = 10L,
   fast_convergence_cutoff = 1/5,
   new_W_dt_cutoff = 1/5,
   always_new = FALSE,
   check_div = TRUE,
+  precondition = NULL,
+  postcondition = NULL,
   predictor = NULL
+)
+
+HomotopyNonlinearSolveAlg(
+  alg = HomotopySweep(inner = NewtonRaphson(autodiff = AutoFiniteDiff())),
+  kappa = 1/100,
+  max_iter = 10L,
+  fast_convergence_cutoff = 1/5,
+  abstol = NULL,
+  reltol = NULL
 )
 }
 \arguments{
@@ -71,7 +83,16 @@ is formed again.}
 search \verb{function(phi, dphi, phidphi, alpha0, phi0, dphi0)} whose first
 value is the step length along the Newton update, or \code{NULL}.}
 
-\item{alg}{A nonlinear solver algorithm.}
+\item{alg}{A nonlinear solver algorithm, or a continuation algorithm for
+\code{HomotopyNonlinearSolveAlg()}.}
+
+\item{precondition}{A left preconditioner \code{precondition(fu, u_stage, p)}
+of the stage residual \code{fu}, or \code{NULL}.}
+
+\item{postcondition}{An iterate corrector \code{postcondition(u_stage, u_stage_prev, p, cache)} in terms of the stage state, or \code{NULL}.}
+
+\item{abstol, reltol}{Tolerances of the continuation solve; \code{abstol = NULL}
+is \code{kappa} times the absolute tolerance of the integrator.}
 }
 \value{
 A nonlinear solver choice (class \code{AbstractNLSolverAlgorithm}).
@@ -85,7 +106,13 @@ steps while the step size changes by less than \code{new_W_dt_cutoff};
 \code{NLAnderson()} the fixed point iteration with Anderson acceleration over
 the last \code{max_history} iterates from iteration \code{aa_start}; and
 \code{NonlinearSolveAlg(alg)} hands the stage equations to the nonlinear
-solver \code{alg} (for example \code{\link[=NewtonRaphson]{NewtonRaphson()}}). Each iteration stops when the
+solver \code{alg} (for example \code{\link[=NewtonRaphson]{NewtonRaphson()}}), with the Jacobian \code{W} of the
+integrator as its Jacobian unless \code{precondition} changes the residual; and
+\code{HomotopyNonlinearSolveAlg(alg)} solves each stage by continuation in the
+step size, from \code{lambda = 0} (where the stage solution is known) to
+\code{lambda = 1}, with the continuation algorithm \code{alg} (for example
+\code{\link[=HomotopySweep]{HomotopySweep()}} or \code{\link[=ArcLengthContinuation]{ArcLengthContinuation()}}); it does not take DAEs.
+Each iteration stops when the
 scaled increment, multiplied by \code{eta = theta / (1 - theta)}, is below
 \code{kappa}, and fails after \code{max_iter} iterations; a rate \code{theta} below
 \code{fast_convergence_cutoff} counts as fast convergence.
@@ -94,4 +121,5 @@ scaled increment, multiplied by \code{eta = theta / (1 - theta)}, is below
 NLNewton(kappa = 1e-3)$kappa
 NLAnderson()$max_history
 NonlinearSolveAlg()$alg$name
+HomotopyNonlinearSolveAlg()$alg$name
 }

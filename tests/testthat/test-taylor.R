@@ -3,6 +3,9 @@
 # environment needs): saved points, f evaluations, rejections, accepted
 # steps and the final state.
 
+# long running: run on CI (NOT_CRAN = true), not on CRAN
+skip_on_cran()
+
 taylort_lv <- function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2])
 taylort_lvprob <- ODEProblem(taylort_lv, c(1, 1), c(0, 2), c(1.5, 3))
 taylort_osc <- function(u, p, t) c(u[2], -u[1] + p[1] * t * t / (1 + t))
