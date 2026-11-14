@@ -166,7 +166,8 @@ test_that("discrete events that change states and parameters are differentiated"
   F <- function(th) loss(solve(remake(prob, u0 = th[1:2], p = th[3:5]), Tsit5(), reltol = 1e-12,
                                abstol = 1e-12, saveat = ts))
   ref <- sensitivity_fd(F, c(1, 0.5, 1.2, 0.8, 0.6))
-  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint())) {
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint(),
+                  InterpolatingAdjoint(checkpointing = TRUE), GaussAdjoint(checkpointing = TRUE))) {
     gr <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
     expect_equal(unname(c(gr$u0, gr$p)), ref, tolerance = 1e-7, label = sa$name)
   }
@@ -181,7 +182,8 @@ test_that("discrete events that change states and parameters are differentiated"
   }
   gf <- solve_gradient(lb, probb, RK4(), dt = 0.05, sensealg = ForwardDiffSensitivity())
   expect_equal(sum(duplicated(gf$sol$t)), 1L)
-  for (sa in list(InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint())) {
+  for (sa in list(InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint(),
+                  InterpolatingAdjoint(checkpointing = TRUE))) {
     ga <- solve_gradient(lb, probb, RK4(), dt = 0.05, sensealg = sa)
     expect_equal(c(ga$u0, ga$p), c(gf$u0, gf$p), tolerance = 1e-8, label = sa$name)
   }
@@ -357,4 +359,20 @@ test_that("the loss may not interpolate, and the adjoint needs a dense forward s
   expect_equal(r$dp, -exp(-2), tolerance = 1e-4)
   expect_output(print(InterpolatingAdjoint(checkpointing = TRUE)), "checkpointing = TRUE")
   expect_error(solve(prob, Tsit5(), sensealg = "adjoint"), "sensitivity algorithm")
+})
+
+test_that("fixed step adjoints apply each cost once where step times round near save times", {
+  f <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
+  prob <- ODEProblem(f, c(1, 1), c(0, 1), c(1.5, 1, 3, 1))
+  loss <- function(sol) sum((as.matrix(sol) - 1)^2)
+  ts <- seq(0, 1, by = 0.1)
+  fw <- solve_gradient(loss, prob, RK4(), dt = 2.5e-4, adaptive = FALSE, saveat = ts, sensealg = ForwardDiffSensitivity())
+  for (sa in list(InterpolatingAdjoint(), BacksolveAdjoint(), GaussAdjoint(), QuadratureAdjoint())) {
+    ga <- solve_gradient(loss, prob, RK4(), dt = 2.5e-4, adaptive = FALSE, saveat = ts, sensealg = sa)
+    expect_equal(c(ga$u0, ga$p), c(fw$u0, fw$p), tolerance = 1e-9, label = sa$name)
+  }
+  cnt <- 0
+  solve(prob, RK4(), dt = 2.5e-4, adaptive = FALSE, tstops = seq(0, 1, by = 2.5e-4),
+        callback = PresetTimeCallback(c(0.1, 0.5), function(integ) cnt <<- cnt + 1))
+  expect_identical(cnt, 2)
 })

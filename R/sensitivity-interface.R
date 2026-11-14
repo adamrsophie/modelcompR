@@ -362,11 +362,20 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   ini <- .sens_init_jacobian(prob)
   S0 <- cbind(diag(1, n), ini$du0)
   Q0 <- cbind(matrix(0, np, n), ini$dp)
+  # discrete events map (u, S, Q) through their linearization, so the
+  # parameter sensitivities Q are carried as states when there are events
+  cbs <- .as_callback_set(dots$callback %||% prob$kwargs$callback)
+  if (length(cbs$continuous))
+    stop("continuous callbacks are not supported by the SDE sensitivities: the time at which a Brownian ",
+         "path crosses a level is not differentiable; use a DiscreteCallback", call. = FALSE)
+  has_cb <- length(cbs$discrete) > 0L
+  nq <- if (has_cb) np * m else 0L
+  Qof <- function(z) if (has_cb) matrix(z[n + n * m + seq_len(nq)], np, m) else Q0
   drift <- function(z, p, t) {
     u <- z[seq_len(n)]
     S <- matrix(z[n + seq_len(n * m)], n, m)
-    dS <- fns$jac(u, p, t) %*% S + fns$pjac(u, p, t) %*% Q0
-    c(f(u, p, t), as.numeric(dS))
+    dS <- fns$jac(u, p, t) %*% S + fns$pjac(u, p, t) %*% Qof(z)
+    c(f(u, p, t), as.numeric(dS), numeric(nq))
   }
   diffusion <- function(z, p, t) {
     u <- z[seq_len(n)]
@@ -374,16 +383,20 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     Gu <- .sens_fd_jac(function(x) as.numeric(G(x, p, t)), u)            # (n nw) x n
     Gp <- if (np) .sens_fd_jac(function(q) as.numeric(G(u, .sens_pvec(p, q), t)), as.numeric(p)) else
       matrix(0, n * nw, 0L)
-    dG <- Gu %*% S + Gp %*% Q0                                              # (n nw) x m
-    rbind(G(u, p, t), do.call(rbind, lapply(seq_len(m), function(j) matrix(dG[, j], n, nw))))
+    dG <- Gu %*% S + Gp %*% Qof(z)                                          # (n nw) x m
+    rbind(G(u, p, t), do.call(rbind, lapply(seq_len(m), function(j) matrix(dG[, j], n, nw))),
+          matrix(0, nq, nw))
   }
-  z0 <- c(as.numeric(prob$u0), as.numeric(S0))
+  z0 <- c(as.numeric(prob$u0), as.numeric(S0), if (nq) as.numeric(Q0))
   aprob <- SDEProblem(drift, diffusion, z0, prob$tspan, prob$p,
-                      noise_rate_prototype = matrix(0, n + n * m, nw))
+                      noise_rate_prototype = matrix(0, n + n * m + nq, nw))
   aprob$kwargs <- prob$kwargs
-  cbs <- .as_callback_set(dots$callback %||% prob$kwargs$callback)
-  if (length(cbs$continuous) || length(cbs$discrete))
-    stop("events in SDE problems are not supported by the SDE sensitivities", call. = FALSE)
+  if (has_cb) {
+    rec <- new.env(parent = emptyenv())
+    cb <- .sens_forward_callbacks(cbs, fp, fns, n, np, m, rec)
+    aprob$kwargs$callback <- cb
+    dots$callback <- cb
+  }
   asol <- do.call(solve, c(list(aprob, alg), dots))
   aenv <- .sol_env(asol)
   U <- aenv$U
@@ -392,7 +405,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   ct <- .sens_loss_cotangent(loss, sol)
   grad <- numeric(m)
   for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% matrix(U[r, n + seq_len(n * m)], n, m))
-  if (np) grad <- grad + as.numeric(ct$dp %*% Q0)
+  if (np) grad <- grad + as.numeric(ct$dp %*% Qof(U[nrow(U), ]))
   list(u0 = stats::setNames(grad[seq_len(n)], names(prob$u0)),
        p = stats::setNames(grad[n + seq_len(np)], names(prob$p)), value = ct$value, sol = sol)
 }

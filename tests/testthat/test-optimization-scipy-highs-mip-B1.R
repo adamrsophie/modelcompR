@@ -215,7 +215,7 @@ test_that("the display line formats numbers as convertToPrintString", {
 test_that("highs-ipm runs IPX, the simplex clean up and postsolve as Highs::run", {
   ex <- parse(test_path("test-optimization-scipy-highs-probe.R"))
   # evaluates only the .hs_probe_lps data assignment of the probe test file
-  for (e in ex) if (is.call(e) && identical(e[[2]], as.name(".hs_probe_lps"))) eval(e)
+  for (e in ex) if (is.call(e) && length(e) >= 2L && identical(e[[2]], as.name(".hs_probe_lps"))) eval(e)
   for (case in names(.b1_ipm_refs)) {
     ref <- .b1_ipm_refs[[case]]
     p <- .hs_probe_lps[[ref[[1]]]]

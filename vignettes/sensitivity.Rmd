@@ -531,6 +531,26 @@ for (sa in list(BacksolveAdjoint(), InterpolatingAdjoint()))
                               dgdu_discrete = function(u, p, t, i) u, sensealg = sa)$dp)
 ```
 
+Discrete events, such as a dose given at a fixed time, are differentiated
+on SDEs as well, by the pathwise forward method and by both adjoints
+(an extension beyond SciMLSensitivity). A dose raises the prey at
+\(t = 0.4\) by a fraction that depends on a parameter:
+
+```{r}
+dose <- PresetTimeCallback(0.4, function(integ) integ$u[1] <- integ$u[1] * (1 + integ$p[3]))
+eprob <- SDEProblem(function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2]),
+                    function(u, p, t) 0.1 * u, c(1, 0.8), c(0, 1), c(1.2, 0.9, 0.3), callback = dose)
+eloss <- function(sol) sum(as.matrix(sol)^2)
+rbind(forward = solve_gradient(eloss, eprob, EM(), dt = 1e-3, saveat = 0.25, seed = 1)$p,
+      adjoint = solve_gradient(eloss, eprob, EM(), dt = 1e-3, saveat = 0.25, seed = 1,
+                               sensealg = InterpolatingAdjoint())$p)
+```
+
+The two differ at order \(\Delta t\): the adjoint integrates the continuous
+adjoint equation backward on the same noise path. Continuous events are
+refused, since the time at which a Brownian path crosses a level is not
+differentiable.
+
 With a Stratonovich method such as `EulerHeun()` the adjoint is solved with
 the same scheme; with an Ito method the drift is corrected first (see
 `StochasticTransformedFunction()`). With `noisemixing = TRUE` the full

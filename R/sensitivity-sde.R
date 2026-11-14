@@ -228,9 +228,23 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
          "solution with respect to the parameters. Your model must have parameters to use parameter ",
          "sensitivity calculations!", call. = FALSE)
   cbs <- .as_callback_set(callback)
+  if (length(cbs$continuous) + length(cbs$discrete))
+    stop("`callback` of the adjoint is not supported for ", kind, "s; give the events to the forward solve",
+         call. = FALSE)
+  # discrete events of the forward solve are pulled back through their
+  # linearization, as in the ODE adjoints (beyond SciMLSensitivity, which has
+  # no event handling in its SDE adjoints). The crossing time of a Brownian
+  # path is not differentiable, so continuous events are refused.
   fcb <- .as_callback_set(prob$kwargs$callback)
-  if (length(cbs$continuous) + length(cbs$discrete) + length(fcb$continuous) + length(fcb$discrete))
-    stop("events are not supported by the adjoints of ", kind, "s", call. = FALSE)
+  if (length(fcb$continuous))
+    stop("continuous callbacks are not supported by the adjoints of ", kind, "s: the time at which a ",
+         "Brownian path crosses a level is not differentiable; use a DiscreteCallback", call. = FALSE)
+  events <- if (length(fcb$discrete)) {
+    if (is.null(env$sens_events))
+      stop("the problem has events: solve it with `solve(prob, alg, sensealg = ...)` or use solve_gradient() ",
+           "so that they are recorded for the adjoint", call. = FALSE)
+    env$sens_events$events
+  } else list()
   M <- prob$f$mass_matrix
   if (is.matrix(M) && !.is_identity_mass(M))
     stop("mass matrices are not supported by the adjoints of ", kind, "s", call. = FALSE)
@@ -250,7 +264,10 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   s <- t0 + tend
   tol <- function(x) 1e-12 * max(1, abs(x))
   inside <- function(x) x - t0 > tol(t0) & tend - x > tol(tend)
-  tr <- if (!backsolve) .sens_trajectory(sol)
+  events <- Filter(function(ev) inside(ev$t), events)
+  ev_t <- vapply(events, `[[`, 0, "t")
+  tr <- if (!backsolve) .sens_trajectory(sol, ev_t)
+  if (length(events)) p <- .sens_pvec(p, events[[length(events)]]$p_right)
 
   cont <- !is.null(g) || !is.null(dgdu_continuous) || !is.null(dgdp_continuous)
   gu_c <- dgdu_continuous %||% if (!is.null(g)) function(u, p, tt) .sens_fd_grad(function(z) g(z, p, tt), u)
@@ -302,23 +319,48 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
       }
       z
     }
+    eidx <- which(abs(ev_t - tt) <= tol(tt))
+    if (length(eidx)) {
+      # samples after the events (right limits), the event pullbacks (latest
+      # first), then a second sample, the left limit
+      left <- if (length(ks) >= 2L) ks[length(ks)] else integer()
+      z <- apply_cost(z, setdiff(ks, left))
+      for (j in rev(eidx)) {
+        ev <- events[[j]]
+        w <- as.numeric(crossprod(.sens_event_jacobian(ev, fns, prob), c(z[il], z[ig])))
+        z[il] <- w[il]
+        z[ig] <- w[n + seq_len(np)]
+        if (backsolve) z[iy] <- ev$u
+        p <- .sens_pvec(p, ev$p)
+        if (!is.null(tr)) tr$seg <- tr$seg - 1L
+      }
+      cur$p <- p
+      return(apply_cost(z, left))
+    }
     if (!length(ck)) return(apply_cost(z, ks))
     z <- apply_cost(z, ks[cost$t[ks] > ck[1L]])
     k <- which(ftimes == ck[1L])
     z[iy] <- env$U[k[length(k)], ]
     apply_cost(z, ks[cost$t[ks] <= ck[1L]])
   }
+  cur <- new.env(parent = emptyenv())
+  cur$p <- p
   z0 <- numeric(n + np + length(iy))
   if (backsolve) z0[iy] <- if (abs(ftimes[length(ftimes)] - tend) <= tol(tend)) env$U[nrow(env$U), ] else
     .interp_states(env, tend)[1L, ]
   z0 <- point(tend, z0, p)
-  inner <- sort(unique(c(cost$t, ck_t)))
+  inner <- .merge_near(c(cost$t, ck_t, ev_t))
   inner <- inner[inside(inner)]
   cb_rev <- if (length(inner)) {
     tau_inner <- sort(s - inner)
-    cb <- DiscreteCallback(function(u, tau, integ) .near_any(tau_inner, tau), function(integ) {
-      integ$u <- point(s - integ$t, integ$u, integ$p)
-    }, save_positions = c(FALSE, FALSE))
+    # each time once (.once_times)
+    once <- .once_times(tau_inner)
+    cb <- DiscreteCallback(function(u, tau, integ) once$any(tau), function(integ) {
+      for (k in once$take(integ$t)) {
+        integ$u <- point(s - tau_inner[k], integ$u, integ$p)
+        if (length(ev_t)) integ$p <- cur$p
+      }
+    }, save_positions = c(FALSE, FALSE), initialize = function(integ) once$reset())
     cb$tstops <- tau_inner
     cb
   }
@@ -352,7 +394,7 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   aprob$finish <- function(adj) {
     aenv <- .sol_env(adj)
     zf <- aenv$U[nrow(aenv$U), ]
-    if (!no_start) zf <- point(t0, zf, p)
+    if (!no_start) zf <- point(t0, zf, cur$p)
     du0 <- zf[il]
     dp <- zf[ig]
     names(du0) <- names(prob$u0)
@@ -367,11 +409,25 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
 # discrete cost of the adjoint, solved on the grid of a forward solve that
 # saves every step (the same path) with the forward algorithm.
 .sens_stochastic_gradient <- function(loss, prob, alg, dots, sensealg) {
+  # discrete events are recorded on the solve that saves every step
+  cbs <- .as_callback_set(dots$callback %||% prob$kwargs$callback)
+  rec <- NULL
+  if (length(cbs$discrete) && !length(cbs$continuous)) {
+    rec <- new.env(parent = emptyenv())
+    rec$events <- list()
+    prob$kwargs$callback <- .sens_track_callbacks(cbs, rec, length(prob$u0))
+    dots$callback <- NULL
+  }
   sol <- do.call(solve, c(list(prob, alg), dots))
   env <- .sol_env(sol)
   ct <- .sens_loss_cotangent(loss, sol)
   full <- dots[setdiff(names(dots), c("saveat", "save_everystep", "save_start", "save_end", "save_idxs", "dense"))]
-  fsol <- if (length(full) == length(dots)) sol else do.call(solve, c(list(prob, alg), full))
+  if (!is.null(rec)) rec$events <- list()
+  fsol <- if (length(full) == length(dots) && is.null(rec)) sol else do.call(solve, c(list(prob, alg), full))
+  if (!is.null(rec)) {
+    fenv <- .sol_env(fsol)
+    fenv$sens_events <- rec
+  }
   np <- length(prob$p)
   last <- length(env$t)
   at_start <- isTRUE(abs(env$t[1L] - prob$tspan[1L]) <= 1e-14 * max(1, abs(prob$tspan[1L])))

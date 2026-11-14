@@ -79,13 +79,18 @@ PresetTimeCallback <- function(times, affect, initialize = NULL, filter_tstops =
   times <- sort(.as_num(times))
   # PresetTimeFunction of DiffEqCallbacks: the initialization adds the stops
   # and applies the affect when the initial time is one of the times
+  once <- .once_times(times)
   init <- function(integ) {
+    once$reset()
     if (!is.null(initialize)) initialize(integ)
     if (!filter_tstops) for (tt in times) add_tstop(integ, tt)
-    if (.near_any(times, integ$t)) affect(integ)
+    if (length(once$take(integ$t))) affect(integ)
   }
-  cb <- DiscreteCallback(function(u, t, integ) .near_any(times, t),
-                         affect, initialize = init, save_positions = save_positions)
+  cb <- DiscreteCallback(function(u, t, integ) once$any(t),
+                         function(integ, ...) {
+                           once$take(integ$t)
+                           affect(integ, ...)
+                         }, initialize = init, save_positions = save_positions)
   cb$tstops <- if (filter_tstops) times else numeric()
   cb
 }
@@ -125,6 +130,36 @@ PeriodicCallback <- function(affect, dt, phase = 0, initial_affect = FALSE, fina
   cb$tstops_fn <- times_for
   cb$periodic <- list(dt = dt, phase = phase)
   cb
+}
+
+# Times that fire once each: a solve can stop twice within rounding of one
+# time (an accumulated step time 0.49999999999998 next to the stop 0.5),
+# and the affect must not run at both. `hit(t)` gives the indices not yet
+# fired within rounding of t, `take(t)` also marks them, `reset()` clears
+# the marks at the start of a solve.
+.once_times <- function(times) {
+  done <- logical(length(times))
+  hit <- function(t) which(!done & abs(times - t) <= 1e-12 * max(1, abs(t)))
+  list(hit = hit, any = function(t) length(hit(t)) > 0L,
+       take = function(t) {
+         k <- hit(t)
+         done[k] <<- TRUE
+         k
+       },
+       reset = function() done[] <<- FALSE)
+}
+
+# Sorted times with those within rounding of an earlier one dropped, for
+# handlers that already treat every time within rounding together.
+.merge_near <- function(times) {
+  times <- sort(unique(times))
+  if (length(times) < 2L) return(times)
+  keep <- rep(TRUE, length(times))
+  last <- times[1L]
+  for (i in seq.int(2L, length(times))) {
+    if (abs(times[i] - last) <= 1e-12 * max(1, abs(last))) keep[i] <- FALSE else last <- times[i]
+  }
+  times[keep]
 }
 
 # Whether t is within rounding of one of the sorted times.

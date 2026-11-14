@@ -189,3 +189,35 @@ test_that("SDEAdjointProblem builds the reversed time problem and rejects the un
   expect_error(SDEAdjointProblem(sol0, InterpolatingAdjoint(), t = 1, dgdu_discrete = function(u, p, t, i) 1),
                "Your model does not have parameters", fixed = TRUE)
 })
+
+test_that("pathwise SDE sensitivities differentiate discrete events", {
+  f <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
+  cb <- CallbackSet(PresetTimeCallback(0.4, function(integ) integ$u[1] <- integ$u[1] * integ$p[2] + 0.1 * integ$u[2]),
+                    PresetTimeCallback(0.7, function(integ) integ$p[3] <- integ$p[3] + 0.5 * integ$u[1]))
+  prob <- SDEProblem(f, function(u, p, t) 0.1 * u, c(1, 1), c(0, 1), c(1.5, 1, 3, 1), callback = cb)
+  ts <- seq(0, 1, by = 0.1)
+  loss <- function(sol) sum((as.matrix(sol) - 1)^2)
+  F <- function(th) loss(solve(remake(prob, u0 = th[1:2], p = th[3:6]), EM(), dt = 0.01, saveat = ts, seed = 3))
+  h <- 1e-6
+  th <- c(1, 1, 1.5, 1, 3, 1)
+  ref <- vapply(seq_along(th), function(j) {
+    a <- th; b <- th
+    a[j] <- a[j] + h; b[j] <- b[j] - h
+    (F(a) - F(b)) / (2 * h)
+  }, 0)
+  gr <- solve_gradient(loss, prob, EM(), dt = 0.01, saveat = ts, seed = 3, sensealg = ForwardDiffSensitivity())
+  expect_equal(unname(c(gr$u0, gr$p)), ref, tolerance = 1e-7)
+  pc <- remake(prob, callback = ContinuousCallback(function(u, t, integ) u[1] - 2, function(integ) NULL))
+  expect_error(solve_gradient(loss, pc, EM(), dt = 0.01, saveat = ts, seed = 3, sensealg = ForwardDiffSensitivity()),
+               "not differentiable")
+  # the adjoints pull back through the same events and converge to the
+  # pathwise derivative as dt falls (each cost applied once, also where the
+  # accumulated step times fall within rounding of the save times)
+  for (dt in c(1e-3, 2.5e-4)) {
+    fw <- solve_gradient(loss, prob, EM(), dt = dt, saveat = ts, seed = 3, sensealg = ForwardDiffSensitivity())
+    ga <- solve_gradient(loss, prob, EM(), dt = dt, saveat = ts, seed = 3, sensealg = InterpolatingAdjoint())
+    expect_lt(max(abs(c(ga$u0, ga$p) - c(fw$u0, fw$p))) / max(abs(c(fw$u0, fw$p))), 2 * dt)
+  }
+  expect_error(solve_gradient(loss, pc, EM(), dt = 0.01, saveat = ts, seed = 3, sensealg = InterpolatingAdjoint()),
+               "not differentiable")
+})

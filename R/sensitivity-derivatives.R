@@ -162,14 +162,20 @@
     return(tr)
   }
   # checkpointing: re-solve the interval between saved points containing t
+  # (the intervals of the current segment between events only)
   ck <- checkpoint
+  nint <- length(ck$times) - 1L
+  seg_of <- findInterval(ck$times[seq_len(nint)], tr$event_t)
   tr$cache <- NULL
   tr$at <- function(t) {
-    k <- max(1L, min(length(ck$times) - 1L, findInterval(t, ck$times, rightmost.closed = TRUE)))
+    ks <- which(seg_of == tr$seg)
+    if (!length(ks)) ks <- seq_len(nint)
+    k <- ks[max(1L, min(length(ks), findInterval(t, ck$times[ks])))]
     if (is.null(tr$cache) || tr$cache$k != k) {
       pr <- ck$prob
       pr$u0 <- ck$states[[k]]
       pr$tspan <- ck$times[c(k, k + 1L)]
+      if (!is.null(ck$pseg)) pr$p <- ck$pseg[[seg_of[k] + 1L]]
       pr$kwargs$callback <- NULL
       pr$kwargs$saveat <- NULL
       s <- .integrate(pr, ck$alg, c(ck$opts, list(dense = TRUE, save_everystep = TRUE)))

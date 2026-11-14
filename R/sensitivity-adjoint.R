@@ -163,8 +163,6 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
          call. = FALSE)
   if (length(events) && is.null(g) && (!is.null(dgdu_continuous) || !is.null(dgdp_continuous)))
     stop("a continuous cost with events needs `g`: the cost jumps at the event times", call. = FALSE)
-  if (length(events) && ckpt)
-    stop("checkpointing together with events is not supported; solve densely instead", call. = FALSE)
   ev_t <- vapply(events, `[[`, 0, "t")
   t0 <- prob$tspan[1L]
   tend <- if (identical(env$retcode, "Terminated")) env$t[length(env$t)] else prob$tspan[2L]
@@ -175,16 +173,21 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
 
   # forward trajectory
   tr <- if (backsolve) NULL else if (ckpt) {
-    cps <- sort(unique(checkpoints %||% env$t))
+    # the event times are checkpoints too, started from the state after the
+    # event and solved with the parameters in force in their segment
+    cps <- sort(unique(c(checkpoints %||% env$t, ev_t)))
     if (abs(cps[1L] - t0) > tol(t0)) cps <- c(t0, cps)
     if (abs(cps[length(cps)] - tend) > tol(tend)) cps <- c(cps, tend)
     states <- lapply(cps, function(tc) {
+      e <- which(ev_t == tc)
+      if (length(e)) return(events[[e[length(e)]]]$u_right)
       k <- which(abs(env$t - tc) <= tol(tc))
       if (!length(k)) stop("checkpoint ", tc, " is not a saved time of the solution", call. = FALSE)
       env$U[k[length(k)], ]
     })
-    .sens_trajectory(sol, checkpoint = list(times = cps, states = states, prob = prob, alg = env$alg,
-                                            opts = list(abstol = abstol, reltol = reltol)))
+    pseg <- c(lapply(events, `[[`, "p"), list(env$p_final %||% prob$p))
+    .sens_trajectory(sol, ev_t, checkpoint = list(times = cps, states = states, prob = prob, alg = env$alg,
+                                                  pseg = pseg, opts = list(abstol = abstol, reltol = reltol)))
   } else .sens_trajectory(sol, ev_t)
 
   # costs
@@ -356,14 +359,17 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   z0 <- r$z
   pT <- r$p
   # interior time points
-  inner <- sort(unique(c(cost$t, ev_t, ck_t)))
+  inner <- .merge_near(c(cost$t, ev_t, ck_t))
   inner <- inner[inside(inner)]
   cb_rev <- if (length(inner)) {
-    cb <- DiscreteCallback(function(u, tt, integ) .near_any(inner, tt), function(integ) {
-      r <- point(integ$t, integ$u, integ$p)
-      integ$u <- r$z
-      integ$p <- r$p
-    }, save_positions = c(FALSE, FALSE))
+    once <- .once_times(inner)
+    cb <- DiscreteCallback(function(u, tt, integ) once$any(tt), function(integ) {
+      for (k in once$take(integ$t)) {
+        r <- point(inner[k], integ$u, integ$p)
+        integ$u <- r$z
+        integ$p <- r$p
+      }
+    }, save_positions = c(FALSE, FALSE), initialize = function(integ) once$reset())
     cb$tstops <- inner
     cb
   }

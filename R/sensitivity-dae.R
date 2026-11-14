@@ -327,12 +327,13 @@ DAEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     v
   }
   z0 <- point(tend, numeric(N), p)
-  inner <- sort(unique(cost$t))
+  inner <- .merge_near(cost$t)
   inner <- inner[inside(inner)]
   cb_rev <- if (length(inner)) {
-    cb <- DiscreteCallback(function(u, tt, integ) .near_any(inner, tt), function(integ) {
-      integ$u <- point(integ$t, integ$u, integ$p)
-    }, save_positions = c(FALSE, FALSE))
+    once <- .once_times(inner)
+    cb <- DiscreteCallback(function(u, tt, integ) once$any(tt), function(integ) {
+      for (k in once$take(integ$t)) integ$u <- point(inner[k], integ$u, integ$p)
+    }, save_positions = c(FALSE, FALSE), initialize = function(integ) once$reset())
     cb$tstops <- inner
     cb
   }
