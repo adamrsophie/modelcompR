@@ -1,0 +1,393 @@
+url: https://adamrsophie.github.io/modelcompR/
+
+template:
+  bootstrap: 5
+  bslib:
+    primary: "#10213D"
+    link-color: "#1E8E7E"
+
+home:
+  title: "modelcompR: Symbolic Numeric Modeling in R"
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [search, github]
+
+reference:
+- title: "Variables, equations and systems"
+  contents:
+  - AbstractSystem
+  - Both
+  - Connection
+  - Differential
+  - Equation
+  - Flow
+  - Inequality
+  - LocalScope
+  - MTKVerbosity
+  - ODESystem
+  - Pre
+  - System
+  - Term
+  - Variable
+  - add_gdcprule
+  - analyze
+  - apply_to_variables
+  - check_flags
+  - check_symbolic_ad_allowed
+  - collect_var_to_name
+  - collect_vars
+  - component
+  - compose
+  - connect
+  - connector_type
+  - convert_bindings_for_time_independent_system
+  - eigmax
+  - eq_lhs
+  - equations
+  - gdcp_atoms
+  - get_unit
+  - get_variables
+  - get_w
+  - independent_variable
+  - initial_conditions
+  - instream
+  - is_diff_equation
+  - iscomplete
+  - metadata
+  - metadata_keys
+  - mtkmodel
+  - named
+  - nameof
+  - namespace_equations
+  - nonamespace
+  - rename_system
+  - renamespace
+  - setmetadata
+  - state_priorities
+  - substitute_vars
+  - system_fields
+  - t_nounits
+  - toexpr
+  - toparam
+  - variables
+- title: "Structural simplification and compilation"
+  contents:
+  - ASSERTION_LOG_VARIABLE
+  - BipartiteGraph
+  - IfElse
+  - IfLifting
+  - TearingState
+  - add_accumulations
+  - build_function
+  - calculate_jacobian
+  - change_independent_variable
+  - change_of_variables
+  - convert_system_indepvar
+  - debug_system
+  - default_toterm
+  - equation_dependencies
+  - expand_connections
+  - fractional_to_ordinary
+  - generate_control_function
+  - initial_state
+  - is_bound
+  - isolate_subsystem
+  - liouville_transform
+  - map_variables_to_equations
+  - modelingtoolkitize
+  - mtkcompile
+  - mtkcompile_options
+  - no_if_lift
+  - register_symbolic
+  - respecialize
+  - sorted_incidence_matrix
+  - substitute_component
+  - tearing
+- title: "Problems and solutions"
+  contents:
+  - DEVerbosity
+  - MTKParameters
+  - ODEFunction
+  - PDESystem
+  - VarDomainPairing
+  - alias_specifiers
+  - analytical_problems
+  - ensemble_analysis
+  - ensemble_context
+  - function_wrappers
+  - integral_problems
+  - integrator_interface
+  - interpolations
+  - pde_discretization
+  - plot.SciMLSolution
+  - remake
+  - sciml_operators
+  - scimlbase_clocks
+  - scimlbase_initialization
+  - scimlbase_more_types
+  - scimlbase_solutions
+  - scimlbase_stats
+  - scimlbase_types
+  - sde_integrator_pieces
+  - '`solution-indexing`'
+  - solution_builders
+  - structured_problems
+  - varmap_to_vars
+- title: "Initialization"
+  contents:
+  - InitializationProblem
+  - add_initialization_parameters
+  - analyze_initialization_jacobian
+  - generate_initializesystem
+  - solve.InitializationFailure
+- title: "Events, callbacks and clocks"
+  contents:
+  - AssignmentAffect
+  - Clock
+  - ContinuousCallback
+  - DiscreteFunction
+  - Shift
+  - SymbolicContinuousCallback
+  - callback_library
+  - continuous_events
+  - shift2term
+  - terminate
+  - u_modified
+- title: "ODE and DAE solvers"
+  contents:
+  - AdaptiveRadau
+  - AutoSwitch
+  - DABDF2
+  - DAEFunction
+  - DefaultODEAlgorithm
+  - GaussLegendre
+  - GlobalAdjoint
+  - GlobalErrorEstimation
+  - GlobalRichardson
+  - IRKC
+  - ImplicitDiscreteFunction
+  - PDIRK44
+  - Predictor
+  - RKIP
+  - SemilinearODEFunction
+  - SimpleIDSolve
+  - adams_methods
+  - amf
+  - bdf_methods
+  - calculate_semiquadratic_form
+  - dae_algorithms
+  - dae_initialization
+  - eigenvalue_problems
+  - epirk_methods
+  - AlJahdaliAdv3S113
+  - exponential_rk_methods
+  - extrapolation_algorithms
+  - generate_W
+  - glee_algorithms
+  - global_error_estimate.ODEProblem
+  - global_error_options
+  - hybrid_rosenbrock_algorithms
+  - imex_multistep_methods
+  - implicit_algorithms
+  - linear_lie_methods
+  - linear_solve_extras
+  - linear_solvers
+  - multirate_methods
+  - newmark_methods
+  - nordsieck_bdf_methods
+  - nordsieck_methods
+  - BS3
+  - parallel_rk_methods
+  - parametric_rk_methods
+  - radau_methods
+  - rkn_methods
+  - rosenbrock_algorithms
+  - rosenbrock_tableaus
+  - rosenbrock_w_algorithms
+  - sbdf_methods
+  - sdirk_algorithms
+  - set_discontinuity
+  - simd_and_tableau_rk
+  - solve.DAEProblem
+  - solver_traits
+  - ssp_multistep
+  - stabilized_rk_methods
+  - symplectic_methods
+  - taylor_methods
+- title: "Stochastic, jump and random differential equations"
+  contents:
+  - BAOAB
+  - BracketData
+  - EnsembleProblem
+  - EnsembleSummary
+  - Girsanov_transform
+  - JumpProblem
+  - RKMilGeneral
+  - SDEFunction
+  - TauLeapingDrift
+  - generate_diffusion_function
+  - iif_methods
+  - iterated_integral_evaluators
+  - jump_aggregators
+  - jump_coupling
+  - jumps_types
+  - levy_area
+  - modified_unknowns
+  - nl_solver_choices
+  - noise_processes
+  - noise_to_brownians
+  - poissonians
+  - rode_problems
+  - rossler_methods
+  - sde_algorithms
+  - sde_composite
+  - sde_implicit_algorithms
+  - sde_loworder_methods
+  - sde_stabilized_methods
+  - spatial_jumps
+  - stochastic_integral_transform
+  - tau_leaping
+  - variable_rate_aggregators
+  - weak_random_variables
+  - weak_sde_algorithms
+- title: "Delay and boundary value problems"
+  contents:
+  - BVProblem
+  - DDEFunction
+  - Discontinuity
+  - MethodOfSteps
+  - bvp_algorithms
+  - is_dde
+- title: "Nonlinear solvers"
+  contents:
+  - HomotopyContinuationProblem
+  - HomotopyProblem
+  - IntervalNonlinearFunction
+  - LinearProblem
+  - MissingGuessValue
+  - NonlinearFunction
+  - NonlinearVerbosity
+  - SCCNonlinearProblem
+  - SteadyStateProblem
+  - adtypes
+  - bounded_nonlinear
+  - composable_nonlinear
+  - continuation_algorithms
+  - homotopy
+  - interval_algorithms
+  - interval_algorithms_more
+  - jacobian_reuse
+  - limited
+  - line_searches
+  - nonlinear_algorithms
+  - nonlinear_polyalgorithms
+  - nonlinear_trace
+  - nonlinear_wrappers
+  - postcondition_specifier
+  - solve.HomotopyProblem
+  - sparsity_coloring
+  - steady_state_algorithms
+  - successful_retcode
+  - termination_modes
+- title: "Optimization"
+  contents:
+  - AbstractNLPModel
+  - BBO_borg_moea
+  - BranchAndBound
+  - CMAEvolutionStrategyOpt
+  - ClarabelOptimizer
+  - ConeConstraint
+  - Counters
+  - DynamicOptProblem
+  - DynamicOptSolution
+  - GCMAESOpt
+  - MOI
+  - Manopt
+  - Metaheuristics
+  - NLPModelMeta
+  - NLPModels
+  - NOMADOpt
+  - OptimizationFunction
+  - ParetoFitnessScheme
+  - PyCMAOpt
+  - QuadDirect
+  - SpeedMappingOpt
+  - build_nlpmodel_meta
+  - constraint_residual
+  - constraints_to_penalties
+  - dynamic_opt_backends
+  - dynamic_opt_types
+  - generate_cost
+  - generate_trajectory
+  - interior_point_optimizers
+  - manifolds
+  - manopt_optimizers
+  - metaheuristics_combinatorial
+  - metaheuristics_multi
+  - metaheuristics_single
+  - multiobjective_algorithms
+  - nlopt_optimizers
+  - ode_optimizers
+  - optim_linesearches
+  - optim_methods
+  - optimisers_rules
+  - optimization_algorithms
+  - optimization_interface
+  - polyopt_sophia
+  - prima_optimizers
+  - scipy_optimizers
+  - simple_optimization
+  - solve.OptimizationProblem
+  - tunable_parameters
+- title: "Sensitivity analysis"
+  contents:
+  - AdjointSensitivityIntegrand
+  - DAEAdjointProblem
+  - ForwardLSSProblem
+  - ODEForwardSensitivityFunction
+  - ODEForwardSensitivityProblem
+  - ReactantDualTag
+  - SDEAdjointProblem
+  - SensitivityAlg
+  - SensitivityFunction
+  - StochasticTransformedFunction
+  - SundialsAdjoint
+  - adjoint_sensitivities
+  - optimization_adjoints
+  - second_order_sensitivities
+  - sensitivity_algorithms
+  - sensitivity_backends
+  - shadowing_algorithms
+  - solve_gradient
+  - supports_functor_params
+- title: "Linearization and analysis points"
+  contents:
+  - AnalysisPoint
+  - LinearizationOpPoint
+  - LinearizationProblem
+  - get_sensitivity
+  - linearization_ap_transform
+  - linearization_function
+  - linearize
+  - linearize_symbolic
+  - open_loop
+  - similarity_transform
+- title: "Developer tools"
+  contents:
+  - ConvergenceSimulation
+  - Shootout
+  - TestSolution
+  - WorkPrecision
+  - WorkPrecisionSet
+  - auto_tags
+  - autoplot
+  - deduce_Butcher_tableau
+  - get_sample_errors
+  - plot.Tableau
+  - residual_order_condition
+  - stability_region
+  - test_convergence
+  - with_autodiff_variants
+  - wp_area

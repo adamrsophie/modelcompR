@@ -1,0 +1,98 @@
+---
+title: "Get started with modelcompR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Get started with modelcompR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+modelcompR is a native R port of
+[ModelingToolkit.jl](https://github.com/SciML/ModelingToolkit.jl). A model
+is a set of symbolic equations; `mtkcompile()` simplifies it and generates the
+R functions that the numerical solvers call. This article walks through the
+basic workflow: declare variables, write equations, compile, build a
+problem, solve and inspect the solution.
+
+```{r setup}
+library(modelcompR)
+```
+
+## A first order lag
+
+The time variable and its derivative operator come with the package.
+`t_nounits` is used instead of `t`, which would mask `base::t()`.
+
+```{r}
+t <- t_nounits
+D <- D_nounits
+variables("x(t)")
+parameters("tau")
+```
+
+`variables()` and `parameters()` mirror `@variables` and `@parameters`:
+they create the symbols and assign them in the calling environment.
+Equations are R formulas, so they read as in Julia.
+
+```{r}
+sys <- System(list(D(x) ~ (1 - x) / tau), t, name = "lag")
+sys <- mtkcompile(sys)
+unknowns(sys)
+```
+
+A problem takes the values of the unknowns and the parameters as equations,
+and the time span.
+
+```{r}
+prob <- ODEProblem(sys, list(x ~ 0, tau ~ 3), c(0, 10))
+sol <- solve(prob)
+sol$retcode
+```
+
+The solution is indexed by symbols or by any expression of the model, and is
+called as a function for dense output.
+
+```{r}
+head(sol[x])
+sol(5)
+head(sol[(1 - x) / tau])
+plot(sol)
+```
+
+## A second order equation
+
+Higher derivatives are lowered to first order systems, as in ModelingToolkit,
+and equations that only define a variable become observed equations.
+
+```{r}
+variables("y(t)", "v(t)")
+parameters("k = 2")
+osc <- mtkcompile(System(list(D(D(y)) ~ -k * y, v ~ 2 * D(y)), t, name = "osc"))
+unknowns(osc)
+observed(osc)
+sol <- solve(ODEProblem(osc, list(y ~ 1, D(y) ~ 0), c(0, 5)))
+sol(c(1, 2, 3), idxs = v)
+```
+
+## Choosing a solver
+
+`solve()` picks a method automatically. Any of the ported OrdinaryDiffEq
+methods can be named instead, with the usual tolerances.
+
+```{r}
+sol_tsit <- solve(prob, Tsit5(), reltol = 1e-10, abstol = 1e-10)
+sol_rodas <- solve(prob, Rodas5P())
+c(sol_tsit(10)[1], sol_rodas(10)[1], 1 - exp(-10 / 3))
+```
+
+## Where to go next
+
+The reference index groups every function by area: modeling and components,
+structural simplification, problems and solutions, initialization, events
+and clocks, the ODE, DAE, stochastic, jump, delay and boundary value
+solvers, nonlinear solvers, optimization, sensitivity analysis, and
+linearization.

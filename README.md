@@ -1,4 +1,4 @@
-# modelcompR: Symbolic Numeric Modeling in R
+# modelcompR: Symbolic Numeric Modeling in R <img src="man/figures/logo.png" align="right" height="139" alt="modelcompR logo" />
 
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/adamrsophie/modelcompR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/adamrsophie/modelcompR/actions/workflows/R-CMD-check.yaml)
