@@ -184,7 +184,9 @@ SimpleSOAP <- function(eta = 3e-3, beta = c(0.95, 0.95), shampoo_beta = -1, epsi
 
 # x^n of Julia for a Float64 and an integer (Base.Math.pow_body): the
 # compensated power by squaring, reliable for |n| below 2^20; beyond 3 * 2^13
-# Julia uses its exp and log based power, approximated by R's
+# Julia uses its exp and log based power, approximated by R's. The last
+# muladd is not fused, as the compiled code shares x * y with the zero error
+# branch
 .simple_two_mul <- function(a, b) {
   p <- a * b
   c(p, .ojl_fma(a, b, -p))
@@ -217,7 +219,7 @@ SimpleSOAP <- function(eta = 3e-3, beta = c(0.95, 0.95), shampoo_beta = -1, epsi
     n <- n %/% 2
   }
   err <- .ojl_fma(y, xnlo, x * ynlo)
-  if (is.finite(x) && is.finite(err) && err != 0) .ojl_fma(x, y, err) else x * y
+  if (is.finite(x) && is.finite(err) && err != 0) x * y + err else x * y
 }
 
 # ---------------------------------------------------------------------------

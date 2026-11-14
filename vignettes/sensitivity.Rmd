@@ -610,6 +610,110 @@ nilss
 counterpart; it takes a dense solution and `M` homogeneous adjoint
 solutions (at least the number of positive Lyapunov exponents plus one).
 
+## Global sensitivity analysis
+
+The methods above measure how a solution responds to small changes of the
+parameters at one point. Global sensitivity analysis asks which inputs drive
+the output over their whole range. `gsa(f, method, p_range, samples = n)`
+ports GlobalSensitivity.jl: `f` maps a parameter vector to a number, a vector
+or an ODE solution, and `p_range` lists the `c(lower, upper)` range of each
+parameter. The Ishigami function is the standard test case, with known first
+order indices 0.314, 0.442 and 0 and total indices 0.558, 0.442 and 0.244.
+
+```{r gsa-sobol}
+ishigami <- function(x) sin(x[1]) + 7 * sin(x[2])^2 + 0.1 * x[3]^4 * sin(x[1])
+ranges <- rep(list(c(-pi, pi)), 3)
+set.seed(1)
+res <- suppressWarnings(gsa(ishigami, Sobol(order = c(0, 1, 2)), ranges, samples = 4000))
+round(res$S1, 3)
+round(res$ST, 3)
+round(res$S2, 3)
+```
+
+`Sobol()` draws its two design matrices from the first and last `d`
+dimensions of one Sobol sequence, as Julia does; the warning recalls that
+these matrices are deterministic. Pass your own matrices with
+`gsa(f, Sobol(), A, B)`, and choose the total effect estimator with
+`Ei_estimator` (`"Jansen1999"`, `"Homma1996"`, `"Sobol2007"` or
+`"Janon2014"`). `nboot > 1` splits the columns into blocks and adds bootstrap
+confidence intervals. For randomized QMC, scramble a sequence of dimension
+`2 d` and split it. (The randomized `generate_design_matrices()` of
+QuasiMonteCarlo.jl, ported as is, scrambles one `d` dimensional sequence for
+every matrix, so `A` and `B` share their base points and are strongly
+correlated; Sobol estimates from such a pair are biased.)
+
+```{r gsa-design}
+set.seed(4)
+U <- randomize(qmc_sample(4096, 6, SobolSample()), OwenScramble(2))
+A <- -pi + 2 * pi * U[1:3, ]
+B <- -pi + 2 * pi * U[4:6, ]
+res <- gsa(ishigami, Sobol(nboot = 4), A, B, Ei_estimator = "Janon2014")
+round(res$ST, 3)
+round(res$ST_Conf_Int, 3)
+```
+
+The other methods share the interface:
+
+```{r gsa-methods}
+round(gsa(ishigami, eFAST(), ranges, samples = 1000)$S1, 3)
+m <- gsa(ishigami, Morris(num_trajectory = 20), ranges)
+round(m$means_star, 2)
+round(gsa(ishigami, RegressionGSA(rank = TRUE), ranges, samples = 500)$partial_rank_correlation, 3)
+round(gsa(ishigami, EASI(), ranges, samples = 2000)$S1, 3)
+round(gsa(ishigami, DeltaMoment(nboot = 20), ranges, samples = 500)$deltas, 3)
+```
+
+| Method | Measures |
+|:--|:--|
+| `Sobol()` | variance based first, second and total order indices |
+| `eFAST()`, `RBDFAST()` | first (and total) order indices from Fourier analysis |
+| `Morris()` | elementary effects: means, absolute means, variances |
+| `RegressionGSA()` | Pearson, standardized regression and partial correlation coefficients, rank versions |
+| `DGSM()` | derivative based measures from forward mode gradients |
+| `DeltaMoment()` | moment independent delta measure from kernel densities |
+| `EASI()` | first order indices from the spectrum of sorted samples |
+| `FractionalFactorial()` | main effects of a two level design |
+| `Shapley()` | Shapley effects, also for dependent inputs |
+| `RSA()` | regional sensitivity from accepted and rejected samples |
+| `MutualInformation()` | mutual information against a permutation bound |
+
+`DGSM()` and `eFAST()` also take distributions in place of ranges, and
+`Shapley()` takes a joint law with a Gaussian copula for correlated inputs:
+
+```{r gsa-shapley}
+D <- SklarDist(GaussianCopula(matrix(c(1, 0.6, 0.6, 1), 2)),
+               list(univariate_distribution("norm"), univariate_distribution("norm", sd = 2)))
+set.seed(2)
+sh <- suppressMessages(gsa(function(x) x[1] + x[2], Shapley(n_var = 1000, n_outer = 100), D))
+round(sh$shapley_effects, 3)
+```
+
+With `batch = TRUE`, `f` receives a matrix with one parameter set per column.
+For an ODE, return the solution: the indices come back per state and saved
+time.
+
+```{r gsa-ode}
+lv <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
+prob <- ODEProblem(lv, c(1, 1), c(0, 5), c(1.5, 1, 3, 1))
+final_prey <- function(p) {
+  sol <- solve(remake(prob, p = p), Tsit5(), saveat = 5)
+  sol$u[[2]][1]
+}
+set.seed(3)
+round(suppressWarnings(gsa(final_prey, Sobol(), rep(list(c(1, 3)), 4), samples = 256))$S1, 3)
+```
+
+The quasi Monte Carlo samplers of QuasiMonteCarlo.jl are available directly:
+`qmc_sample(n, lb, ub, sampler)` with `SobolSample()`, `HaltonSample()`,
+`FaureSample()`, `LatticeRuleSample()`, `KroneckerSample()`,
+`GoldenSample()`, `LatinHypercubeSample()` and others, and `randomize()` with
+`OwenScramble()`, `MatousekScramble()`, `DigitalShift()` or `QMCShift()`.
+The deterministic sequences match Julia bit for bit.
+
+```{r qmc}
+qmc_sample(4, c(0, 0), c(1, 10), HaltonSample())
+```
+
 ## Summary
 
 | Task | modelcompR | Julia |
@@ -621,3 +725,4 @@ solutions (at least the number of positive Lyapunov exponents plus one).
 | steady states, nonlinear and optimization solutions | `SteadyStateAdjoint()`, `OptimizationAdjoint()` | the same |
 | Hessians | `second_order_sensitivities()`, `second_order_sensitivity_product()` | the same |
 | chaotic averages | `ForwardLSS()`, `AdjointLSS()`, `NILSS()`, `NILSAS()` with `shadow_forward()`, `shadow_adjoint()` | `shadow_forward`, `shadow_adjoint` |
+| global sensitivity | `gsa(f, Sobol(), ranges, samples = n)` and the other methods | `gsa` of GlobalSensitivity.jl |

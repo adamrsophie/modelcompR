@@ -60,7 +60,9 @@
 }
 
 # Julia's pow_body(x::Float64, n::Integer) (base/special/pow.jl), the
-# compensated power by squaring of x^n for an integer n >= 2.
+# compensated power by squaring of x^n for an integer n >= 2. The last
+# muladd is not fused: the compiled code shares x * y with the branch for a
+# zero error, so it multiplies and adds separately.
 .ns_pow_int <- function(x, n) {
   if (n == 3L) return(x * x * x)
   y <- 1; xnlo <- -0; ynlo <- 0
@@ -76,7 +78,7 @@
     n <- n %/% 2L
   }
   err <- .fma(y, xnlo, x * ynlo)
-  if (is.finite(x) && is.finite(err) && err != 0) .fma(x, y, err) else x * y
+  if (is.finite(x) && is.finite(err) && err != 0) x * y + err else x * y
 }
 
 # The default internal norm of OrdinaryDiffEq (a fused sum of squares) and

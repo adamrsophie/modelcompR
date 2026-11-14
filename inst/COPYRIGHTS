@@ -33,6 +33,16 @@ noted:
   JumpProcesses.jl, DelayDiffEq.jl, Optimization.jl and Symbolics.jl, all
   Copyright (c) their SciML and JuliaSymbolics contributors and distributed
   under the MIT License.
+- The global sensitivity analysis of GlobalSensitivity.jl, version 2.12.9
+  (R/global-sensitivity.R), and the quasi Monte Carlo samplers of
+  QuasiMonteCarlo.jl, version 0.4.4 (R/quasi-montecarlo.R), with the lattice
+  generating vectors of LatticeRules.jl, version 0.0.2 (R/qmc-lattice-data.R,
+  from the Magic Point Shop of D. Nuyens and the tables of F. Y. Kuo); the
+  kernel density estimate of KernelDensity.jl 0.6.13, the quadratic B-spline
+  of Interpolations.jl 0.16.3, trapz of Trapz.jl 2.0.3 and the histogram
+  entropy of ComplexityMeasures.jl 3.12.1 that they use; and the Gaussian
+  and independence copulas of Copulas.jl 1.0.1 (R/gsa-distributions.R).
+  All MIT licensed; copyright lines and license texts in inst/SCIML-LICENSES.
 - ConvexOptimization.jl, the lib/ConvexOptimization library of
   Optimization.jl (https://github.com/SciML/Optimization.jl), version 0.1.4
   (the conic backend of ConvexOptimizationProblem).

@@ -1090,6 +1090,45 @@ DiffEqCallbacks	SavedValues	ported
 DiffEqCallbacks	SavingCallback	ported
 DiffEqCallbacks	StepsizeLimiter	ported
 DiffEqCallbacks	TerminateSteadyState	ported
+GlobalSensitivity	DGSM	ported
+GlobalSensitivity	DeltaMoment	ported
+GlobalSensitivity	EASI	ported
+GlobalSensitivity	FractionalFactorial	ported
+GlobalSensitivity	Morris	ported
+GlobalSensitivity	MutualInformation	ported
+GlobalSensitivity	RBDFAST	ported
+GlobalSensitivity	RSA	ported
+GlobalSensitivity	RegressionGSA	ported
+GlobalSensitivity	Shapley	ported
+GlobalSensitivity	Sobol	ported
+GlobalSensitivity	eFAST	ported
+GlobalSensitivity	gsa	ported
+QuasiMonteCarlo	AbstractDesignMatrix	not applicable
+QuasiMonteCarlo	DesignMatrix	ported
+QuasiMonteCarlo	DeterministicSamplingAlgorithm	not applicable
+QuasiMonteCarlo	DigitalShift	ported
+QuasiMonteCarlo	FaureSample	ported
+QuasiMonteCarlo	GoldenSample	ported
+QuasiMonteCarlo	GridSample	ported
+QuasiMonteCarlo	HaltonSample	ported
+QuasiMonteCarlo	KroneckerSample	ported
+QuasiMonteCarlo	LatinHypercubeSample	ported
+QuasiMonteCarlo	LatticeRuleSample	ported
+QuasiMonteCarlo	MatousekScramble	ported
+QuasiMonteCarlo	NoRand	ported
+QuasiMonteCarlo	OwenScramble	ported
+QuasiMonteCarlo	RandomSample	ported
+QuasiMonteCarlo	RandomSamplingAlgorithm	not applicable
+QuasiMonteCarlo	RandomizationMethod	not applicable
+QuasiMonteCarlo	RandomizedHaltonSample	ported
+QuasiMonteCarlo	SamplingAlgorithm	not applicable
+QuasiMonteCarlo	ScrambleMethod	not applicable
+QuasiMonteCarlo	SobolSample	ported
+QuasiMonteCarlo	VanDerCorputSample	ported
+QuasiMonteCarlo	_check_sequence	not applicable
+QuasiMonteCarlo	generate_design_matrices	ported
+QuasiMonteCarlo	randomize	ported
+QuasiMonteCarlo	sample	ported as qmc_sample
 DiffEqDevTools	ConvergenceSimulation	ported
 DiffEqDevTools	ConvergenceTrajectory	ported
 DiffEqDevTools	Shootout	ported

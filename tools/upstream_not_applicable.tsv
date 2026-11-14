@@ -214,3 +214,10 @@ NonlinearSolveSpectralMethods	Julia package module of spectral NonlinearSolve al
 SimpleNonlinearSolve	Julia package module of the simple NonlinearSolve algorithms; they are exported directly.
 BracketingNonlinearSolve	Julia package module of bracketing NonlinearSolve algorithms; they are exported directly.
 LineSearch	Julia package module reexported by NonlinearSolve; its line search algorithms are exported directly.
+AbstractDesignMatrix	Julia abstract type for dispatch; DesignMatrix() returns an R iterator of class "DesignMatrix" whose next_matrix() draws the next matrix.
+DeterministicSamplingAlgorithm	Julia abstract type for dispatch; the deterministic samplers carry the S3 class "DeterministicSamplingAlgorithm", which qmc_sample() and generate_design_matrices() check.
+RandomSamplingAlgorithm	Julia abstract type for dispatch; the random samplers carry the S3 class "RandomSamplingAlgorithm", which generate_design_matrices() checks.
+RandomizationMethod	Julia abstract type for dispatch; NoRand(), QMCShift() and the scrambles carry the S3 class "RandomizationMethod", which randomize() checks.
+SamplingAlgorithm	Julia abstract type for dispatch; every sampler carries the S3 class "SamplingAlgorithm".
+ScrambleMethod	Julia abstract type for dispatch; OwenScramble(), MatousekScramble() and DigitalShift() carry the S3 class "ScrambleMethod".
+_check_sequence	Internal argument check of QuasiMonteCarlo (public but unexported); qmc_sample() runs the same checks.

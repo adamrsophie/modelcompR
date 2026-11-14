@@ -122,3 +122,68 @@
   }
   .jlr_elements(c(start, 0), c(step, 0), len, 1)
 }
+
+# range(start, stop; length = len) of Julia for Float64 endpoints
+# (range_start_stop_length and _linspace of base/twiceprecision.jl): exact
+# rational endpoints give the ratios in twice precision, other endpoints a
+# twice precision reference at the element of smallest magnitude. Returns
+# the elements, with the step(r) of the range as attribute "step".
+.jl_linrange <- function(start, stop, len) {
+  out <- function(ref, step, offset) {
+    x <- .jlr_elements(ref, step, len, offset)
+    attr(x, "step") <- step[1L] + step[2L]
+    x
+  }
+  if (len < 2) {
+    if (len == 1 && start != stop) stop("range: endpoints differ", call. = FALSE)
+    return(out(c(start, 0), c(start, -stop), 1))
+  }
+  if (start == stop) return(out(c(start, 0), c(0, 0), 1))
+  nb_len <- function(imin) min(27, .jlr_top_set_bit(max(imin - 1, len - imin) - 1) + 1)
+  ar <- .jlr_rat(start); zr <- .jlr_rat(stop)
+  if (ar[2L] != 0 && zr[2L] != 0) {
+    den <- ar[2L] * .jlr_div(zr[2L], .jlr_gcd(ar[2L], zr[2L]))
+    m <- 2^53
+    if (den != 0 && abs(den * start) <= m && abs(den * stop) <= m) {
+      sn <- round(den * start); en <- round(den * stop)
+      if (sn / den == start && en / den == stop) {
+        tmin <- -sn / (en - sn)
+        imin <- min(max(round(tmin * (len - 1) + 1), 1), len)
+        ref_num <- (len - imin) * sn + (imin - 1) * en
+        ref_den <- (len - 1) * den
+        ref <- .jlr_tp_ratio(ref_num, ref_den)
+        st <- .jlr_tp_ratio(en - sn, ref_den)
+        hi <- .jlr_truncbits(st[1L], nb_len(imin))
+        return(out(ref, c(hi, (st[1L] - hi) + st[2L]), imin))
+      }
+    }
+  }
+  if (!is.finite(start) || !is.finite(stop)) stop("start and stop must be finite", call. = FALSE)
+  delta <- stop - start; dfac <- 1
+  if (!is.finite(delta)) { delta <- stop / len - start / len; dfac <- len }
+  tmin <- -(start / delta) / dfac
+  lenn1 <- len - 1
+  imin <- round(tmin * lenn1 + 1)
+  if (1 < imin && imin < len) {
+    t <- (imin - 1) / lenn1
+    ref <- (1 - t) * start + t * stop
+    step <- if (imin - 1 < len - imin) (ref - start) / (imin - 1) else (stop - ref) / (len - imin)
+  } else if (imin <= 1) {
+    imin <- 1; ref <- start; step <- (delta / lenn1) * dfac
+  } else {
+    imin <- len; ref <- stop; step <- (delta / lenn1) * dfac
+  }
+  mx <- 1.7976931348623155e308
+  k <- max(imin - 1, len - imin)
+  step_pre <- min(max(step, max(-(mx + ref) / k, (-mx + ref) / k)), min((mx - ref) / k, (mx + ref) / k))
+  step_hi <- .jlr_truncbits(step_pre, nb_len(imin))
+  x1 <- .jlr_add12((1 - imin) * step_hi, ref)
+  x2 <- .jlr_add12((len - imin) * step_hi, ref)
+  a <- (start - x1[1L]) - x1[2L]
+  b <- (stop - x2[1L]) - x2[2L]
+  step_lo <- (b - a) / (len - 1)
+  ref_lo <- a - (1 - imin) * step_lo
+  out(c(ref, ref_lo), c(step_hi, step_lo), imin)
+}
+
+.jlr_add12 <- function(x, y) if (abs(y) > abs(x)) .jlr_canon(y, x) else .jlr_canon(x, y)

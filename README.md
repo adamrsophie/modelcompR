@@ -106,7 +106,7 @@ of every upstream name.
 | Problems | ODE (with mass matrix DAEs), DAE, nonlinear, steady state, interval, linear, optimization, SDE, jump, delay, discrete, implicit discrete, boundary value, initialization, linearization, dynamic optimization |
 | Solvers | Tsit5, Vern7, Vern9, DP5, BS3, Rosenbrock23, Rodas4, Rodas5P, FBDF, DFBDF, automatic stiffness switching; NewtonRaphson, TrustRegion, LevenbergMarquardt, homotopy continuation; EM, SRIW1, SOSRI; Direct SSA; MethodOfSteps; MIRK4 and shooting |
 | Events | Continuous and discrete symbolic events with `Pre`, imperative affects, clocks, `Sample`, `Hold`, `Shift` |
-| Analysis | `linearize`, sensitivity and loop transfer functions, `modelingtoolkitize`, variable and independent variable changes |
+| Analysis | `linearize`, sensitivity and loop transfer functions, `modelingtoolkitize`, variable and independent variable changes; global sensitivity analysis (`gsa` with Sobol, Morris, eFAST, RBD-FAST, DGSM, delta, EASI, Shapley, RSA, mutual information and regression methods) and quasi Monte Carlo sampling |
 
 ## Validation
 

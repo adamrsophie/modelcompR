@@ -363,6 +363,15 @@ reference:
   - shadowing_algorithms
   - solve_gradient
   - supports_functor_params
+- title: "Global sensitivity analysis and quasi Monte Carlo"
+  contents:
+  - gsa
+  - gsa_methods
+  - gsa_distributions
+  - qmc_sample
+  - qmc_samplers
+  - randomization_methods
+  - generate_design_matrices
 - title: "Linearization and analysis points"
   contents:
   - AnalysisPoint
