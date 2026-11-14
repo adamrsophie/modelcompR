@@ -1,0 +1,788 @@
+---
+title: "Nonlinear systems and steady states"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Nonlinear systems and steady states}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+A nonlinear system asks for values of the unknowns `u` that make a residual
+vanish: `f(u, p) = 0`. ModelingToolkit.jl builds such problems from
+symbolic equations and hands them to NonlinearSolve.jl; modelcompR ports both
+layers to R. This article covers the problem types (nonlinear, least
+squares, interval, steady state, strongly connected component, homotopy and
+linear problems), the solver catalog of NonlinearSolve, the solver options
+and the fields of a solution.
+
+```{r setup}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+Every algorithm in this article is a constructor named as in Julia, and every
+problem is solved by `solve(prob, alg, ...)`. A small helper prints the
+outcome of several algorithms on one problem side by side; the names of
+the list label the rows, and the `alg` column shows the method that
+produced the result (for a polyalgorithm, the stage that won).
+
+```{r}
+compare <- function(prob, algs, ...) {
+  rows <- lapply(algs, function(alg) {
+    sol <- solve(prob, alg, ...)
+    data.frame(alg = if (is.null(sol$stats$alg)) alg$name else sol$stats$alg,
+               retcode = sol$retcode, u = paste(signif(unname(sol$u), 8), collapse = ", "),
+               steps = sol$stats$nsteps, resid = signif(max(abs(sol$resid)), 2))
+  })
+  out <- do.call(rbind, rows)
+  if (!is.null(names(algs))) rownames(out) <- names(algs)
+  out
+}
+```
+
+## Nonlinear systems from equations
+
+A system without an independent variable is a nonlinear system. Equations
+are written as R formulas with `0` on the left, as in Julia's
+`0 ~ x^2 + y^2 - a`. Here the unknowns are the intersection of a circle of
+radius `sqrt(a)` and the diagonal.
+
+```{r}
+cx <- Variable("cx"); cy <- Variable("cy"); ca <- Parameter("ca")
+circ <- complete(System(list(0 ~ cx^2 + cy^2 - ca, 0 ~ cx - cy), name = "circ"))
+circ
+```
+
+`complete()` marks the system as finished, the counterpart of `complete(sys)`
+in ModelingToolkit. `NonlinearProblem(sys, op)` takes an operating point: a
+list of initial guesses for the unknowns and values for the parameters.
+
+```{r}
+cprob <- NonlinearProblem(circ, list(cx ~ 1, cy ~ 2, ca ~ 2))
+cprob
+csol <- solve(cprob)
+csol
+```
+
+### Solution fields
+
+A `NonlinearSolution` holds the solution `u`, the residual `resid` at `u`,
+the return code, the problem, the algorithm and statistics. Symbolic indexing
+works as for time series solutions: any expression of the unknowns and
+parameters can be evaluated at the solution.
+
+```{r}
+names(csol)
+csol$retcode
+successful_retcode(csol)
+csol$resid
+csol$stats
+csol[cx]
+csol[cx + 2 * cy]
+csol$ps[ca]
+```
+
+The return codes follow SciMLBase: `"Success"`, `"StalledSuccess"`,
+`"Stalled"`, `"MaxIters"`, `"Unstable"`, `"InitialFailure"`,
+`"ConvergenceFailure"` and so on; `successful_retcode()` tells whether a code
+counts as converged.
+
+### Changing parameters and guesses
+
+`remake()` rebuilds a problem with new parameter values or guesses without
+regenerating code. With `ca = 8` the root moves to `(2, 2)`.
+
+```{r}
+solve(remake(cprob, p = list(ca ~ 8)))$u
+```
+
+Unknowns without a value in the operating point start from the `guess`
+metadata of the variable or from the `guesses` of the system, which may be
+expressions of other unknowns and parameters.
+
+```{r}
+gx <- Variable("gx", guess = 3); gy <- Variable("gy")
+gsys <- complete(System(list(0 ~ gx^2 - 4, 0 ~ gy - gx), name = "gsys",
+                        guesses = list(gy ~ 2 * gx)))
+gprob <- NonlinearProblem(gsys, list())
+gprob$u0
+solve(gprob)$u
+```
+
+When neither is available the constructor stops with an error; the argument
+`missing_guess_value = MissingGuessValue$Constant(1)` fills the gaps with a
+constant instead.
+
+### The generated function and Jacobian
+
+`NonlinearFunction(sys, jac = TRUE)` returns the generated residual
+`f(u, p)` and its symbolic Jacobian; `NonlinearProblem()` generates the
+Jacobian by default, so Newton type methods do not need finite differences.
+
+```{r}
+cfun <- NonlinearFunction(circ, jac = TRUE)
+cfun$f(c(1, 2), 2)
+cfun$jac(c(1, 2), 2)
+```
+
+## Tearing with `mtkcompile()`
+
+`mtkcompile()` runs the structural pipeline of ModelingToolkit: alias
+elimination, matching, and tearing, which solves as many equations as
+possible explicitly and keeps the solved variables as observed equations. In
+the current port the full pipeline runs for systems with an independent
+variable, so the way to tear an algebraic system is to declare the unknowns
+as functions of `t` and write only algebraic equations. A
+`NonlinearProblem` built from a time dependent system sets every derivative
+to zero.
+
+```{r}
+t <- t_nounits
+variables("tx(t)", "ty(t)", "tz(t)")
+parameters("ta", "tb")
+teqs <- list(0 ~ tx + ty - ta, 0 ~ ty^3 + ty - tz, 0 ~ tz - 2 * tx + tb)
+torn <- mtkcompile(System(teqs, t, name = "torn"))
+torn
+observed(torn)
+```
+
+Three equations became one: `tx` and `tz` are computed from `ty`, and the
+solver iterates on `ty` alone. The observed variables are still available
+from the solution.
+
+```{r}
+tsol <- solve(NonlinearProblem(torn, list(ty ~ 1, ta ~ 3, tb ~ 1)))
+tsol$u
+c(tx = tsol[tx], ty = tsol[ty], tz = tsol[tz])
+```
+
+The same equations in a `System` without `t` are solved as a coupled system
+of three unknowns; `mtkcompile()` returns them unchanged.
+
+## Problems from R functions
+
+`NonlinearProblem`, `NonlinearLeastSquaresProblem`,
+`IntervalNonlinearProblem` and `SteadyStateProblem` also accept a plain R
+function, the counterpart of `NonlinearProblem(f, u0, p)` in Julia. The
+residual has the signature `f(u, p)` (`f(u, p, t)` for steady states).
+
+```{r}
+solve(NonlinearProblem(function(u, p) u^2 - p, 1, 2))$u
+```
+
+`NonlinearFunction(f, jac = J)` attaches an analytic Jacobian; without it
+the solvers use finite differences. The Rosenbrock residuals from Powell's
+badly scaled start make a standard test problem.
+
+```{r}
+rosen <- function(u, p) c(10 * (u[2] - u[1]^2), 1 - u[1])
+rosen_jac <- function(u, p) rbind(c(-20 * u[1], 10), c(-1, 0))
+rprob <- NonlinearProblem(NonlinearFunction(rosen, jac = rosen_jac), c(-1.2, 1))
+solve(rprob, NewtonRaphson())$u
+```
+
+## The default algorithm and polyalgorithms
+
+Without an algorithm, `solve()` uses a polyalgorithm, as NonlinearSolve
+does. A polyalgorithm tries a list of methods in turn, each from the initial
+guess, and returns the first success. `FastShortcutNonlinearPolyalg()` holds
+Broyden, Klement, Newton, two trust region variants and Levenberg Marquardt;
+for problems with at most 25 unknowns it starts at Newton, and when the
+problem has a Jacobian function it leaves out the quasi Newton methods. The
+winning method is recorded in `sol$stats$alg`.
+
+```{r}
+vapply(FastShortcutNonlinearPolyalg()$algs, function(a) a$name, "")
+FastShortcutNonlinearPolyalg(u0_len = 10)$start_index
+solve(rprob)$stats$alg
+```
+
+`RobustMultiNewton()` tries trust region methods with several radius updates
+and Newton with and without a line search; `FastShortcutNLLSPolyalg()` is the
+default for least squares problems. Any list of algorithms can be combined
+with `NonlinearSolvePolyAlgorithm()`.
+
+```{r}
+compare(rprob, list(robust = RobustMultiNewton(),
+                    custom = NonlinearSolvePolyAlgorithm(list(Broyden(), TrustRegion()))))
+```
+
+The order matters. For `u^3 - 8` from `u = 0` the Jacobian vanishes at the
+start, so Newton's method and the trust region methods cannot move, and the
+default (which starts at Newton for small problems) fails, exactly as in
+Julia. The quasi Newton methods start from a scaled identity Jacobian and
+succeed, and so does the polyalgorithm when it starts at Broyden.
+
+```{r}
+cube <- NonlinearProblem(function(u, p) u^3 - p, 0, 8)
+solve(cube)$retcode
+compare(cube, list(broyden = Broyden(), klement = Klement(),
+                   polyalg_from_broyden = FastShortcutNonlinearPolyalg()))
+```
+
+## The solver catalog
+
+### Newton type methods
+
+`NewtonRaphson()` is Newton's method, optionally with a backtracking line
+search. `TrustRegion()` is NonlinearSolve's trust region method: More's
+nearly exact subproblem (the `lmpar` step of MINPACK) with the radius update
+selected by `radius_update_scheme`. `LevenbergMarquardt()` adds damping to
+the Gauss Newton step and `GaussNewton()` is the undamped least squares
+method; both also solve square systems.
+
+```{r}
+compare(rprob, list(newton = NewtonRaphson(),
+                    newton_backtracking = NewtonRaphson(linesearch = "BackTracking"),
+                    trustregion = TrustRegion(), lm = LevenbergMarquardt(),
+                    gaussnewton = GaussNewton()))
+```
+
+`PseudoTransient()` is pseudo transient continuation: a Newton step damped by
+the inverse of a pseudo time step `alpha`, which grows by the switched
+evolution relaxation rule as the residual falls. A small `alpha_initial`
+(the default is `1e-3`) takes many short, safe steps; a large one behaves
+like Newton's method.
+
+```{r}
+cube05 <- NonlinearProblem(function(u, p) u^3 - 8, 0.5)
+compare(cube05, list(ptc_default = PseudoTransient(), ptc_alpha1 = PseudoTransient(alpha_initial = 1),
+                     newton = NewtonRaphson()))
+```
+
+### Trust region radius updates
+
+`RadiusUpdateSchemes` lists the update rules of NonlinearSolve. `"More"` is
+the default with More's subproblem and `"Simple"` with the dogleg
+subproblem (`TrustRegion(subproblem = TrustRegionSubproblem$Dogleg)` or
+`TrustRegionDogleg()`).
+
+```{r}
+unlist(RadiusUpdateSchemes)
+schemes <- c("Simple", "NLsolve", "NocedalWright", "Hei", "Yuan", "Bastin", "Fan")
+compare(rprob, sapply(schemes, function(s) TrustRegion(radius_update_scheme = s),
+                      simplify = FALSE))
+```
+
+The thresholds and factors of the radius update are arguments of
+`TrustRegion()` (`step_threshold`, `shrink_threshold`, `expand_threshold`,
+`shrink_factor`, `expand_factor`, `initial_trust_radius`,
+`max_trust_radius`).
+
+### Quasi Newton and spectral methods
+
+Quasi Newton methods evaluate the Jacobian at most once, at the start. `Broyden()`
+updates an approximate inverse Jacobian with the good or bad Broyden rule;
+`Klement()` keeps a diagonal approximation; `LimitedMemoryBroyden()` stores
+only a few update vectors. `DFSane()` is the derivative free spectral method
+with a nonmonotone line search. The examples in the next sections use the
+circle problem again, written as an R function and started from `(2, 0.5)`.
+
+```{r}
+qprob <- NonlinearProblem(function(u, p) c(u[1]^2 + u[2]^2 - 2, u[1] - u[2]), c(2, 0.5))
+compare(qprob, list(good_broyden = Broyden(), bad_broyden = Broyden(update_rule = "bad_broyden"),
+                    broyden_true_jac = Broyden(init_jacobian = "true_jacobian"),
+                    klement_true_jac = Klement(init_jacobian = "true_jacobian"),
+                    lbroyden = LimitedMemoryBroyden(), dfsane = DFSane()))
+```
+
+### SimpleNonlinearSolve
+
+The light methods of SimpleNonlinearSolve are available under their Julia
+names: `SimpleNewtonRaphson()`, `SimpleTrustRegion()`, `SimpleBroyden()`,
+`SimpleKlement()`, `SimpleDFSane()`, `SimpleLimitedMemoryBroyden()`,
+`SimpleGaussNewton()` and the third order `SimpleHalley()`.
+
+```{r}
+compare(qprob, list(SimpleNewtonRaphson(), SimpleTrustRegion(), SimpleBroyden(),
+                    SimpleKlement(), SimpleDFSane(), SimpleHalley()))
+```
+
+### Composing a method
+
+The methods above are instances of `GeneralizedFirstOrderAlgorithm()`, which
+combines a descent direction (`NewtonDescent()`, `DampedNewtonDescent()`,
+`SteepestDescent()`, `Dogleg()`, `MoreTrustRegionDescent()`,
+`GeodesicAcceleration()`) with a globalization: a line search or a
+`GenericTrustRegionScheme()`.
+
+```{r}
+compare(qprob, list(
+  damped_newton = GeneralizedFirstOrderAlgorithm(descent = DampedNewtonDescent()),
+  geodesic = GeneralizedFirstOrderAlgorithm(descent = GeodesicAcceleration()),
+  steepest_backtracking = GeneralizedFirstOrderAlgorithm(descent = SteepestDescent(),
+                                                         linesearch = BackTracking()),
+  dogleg_hei = GeneralizedFirstOrderAlgorithm(descent = Dogleg(),
+                                              trustregion = GenericTrustRegionScheme("Hei"))))
+```
+
+### Line searches
+
+The line searches of LineSearch.jl and LineSearches.jl are ported:
+`BackTracking()`, `ArmijoLineSearch()`, `GoldenSection()`,
+`LiFukushimaLineSearch()`, `StrongWolfeLineSearch()`,
+`MoreThuenteLineSearch()`, `HagerZhangLineSearch()`,
+`RobustNonMonotoneLineSearch()`, `ProjectedBackTracking()` and
+`NoLineSearch()`, plus `LineSearchesJL()` naming a LineSearches.jl method.
+
+```{r}
+searches <- list(none = NoLineSearch(), backtracking = BackTracking(),
+                 backtracking2 = BackTracking(order = 2), armijo = ArmijoLineSearch(),
+                 lifukushima = LiFukushimaLineSearch(), strongwolfe = StrongWolfeLineSearch(),
+                 hagerzhang = HagerZhangLineSearch(), linesearchesjl = LineSearchesJL("HagerZhang"))
+compare(rprob, lapply(searches, function(ls) GeneralizedFirstOrderAlgorithm(linesearch = ls)))
+```
+
+On this problem the full Newton step happens to reach the root in two steps;
+a line search shortens the first steps, which costs iterations here but is
+what keeps Newton's method from diverging from poor starting points.
+
+## Solver options
+
+Options go to `solve()`: `abstol` (tolerance on the residual, default
+`eps^0.8`), `reltol`, `maxiters` (default 1000) and `termination_condition`.
+A loose tolerance stops early with a larger residual; a tiny iteration
+budget returns `"MaxIters"`.
+
+```{r}
+do.call(rbind, lapply(c(1e-2, 1e-6, 1e-12), function(tol)
+  cbind(abstol = tol, compare(cube05, list(Broyden()), abstol = tol))))
+compare(rprob, list(LevenbergMarquardt()), maxiters = 3)
+```
+
+The termination modes of NonlinearSolve decide when a solve stops.
+`AbsTerminationMode()` tests every residual component against `abstol`, the
+`Norm` modes test a norm, and the safe modes also stop with `"Unstable"` when
+the residual blows up or `"Stalled"` when it stops improving. The safe best
+variants return the best iterate seen; the default is
+`AbsNormSafeBestTerminationMode(max_stalled_steps = 32)`.
+
+```{r}
+modes <- list(AbsTerminationMode(), RelTerminationMode(), NormTerminationMode(),
+              AbsNormTerminationMode(), RelNormSafeTerminationMode(),
+              AbsNormSafeBestTerminationMode())
+vapply(modes, function(tm)
+  solve(qprob, NewtonRaphson(), termination_condition = tm)$retcode, "")
+```
+
+Jacobians come from the problem when it has one (the symbolic Jacobian of a
+system, or the `jac` of a `NonlinearFunction`), and otherwise from finite
+differences. The `autodiff` arguments of the Julia signatures accept the
+ADTypes of the package, such as `AutoFiniteDiff()` and `AutoForwardDiff()`;
+with `AutoFiniteDiff()` the bounded solvers use the bound aware finite
+differences of NonlinearSolve, which never step outside the box.
+
+```{r}
+solve(NonlinearProblem(rosen, c(-1.2, 1)), TrustRegion(autodiff = AutoFiniteDiff()))$u
+solve(NonlinearProblem(rosen, c(-1.2, 1)), TrustRegion(autodiff = AutoForwardDiff()))$u
+```
+
+## Nonlinear least squares
+
+`NonlinearLeastSquaresProblem` minimizes the sum of squared residuals when
+there are more residuals than unknowns, or when no exact root exists. The
+residuals `(u1 - 1, u1 + 1, u2 - 3)` cannot all vanish; the minimizer is
+`(0, 3)` with residual `(-1, 1, 0)`.
+
+```{r}
+lsq <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] - 1, u[1] + 1, u[2] - 3), c(5, 5))
+compare(lsq, list(GaussNewton(), LevenbergMarquardt(), FastShortcutNLLSPolyalg()))
+solve(lsq)$resid
+```
+
+From a symbolic system with more equations than unknowns the problem is
+built the same way.
+
+```{r}
+lx <- Variable("lx"); ly <- Variable("ly")
+lsys <- complete(System(list(0 ~ lx + ly - 3, 0 ~ lx - ly - 1, 0 ~ 2 * lx - 4), name = "lsys"))
+solve(NonlinearLeastSquaresProblem(lsys, list(lx ~ 0, ly ~ 0)))$u
+```
+
+A curve fit is a least squares problem in the parameters of the model. Here
+an exponential `a exp(b t)` is fitted to six points.
+
+```{r}
+tt <- c(0, 0.5, 1, 1.5, 2, 2.5); yy <- c(1, 1.6, 2.8, 4.4, 7.6, 12)
+fit <- NonlinearLeastSquaresProblem(
+  NonlinearFunction(function(u, p) u[1] * exp(u[2] * tt) - yy, resid_prototype = numeric(6)),
+  c(1, 0.5))
+fsol <- solve(fit, LevenbergMarquardt())
+fsol$u
+sum(fsol$resid^2)
+```
+
+## Bounds and bounded solvers
+
+Bounds `lb <= u <= ub` come from the `bounds` metadata of the variables or
+from the `lb` and `ub` arguments. Algorithms without native bounds run on the
+smooth transformation of `bounds_transform.jl`; the bounded solvers of
+NonlinearSolveFirstOrder handle the box directly.
+
+```{r}
+bx <- Variable("bx", bounds = c(-10, 0))
+bprob <- NonlinearProblem(complete(System(list(0 ~ bx^2 - 4), name = "bsys")), list(bx ~ -0.1))
+c(bprob$lb, bprob$ub)
+solve(bprob, TrustRegion())$u
+```
+
+The bounded methods are `TrustRegionReflective()` (Coleman and Li),
+`Dogbox()`, `BoundedLevenbergMarquardt()`, `BoundedGaussNewton()` with a line
+search or trust region globalization, and `BoundedTrustRegion()`. Their
+statistics count residual and Jacobian evaluations, factorizations and
+linear solves.
+
+```{r}
+rbox <- NonlinearProblem(NonlinearFunction(rosen, jac = rosen_jac), u0 = c(-1.2, 1),
+                         lb = c(-2, -2), ub = c(2, 2))
+balgs <- list(TrustRegionReflective(), Dogbox(), BoundedLevenbergMarquardt(),
+              BoundedGaussNewton(), BoundedGaussNewton(globalization = "trustregion"),
+              BoundedTrustRegion())
+do.call(rbind, lapply(balgs, function(alg) {
+  s <- solve(rbox, alg)
+  data.frame(alg = alg$name, retcode = s$retcode, u1 = s$u[1], u2 = s$u[2],
+             nf = s$stats$nf, njacs = s$stats$njacs, nsteps = s$stats$nsteps)
+}))
+```
+
+When the root lies outside the box the bounded solvers stop at the
+constrained stationary point with `"Stalled"`. With `ub = (0.5, 2)` the
+Rosenbrock root `(1, 1)` is excluded. The options `store_trace = TRUE` and
+`trace_level = TraceMinimal()` (or `TraceWithJacobianConditionNumber()`,
+`TraceAll()`) keep one entry per step in `sol$trace`; `show_trace = TRUE`
+prints them as the solve runs.
+
+```{r}
+rcut <- remake(rbox, ub = c(0.5, 2))
+s <- solve(rcut, Dogbox(), store_trace = TRUE, trace_level = TraceMinimal())
+s$retcode
+s$u
+do.call(rbind, lapply(s$trace$history, function(e)
+  data.frame(iteration = e$iteration, fnorm = e$fnorm, stepnorm = e$stepnorm)))
+```
+
+The default for a problem with bounds is
+`SobolMultistart(FastShortcutBoundedPolyalg())`, which restarts the bounded
+polyalgorithm from Sobol points in the box until one start succeeds.
+
+```{r}
+solve(rbox)$u
+solve(rbox, SobolMultistart(nstarts = 4))$retcode
+```
+
+## Wrapped solvers
+
+NonlinearSolve wraps solvers from other Julia packages; modelcompR
+implements each natively after the original: `NLsolveJL()` (trust region,
+Newton, Anderson and Broyden), `CMINPACK()` (Powell's hybrid method and More's
+Levenberg Marquardt), `SIAMFANLEquationsJL()` (Newton, pseudo transient,
+secant and Anderson), `FixedPointAccelerationJL()` and `SpeedMappingJL()`
+(fixed point accelerations of the map `u + f(u)`), `LeastSquaresOptimJL()`,
+`FastLevenbergMarquardtJL()`, `NLSolversJL()` and `PETScSNES()`.
+
+```{r}
+circ2 <- NonlinearProblem(function(u, p) c(u[1]^2 + u[2]^2 - 4, u[1] * u[2] - 1), c(2, 0.5))
+compare(circ2, list(nlsolve_tr = NLsolveJL(), nlsolve_newton = NLsolveJL(method = "newton"),
+                    nlsolve_anderson = NLsolveJL(method = "anderson"), cminpack = CMINPACK(),
+                    siam_newton = SIAMFANLEquationsJL(), lso_dogleg = LeastSquaresOptimJL("dogleg"),
+                    fastlm = FastLevenbergMarquardtJL(), nlsolvers = NLSolversJL(),
+                    petsc = PETScSNES()))
+```
+
+Fixed point methods need the map `u + f(u)` to be a contraction near the
+root. The system `u = (0.5 cos(u2) + 0.1, 0.5 sin(u1) + 0.2)` is one, and
+every acceleration converges.
+
+```{r}
+fixp <- NonlinearProblem(function(u, p) c(0.5 * cos(u[2]) - u[1] + 0.1,
+                                          0.5 * sin(u[1]) - u[2] + 0.2), c(0, 0))
+compare(fixp, list(fpa_anderson = FixedPointAccelerationJL(),
+                   fpa_mpe = FixedPointAccelerationJL(algorithm = "MPE"),
+                   fpa_aitken = FixedPointAccelerationJL(algorithm = "Aitken"),
+                   speedmapping = SpeedMappingJL(),
+                   siam_anderson = SIAMFANLEquationsJL(method = "anderson", m = 2)))
+```
+
+A step count of `-1` (or `0` for SIAMFANLEquations) means the wrapped package
+does not report that count. As in MINPACK.jl, `CMINPACK()` records its call
+counts only with `store_trace = TRUE`.
+
+```{r}
+unlist(solve(circ2, CMINPACK(), store_trace = TRUE)$stats[c("nf", "njacs")])
+```
+
+## Interval problems and bracketing
+
+A scalar equation with a sign change over an interval is an
+`IntervalNonlinearProblem`. Bracketing methods keep the root enclosed and
+always converge. `ITP()` (interpolate, truncate and project) is the default;
+`Bisection()`, `Brent()`, `Falsi()`, `Ridder()`, `Muller()`, `Alefeld()` and
+`ModAB()` are the alternatives.
+
+```{r}
+ix <- Variable("ix"); ia <- Parameter("ia")
+iprob <- IntervalNonlinearProblem(complete(System(list(0 ~ ix^2 - ia), name = "isys")),
+                                  c(0, 3), list(ia ~ 2))
+isol <- solve(iprob)
+isol$alg$name
+isol[ix]
+c(isol$left, isol$right)
+```
+
+```{r}
+dottie <- IntervalNonlinearProblem(function(u, p) cos(u) - u, c(0, 1))
+do.call(rbind, lapply(list(ITP(), Bisection(), Brent(), Falsi(), Ridder(), Muller(),
+                           Alefeld(), ModAB()), function(alg) {
+  s <- solve(dottie, alg, abstol = 1e-12)
+  data.frame(alg = alg$name, retcode = s$retcode, u = sprintf("%.15f", s$u))
+}))
+```
+
+A root at an end point is reported as `"ExactSolutionLeft"` or
+`"ExactSolutionRight"`. An interval without a sign change fails with
+`"InitialFailure"` and a warning.
+
+```{r}
+solve(IntervalNonlinearProblem(function(u, p) u - p, c(1, 2), p = 1))$retcode
+bad <- solve(IntervalNonlinearProblem(function(u, p) u^2 + 1, c(0, 1)))
+bad$retcode
+```
+
+## Steady states
+
+A `SteadyStateProblem` asks for the equilibrium of an ODE system: the state
+where every derivative vanishes. It is built from a compiled time dependent
+system or from a function `f(u, p, t)`. Two algorithms solve it:
+`SSRootfind()` solves `f(u, p, Inf) = 0` with a nonlinear solver, and
+`DynamicSS()` integrates the ODE until the derivatives fall below its
+tolerances.
+
+```{r}
+D <- D_nounits
+dx <- Variable("dx", t); dk <- Parameter("dk"); ds <- Parameter("ds")
+decay <- mtkcompile(System(list(D(dx) ~ ds - dk * dx), t, name = "decay"))
+ssp <- SteadyStateProblem(decay, list(dx ~ 1, dk ~ 2, ds ~ 3))
+solve(ssp, SSRootfind())
+solve(ssp, SSRootfind(TrustRegion()))[dx]
+solve(ssp, DynamicSS(abstol = 1e-10, reltol = 1e-10), reltol = 1e-8, abstol = 1e-10)[dx]
+```
+
+The two approaches differ when the steady state is not unique. In a
+reversible reaction `a <=> b` with rates 2 and 1 every point on the line
+`b = 2 a` is a steady state. Integration from the initial state keeps the
+total `a + b` and picks the point of the line with the initial total, which
+a root finder alone cannot know.
+
+```{r}
+sa <- Variable("sa", t); sb <- Variable("sb", t)
+revr <- mtkcompile(System(list(D(sa) ~ -2 * sa + sb, D(sb) ~ 2 * sa - sb), t, name = "rev"))
+dd <- solve(SteadyStateProblem(revr, list(sa ~ 3, sb ~ 0)),
+            DynamicSS(abstol = 1e-10, reltol = 1e-10), reltol = 1e-8, abstol = 1e-10)
+c(sa = dd[sa], sb = dd[sb])
+```
+
+From an R function, `DynamicSS()` picks a default ODE solver:
+
+```{r}
+solve(SteadyStateProblem(function(u, p, t) p[1] - p[2] * u, u0 = 0, p = c(3, 2)), DynamicSS())$u
+```
+
+## Strongly connected components
+
+Large systems often decompose into blocks that can be solved one after
+another. `SCCNonlinearProblem` matches equations to unknowns, finds the
+strongly connected components of the dependency graph and solves them in
+topological order: each block sees the values of the blocks before it. This
+is ModelingToolkit's `SCCNonlinearProblem`, used for initialization of large
+models.
+
+```{r}
+kx <- Variable("kx"); ky <- Variable("ky"); kz <- Variable("kz"); kw <- Variable("kw")
+chain <- complete(System(list(0 ~ kz^2 + kz - ky, 0 ~ kx^3 - 8, 0 ~ ky - 2 * kx + kw,
+                              0 ~ kw - ky + 4), name = "chain"))
+scc <- SCCNonlinearProblem(chain, list(kx ~ 1, ky ~ 1, kz ~ 1, kw ~ 1))
+lapply(scc$var_sccs, function(i) names(scc$u0)[i])
+scc$scc_kinds
+ssol <- solve(scc)
+round(ssol$u, 10)
+ssol$stats
+```
+
+`kx` is solved first, then the affine pair `(ky, kw)` in one linear step,
+then `kz`. Blocks are classified as `"linear"`, `"nonlinear"` or
+`"homotopy"` and each gets the matching treatment.
+
+## Homotopy continuation
+
+### The `homotopy()` operator
+
+Newton's method converges only from a guess close enough to the root.
+`homotopy(actual, simplified)` marks an expression with an easy surrogate,
+as in Modelica: the solver starts with the surrogate and deforms it into the
+actual expression, `lambda * actual + (1 - lambda) * simplified`, tracking
+the root as `lambda` goes from 0 to 1. Numerically `homotopy()` evaluates
+its first argument.
+
+```{r}
+hy <- Variable("hy")
+hsys <- complete(System(list(0 ~ homotopy(atan(hy - 3), hy)), name = "hsys"))
+homotopy_enabled(hsys)
+plain <- solve(NonlinearProblem(hsys, list(hy ~ 12)), NewtonRaphson(), maxiters = 50)
+plain$retcode
+```
+
+From `hy = 12` Newton's method on `atan(hy - 3)` overshoots and never settles on the root.
+`HomotopyProblem` solves by continuation in `lambda`; the continuation
+methods are `HomotopySweep()` (natural parameter continuation),
+`KantorovichHomotopy()`, `ArcLengthContinuation()`, and the polyalgorithms
+`HomotopyPolyAlgorithm()` and `FastShortcutHomotopyPolyalg()`.
+
+```{r}
+hprob <- HomotopyProblem(hsys, list(hy ~ 12))
+do.call(rbind, lapply(list(HomotopySweep(), KantorovichHomotopy(), ArcLengthContinuation(),
+                           HomotopyPolyAlgorithm()), function(alg) {
+  s <- solve(hprob, alg)
+  data.frame(alg = alg$name, retcode = s$retcode, hy = s[hy])
+}))
+```
+
+`AbstractNonlinearProblem(sys, op)` returns a `HomotopyProblem` when the
+system contains `homotopy()` nodes and a `NonlinearProblem` otherwise;
+`strip_homotopy(sys)` replaces every node by its actual branch.
+
+```{r}
+class(AbstractNonlinearProblem(hsys, list(hy ~ 12)))[1]
+equations(strip_homotopy(hsys))
+```
+
+### All roots of polynomial systems
+
+For polynomial systems, `HomotopyContinuationProblem` finds every isolated
+complex root by total degree homotopy, the method of HomotopyContinuation.jl:
+it starts from a system with known roots, one path per root (the product of
+the equation degrees), and tracks the paths in the complex plane. The solution
+reports the root nearest the guess in `u` and all roots in `sol$original`.
+
+```{r}
+px <- Variable("px"); py <- Variable("py")
+poly <- complete(System(list(0 ~ px^2 + py^2 - 5, 0 ~ px * py - 2), name = "poly"))
+hcp <- HomotopyContinuationProblem(poly, list(px ~ 0.9, py ~ 2.2))
+hcp$degrees
+hsol <- solve(hcp, HomotopyContinuationJL())
+hsol$u
+hsol$original$n_paths
+hsol$original$real_solutions
+```
+
+A system with no real root ends with `"ConvergenceFailure"`, while its complex
+roots are still listed.
+
+```{r}
+none <- solve(HomotopyContinuationProblem(complete(System(list(0 ~ px^2 + 1), name = "none")),
+                                          list(px ~ 0)))
+none$retcode
+none$original$solutions
+```
+
+## Linear problems
+
+A system of affine equations becomes a `LinearProblem` `A u = b`.
+ModelingToolkit extracts `A` and `b` symbolically; the constructor refuses
+equations that are not affine in the unknowns.
+
+```{r}
+ux <- Variable("ux"); uy <- Variable("uy"); ua <- Parameter("ua")
+lin <- complete(System(list(0 ~ 2 * ux + uy - ua, 0 ~ ux - uy), name = "lin"))
+lprob <- LinearProblem(lin, list(ua ~ 3))
+lprob$A
+lprob$b
+lsol <- solve(lprob)
+lsol[ux]
+solve(remake(lprob, p = list(ua ~ 6)))$u
+```
+
+### LinearSolve algorithms
+
+The algorithms of LinearSolve.jl solve a `LinearProblem` built from a matrix
+and a right hand side: dense factorizations (`LUFactorization()`,
+`QRFactorization()`, `SVDFactorization()`, `CholeskyFactorization()`,
+`LDLtFactorization()`, `BunchKaufmanFactorization()`, `KLUFactorization()`
+and others) and Krylov methods (`KrylovJL_CG()`, `KrylovJL_GMRES()`,
+`KrylovJL_BICGSTAB()`, `KrylovJL_MINRES()`, `KrylovJL_LSMR()` and others).
+
+```{r}
+A <- matrix(c(4, 1, 2, 1, 3, 0, 2, 0, 5), 3); b <- c(1, 2, 3)
+mprob <- LinearProblem(A, b)
+solve(A, b)
+do.call(rbind, lapply(list(LUFactorization(), QRFactorization(), SVDFactorization(),
+                           CholeskyFactorization(), KrylovJL_CG(), KrylovJL_GMRES()),
+                      function(alg) {
+  s <- solve(mprob, alg, reltol = 1e-12)
+  data.frame(alg = alg$name, retcode = s$retcode, u = paste(signif(s$u, 8), collapse = ", "))
+}))
+```
+
+Without an algorithm, `solve()` solves by QR. Passing `assumptions =
+OperatorAssumptions()` lets the default of LinearSolve choose a
+factorization from what is known about the operator: LU for square systems, QR for rectangular or ill conditioned
+ones, SVD for severely ill conditioned ones. Rectangular systems get the
+least squares solution.
+
+```{r}
+solve(mprob, assumptions = OperatorAssumptions(condition = OperatorCondition$SuperIllConditioned))$u
+over <- LinearProblem(matrix(c(1, 1, 1, 0, 1, 2), 3), c(1, 2, 2))
+solve(over, QRFactorization())$u
+```
+
+`init()` creates a `LinearCache` that keeps the factorization; replacing `b`
+reuses it, as LinearSolve's caching interface does.
+
+```{r}
+cache <- init(LinearProblem(matrix(c(4, 1, 1, 3), 2), c(1, 2)), LUFactorization())
+solve_integrator(cache)$u
+cache$b <- c(2, 4)
+solve_integrator(cache)$u
+```
+
+## Sensitivity of nonlinear solutions
+
+The derivative of a root with respect to the parameters follows from the
+implicit function theorem: `du/dp = -(df/du)^(-1) df/dp`. `solve_gradient()`
+differentiates a scalar function of the solution, and
+`adjoint_sensitivities()` with `SteadyStateAdjoint()` does the same for a
+steady state. For `x^2 = a`, `dx/da = 1 / (2 sqrt(a))`.
+
+```{r}
+nx <- Variable("nx"); na <- Parameter("na")
+nsys <- complete(System(list(0 ~ nx^2 - na), name = "nsys"))
+solve_gradient(function(sol) sol$u[[1]], NonlinearProblem(nsys, list(nx ~ 1, na ~ 2)),
+               NewtonRaphson())$p
+1 / (2 * sqrt(2))
+```
+
+For the decay model, the steady state is `ds / dk`, so the gradient of
+`x^2` is `(-2 ds^2 / dk^3, 2 ds / dk^2)`:
+
+```{r}
+r <- adjoint_sensitivities(solve(ssp, SSRootfind()), NULL, sensealg = SteadyStateAdjoint(),
+                           g = function(u, p) u[1]^2)
+r$dp
+```
+
+## Julia equivalents
+
+| Julia | modelcompR |
+|---|---|
+| `@variables x y`, `@parameters a` | `Variable("x")`, `Parameter("a")` or `variables()`, `parameters()` |
+| `NonlinearProblem(sys, [x => 1, a => 2])` | `NonlinearProblem(sys, list(x ~ 1, a ~ 2))` |
+| `solve(prob, NewtonRaphson())` | `solve(prob, NewtonRaphson())` |
+| `sol[x]`, `sol.ps[a]`, `sol.retcode` | `sol[x]`, `sol$ps[a]`, `sol$retcode` |
+| `SciMLBase.successful_retcode(sol)` | `successful_retcode(sol)` |
+| `IntervalNonlinearProblem(f, (0, 3), p)` | `IntervalNonlinearProblem(f, c(0, 3), p = p)` |
+| `SteadyStateProblem(sys, u0p)` | `SteadyStateProblem(sys, op)` |
+| `SCCNonlinearProblem(sys, op)` | `SCCNonlinearProblem(sys, op)` |
+| `HomotopyContinuationProblem(sys, op)` | `HomotopyContinuationProblem(sys, op)` |
+| `LinearProblem(A, b)`, `init(prob, alg)` | `LinearProblem(A, b)`, `init(prob, alg)` |

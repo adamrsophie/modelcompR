@@ -1,0 +1,661 @@
+---
+title: "Delay, boundary value, discrete and PDE problems"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Delay, boundary value, discrete and PDE problems}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+Most models in modelcompR are initial value problems for ordinary
+differential equations or DAEs. This article covers the other problem
+classes of the SciML stack that modelcompR ports:
+
+* delay differential equations (DelayDiffEq.jl): `DDEProblem` and
+  `MethodOfSteps`;
+* boundary value problems (BoundaryValueDiffEq.jl): `BVProblem`,
+  `TwoPointBVProblem`, the MIRK collocation methods and shooting;
+* discrete time systems built with `Shift` (ModelingToolkit's discrete
+  domain): `DiscreteProblem` and `FunctionMap`;
+* implicit discrete systems (ImplicitDiscreteSolve.jl):
+  `ImplicitDiscreteProblem`, `IDSolve` and `SimpleIDSolve`;
+* the symbolic `PDESystem` container, with a method of lines discretization
+  written by hand;
+* fractional differential equations, rewritten as ordinary ones by
+  `fractional_to_ordinary()`.
+
+Each problem can be built from a symbolic `System`, as in ModelingToolkit, or
+directly from R functions, as in the SciML solver packages.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(modelcompR))
+t <- t_nounits
+D <- D_nounits
+```
+
+## Delay differential equations
+
+A delay differential equation (DDE) lets the derivative depend on past values
+of the state, as in `y'(t) = f(y(t), y(t - tau), t)`. Because the solution
+before the initial time is needed, a DDE takes a *history function*
+`h(p, t)` that gives the state for `t <= t0` instead of a single initial
+value.
+
+### Delays in a symbolic system
+
+In ModelingToolkit a delayed unknown is written `x(t - tau)`. R cannot call
+a variable, so modelcompR writes it `EvalAt(t - tau)(x)`: the operator
+`EvalAt(s)` evaluates its argument at time `s`. The classic test problem
+`y'(t) = -y(t - 1)` with history `y = 1` reads:
+
+```{r}
+y <- Variable("y", t)
+dde_sys <- mtkcompile(System(list(D(y) ~ -EvalAt(t - 1)(y)), t, name = "dde"))
+is_dde(dde_sys)
+unknowns(dde_sys)
+```
+
+`DDEProblem(sys, op, tspan)` takes the history from the operating point: the
+value given for an unknown is its value for every `t <= t0`. The constant
+lags are found in the equations.
+
+```{r}
+dde_prob <- DDEProblem(dde_sys, list(y ~ 1), c(0, 2))
+dde_prob$constant_lags
+```
+
+### The method of steps
+
+DelayDiffEq.jl solves DDEs with the *method of steps*: an ordinary ODE solver
+integrates the equation, and whenever the delayed time `t - tau` falls into
+the current step the solver evaluates the dense output of the solution
+computed so far. `MethodOfSteps(alg)` wraps any ODE algorithm this way, and
+`MethodOfSteps(Tsit5())` is the default of `solve()`.
+
+On `[0, 1]` the delayed value is the history, so `y = 1 - t`; on `[1, 2]`
+it is `y = t^2 / 2 - 2 t + 3 / 2`, so `y(2) = -1/2`.
+
+```{r}
+dde_sol <- solve(dde_prob, MethodOfSteps(Tsit5()), reltol = 1e-8, abstol = 1e-10)
+dde_sol$retcode
+tail(dde_sol[y], 1)
+exact <- function(s) ifelse(s <= 1, 1 - s, s^2 / 2 - 2 * s + 1.5)
+ts <- c(0.3, 0.9, 1.4, 1.8)
+cbind(numeric = dde_sol(ts)[, 1], exact = exact(ts))
+```
+
+The solution object answers symbolic indexing, including delayed
+expressions, which are evaluated from the dense output:
+
+```{r}
+tail(dde_sol[EvalAt(t - 0.5)(y)], 1)
+exact(1.5)
+```
+
+Any ODE method can be used inside the method of steps, including fixed step
+methods with `dt`:
+
+```{r}
+tail(solve(dde_prob, MethodOfSteps(RK4()), dt = 0.01)[y], 1)
+tail(solve(dde_prob, MethodOfSteps(BS3()), reltol = 1e-6, abstol = 1e-8)[y], 1)
+```
+
+`MethodOfSteps()` has two options. When a step is longer than the smallest
+lag, the delayed value lies inside the step being computed and the step is
+an implicit equation, solved by fixed point iteration with at most
+`max_fixedpoint_iters` iterations. With `constrained = TRUE` the step size is
+instead limited by the smallest lag so that no iteration is needed:
+
+```{r}
+MethodOfSteps(Tsit5(), constrained = TRUE, max_fixedpoint_iters = 20L)
+tail(solve(dde_prob, MethodOfSteps(Tsit5(), constrained = TRUE),
+           reltol = 1e-8, abstol = 1e-10)[y], 1)
+```
+
+### Histories that depend on time, and parameters as lags
+
+The history may be any expression of the independent variable. With the
+history `1 - t`, `y' = t - 2` on `[0, 1]`:
+
+```{r}
+dde_prob2 <- DDEProblem(dde_sys, list(y ~ 1 - t), c(0, 1))
+dde_prob2$h(dde_prob2$p, -2)
+tail(solve(dde_prob2, reltol = 1e-9, abstol = 1e-11)[y], 1)
+```
+
+A lag can be a parameter. Its value becomes a constant lag of the problem:
+
+```{r}
+tau <- Parameter("tau", default = 1)
+kd <- Parameter("kd", default = 1.8)
+n <- Variable("n", t)
+# Hutchinson's delayed logistic equation
+hutch <- mtkcompile(System(list(D(n) ~ kd * n * (1 - EvalAt(t - tau)(n))), t, name = "hutch"))
+hutch_prob <- DDEProblem(hutch, list(n ~ 0.1), c(0, 30))
+hutch_prob$constant_lags
+hutch_sol <- solve(hutch_prob, reltol = 1e-6, abstol = 1e-8)
+plot(hutch_sol, main = "Delayed logistic growth, kd = 1.8, tau = 1")
+```
+
+Without the delay the population would settle at `n = 1`. With
+`kd tau > pi / 2` the equilibrium is unstable and the delayed feedback
+sustains oscillations.
+
+### Discontinuity tracking
+
+At `t0` the history and the solution usually do not join smoothly: the
+derivative jumps. A constant lag `tau` carries this jump to `t0 + tau`,
+where the second derivative jumps, then to `t0 + 2 tau`, and so on, each
+time one order smoother. An adaptive solver that steps over such a point
+loses accuracy, so the method of steps makes the propagated discontinuities
+stopping times. As in DelayDiffEq, they are tracked up to the order of the
+method plus one: with `Tsit5` (order 5) the points `1, ..., 6` are stopping
+times and `7` is not.
+
+```{r}
+raw <- DDEProblem(function(u, h, p, t) -h(p, t - 1), 1, function(p, t) 1, c(0, 8),
+                  constant_lags = 1)
+raw_sol <- solve(raw, MethodOfSteps(Tsit5()), reltol = 1e-8, abstol = 1e-10)
+raw_sol$t[abs(raw_sol$t - round(raw_sol$t)) < 1e-12]
+```
+
+This example also shows the problem built from R functions, in the
+DelayDiffEq form `DDEProblem(f, u0, h, tspan, p)` with `f(u, h, p, t)`: the
+right hand side calls the history `h(p, s)` for delayed values, which returns
+the history before `t0` and the dense solution after it. Without a symbolic
+system the lags must be listed in `constant_lags`.
+
+Two further options describe the discontinuities. `neutral = TRUE` declares
+a neutral equation (delays in derivative terms), whose discontinuities keep
+their order as they propagate. `order_discontinuity_t0` gives the order of
+the discontinuity at the initial time: `0` (the default) means the history
+and the initial value may disagree, `1` means they agree but the derivative
+jumps, and so on.
+
+```{r}
+neutral <- DDEProblem(function(u, h, p, t) -h(p, t - 1), 1, function(p, t) 1, c(0, 4),
+                      constant_lags = 1, neutral = TRUE, order_discontinuity_t0 = 1)
+c(neutral$neutral, neutral$order_discontinuity_t0)
+neutral_sol <- solve(neutral, MethodOfSteps(Euler()), dt = 0.25)
+all(1:4 %in% neutral_sol$t)
+```
+
+Two lags give discontinuities at all their sums:
+
+```{r}
+two <- DDEProblem(function(u, h, p, t) -h(p, t - 1) - 0.5 * h(p, t - 1.5), 1,
+                  function(p, t) 1, c(0, 4), constant_lags = c(1, 1.5))
+two_sol <- solve(two, MethodOfSteps(Tsit5()), reltol = 1e-8, abstol = 1e-10)
+all(seq(1, 4, by = 0.5) %in% two_sol$t)
+```
+
+### State dependent delays
+
+When the lag depends on the state, the discontinuities cannot be computed in
+advance. They are the roots of `t - lag(u, p, t) = d` for earlier
+discontinuities `d`, and the method of steps locates them during the
+integration. The equation `y'(t) = -y(t - 1 - y(t))` with history 1 has the
+solution `y = 1 - t` on `[0, 1]` and `y = t - 3 + 2 exp(1 - t)` until the next
+discontinuity at `1 + log(2)`. In a symbolic system the lag is simply an
+expression of the state; modelcompR turns it into a dependent lag:
+
+```{r}
+ys <- Variable("ys", t)
+sd_sys <- mtkcompile(System(list(D(ys) ~ -EvalAt(t - 1 - ys)(ys)), t, name = "sdlag"))
+sd_prob <- DDEProblem(sd_sys, list(ys ~ 1), c(0, 1.6))
+length(sd_prob$constant_lags)
+length(sd_prob$dependent_lags)
+sd_sol <- solve(sd_prob, MethodOfSteps(Tsit5()), reltol = 1e-9, abstol = 1e-11, dt = 0.3)
+sd_exact <- function(s) ifelse(s <= 1, 1 - s, s - 3 + 2 * exp(1 - s))
+ts <- c(0.5, 1.2, 1.55)
+cbind(numeric = sd_sol(ts)[, 1], exact = sd_exact(ts))
+```
+
+With R functions the dependent lags are given as functions `lag(u, p, t)`
+in `dependent_lags`, the delayed time being `t - lag(u, p, t)`. On `[0, 2]`
+both discontinuities, at `1` and `1 + log(2)`, lie inside the interval, and
+the solver ends a step at each of them, although the initial step `dt = 0.3`
+does not land on either:
+
+```{r}
+sd_raw <- DDEProblem(function(u, h, p, t) -h(p, t - 1 - u[1]), 1, function(p, t) 1, c(0, 2),
+                     dependent_lags = list(function(u, p, t) 1 + u[1]))
+sd_raw_sol <- solve(sd_raw, reltol = 1e-9, abstol = 1e-11, dt = 0.3)
+c(min(abs(sd_raw_sol$t - 1)), min(abs(sd_raw_sol$t - 1 - log(2))))
+cbind(numeric = sd_raw_sol(c(1.3, 1.6))[, 1], exact = sd_exact(c(1.3, 1.6)))
+```
+
+### Events and stochastic delays
+
+Callbacks work as for ODEs, and a jump introduced by a callback is itself
+propagated by the lags. Here `u` is set to zero at `t = 0.5`, and the jump in
+the derivative reappears at `t = 1.5`:
+
+```{r}
+cb <- PresetTimeCallback(0.5, function(integ) integ$u[1] <- 0)
+cb_sol <- solve(raw, MethodOfSteps(Tsit5()), reltol = 1e-9, abstol = 1e-11, callback = cb)
+1.5 %in% cb_sol$t
+cb_sol(c(1, 1.5, 2))[, 1]
+```
+
+A system with delays and Brownian noise is a stochastic DDE; it is built
+with `SDDEProblem()` and solved with a stochastic method inside the method of
+steps:
+
+```{r}
+ysd <- Variable("ysd", t)
+sig <- Parameter("sig", default = 0.1)
+B <- Brownian("Bd")
+sdde <- mtkcompile(System(list(D(ysd) ~ -EvalAt(t - 1)(ysd) + sig * B), t, name = "sdde"))
+sdde_sol <- solve(SDDEProblem(sdde, list(ysd ~ 1), c(0, 2)), MethodOfSteps(EM()), dt = 0.01, seed = 1)
+sdde_sol$retcode
+tail(sdde_sol[ysd], 1)
+```
+
+## Boundary value problems
+
+A boundary value problem (BVP) prescribes conditions at more than one time,
+for example at both ends of an interval, instead of a full initial state.
+The standard test problem is `y'' = -y` with `y(0) = 0` and `y(pi/2) = 1`,
+whose solution is `sin(t)`.
+
+### Symbolic constraints
+
+In ModelingToolkit the boundary conditions of a BVP are `constraints` of the
+system, equations between values of the unknowns at fixed times, written
+with `EvalAt`. Initial values given in the operating point are fixed; the
+other unknowns get `guesses` that start the solver.
+
+```{r}
+yb <- Variable("yb", t)
+bvp_sys <- mtkcompile(System(list(D(D(yb)) ~ -yb), t, name = "bvp",
+                             constraints = list(EvalAt(0)(yb) ~ 0, EvalAt(pi / 2)(yb) ~ 1)))
+bvp <- BVProblem(bvp_sys, list(), c(0, pi / 2), guesses = list(yb ~ 0, D(yb) ~ 0.5))
+bvp
+```
+
+### MIRK collocation
+
+The MIRK methods (mono implicit Runge Kutta) of BoundaryValueDiffEq.jl solve
+the collocation equations on a mesh for all node values at once, with
+Newton's method. `MIRK4()`, `MIRK5()` and `MIRK6()` have orders 4, 5 and 6.
+`dt` sets the initial mesh. By default the mesh is refined by *defect
+control*: the residual of the continuous solution is estimated on each
+interval, and intervals are subdivided until it is below `abstol`.
+
+```{r}
+bvp_sol <- solve(bvp, MIRK4(), dt = 0.05)
+bvp_sol$retcode
+ts <- c(0.2, 0.7, 1.3)
+cbind(numeric = bvp_sol(ts)[, 1], exact = sin(ts))
+max(abs(bvp_sol[default_toterm(D(yb))] - cos(bvp_sol$t)))
+```
+
+On a fixed mesh (`adaptive = FALSE`) the convergence order is visible by
+halving the step:
+
+```{r}
+f_osc <- function(u, p, t) c(u[2], -u[1])
+bc_osc <- function(sol, p, t) c(sol(0)[1], sol(pi / 2)[1] - 1)
+raw_bvp <- BVProblem(f_osc, bc_osc, c(0, 0), c(0, pi / 2))
+orders <- sapply(list(MIRK4(), MIRK5(), MIRK6()), function(alg) {
+  err <- vapply(c(pi / 8, pi / 16), function(h) {
+    s <- solve(raw_bvp, alg, dt = h, adaptive = FALSE)
+    max(abs(s[1] - sin(s$t)))
+  }, 0)
+  log2(err[1] / err[2])
+})
+setNames(round(orders, 2), c("MIRK4", "MIRK5", "MIRK6"))
+```
+
+The raw form `BVProblem(f, bc, u0, tspan, p)` takes the right hand side
+`f(u, p, t)` and a residual function `bc(sol, p, t)`, where `sol` is the
+current approximate solution, callable at any time; the residual must vanish
+at the solution. `u0` is the initial guess.
+
+Defect control matters for problems with boundary layers. The problem
+`y'' = 100 y`, `y(0) = y(1) = 1` has the solution
+`cosh(10 (t - 1/2)) / cosh(5)`, which is steep near both ends. Starting from
+a coarse mesh of four intervals, MIRK4 adds points where they are needed:
+
+```{r}
+layer <- BVProblem(function(u, p, t) c(u[2], 100 * u[1]),
+                   function(sol, p, t) c(sol(0)[1] - 1, sol(1)[1] - 1), c(1, 0), c(0, 1))
+layer_exact <- function(s) cosh(10 * (s - 0.5)) / cosh(5)
+tt <- seq(0, 1, length.out = 101)
+fixed <- solve(layer, MIRK4(), dt = 0.25, adaptive = FALSE)
+adapt <- solve(layer, MIRK4(), dt = 0.25)
+c(fixed_error = max(abs(fixed(tt)[, 1] - layer_exact(tt))),
+  adaptive_error = max(abs(adapt(tt)[, 1] - layer_exact(tt))),
+  mesh_points = length(adapt$t))
+plot(adapt$t, adapt[1], type = "b", pch = 20, xlab = "t", ylab = "y",
+     main = "MIRK4 mesh after defect control")
+```
+
+`MIRK4(max_num_subintervals = )` caps the mesh size; when the defect cannot
+be met within the cap, the solve warns and returns `retcode = "Failure"`.
+
+### Shooting and multiple shooting
+
+Shooting turns the BVP into a nonlinear system for the unknown initial
+values: each guess is integrated with an ODE solver and the boundary residual
+is driven to zero. `Shooting(ode_alg)` uses a single integration;
+`MultipleShooting(nshoots, ode_alg)` splits the interval into `nshoots`
+pieces with continuity conditions, which is more robust for unstable
+problems.
+
+```{r}
+for (alg in list(MIRK4(), Shooting(Tsit5()), MultipleShooting(4, Tsit5()))) {
+  s <- solve(bvp, alg, dt = 0.05)
+  cat(sprintf("%-18s %-8s max error %.2e\n", alg$name, s$retcode,
+              max(abs(s(ts)[, 1] - sin(ts)))))
+}
+```
+
+### Interior conditions and fixed initial values
+
+Constraints may sit inside the interval, and unknowns with values in the
+operating point keep them. Here `y(0) = 0` is fixed and `y(0.5) = 1`, so
+`y = sin(t) / sin(0.5)`:
+
+```{r}
+int_sys <- mtkcompile(System(list(D(D(yb)) ~ -yb), t, name = "bvpi",
+                             constraints = list(EvalAt(0.5)(yb) ~ 1)))
+int_bvp <- BVProblem(int_sys, list(yb ~ 0), c(0, 1), guesses = list(D(yb) ~ 1))
+int_bvp$u0_idxs
+c(solve(int_bvp, MIRK4(), dt = 0.02)(1)[[1]], sin(1) / sin(0.5))
+```
+
+If the fixed values and constraints together give more conditions than
+unknowns, `BVProblem()` warns that the problem is overdetermined and solves
+the conditions in the least squares sense.
+
+### Two point problems
+
+When every condition involves only one end of the interval, the problem is a
+*two point* BVP. `TwoPointBVProblem(f, bc, u0, tspan, p)` takes
+`bc = list(bca, bcb)`, with `bca(ua, p)` evaluated at the start and
+`bcb(ub, p)` at the end, which lets the collocation Jacobian stay sparse:
+
+```{r}
+tp <- TwoPointBVProblem(f_osc, list(function(ua, p) ua[1], function(ub, p) ub[1] - 1),
+                        c(0, 1), c(0, pi / 2))
+tp_sol <- solve(tp, MIRK4(), dt = 0.05)
+c(tp_sol(pi / 4)[1], sin(pi / 4))
+```
+
+Second order forms exist as well: `SecondOrderBVProblem(f, bc, u0, tspan)`
+with `f(du, u, p, t)` the acceleration, and `TwoPointSecondOrderBVProblem()`.
+
+```{r}
+so <- SecondOrderBVProblem(function(du, u, p, t) -u,
+                           function(du, u, p, t) c(u(t[1]), u(t[2]) - 1), 0, c(0, pi / 2))
+solve(so, MIRK4(), dt = 0.05)(pi / 4)
+```
+
+The state of the second order solution is `c(du, u)`, velocities first, so
+the second entry is `sin(pi/4)`.
+
+## Discrete time systems
+
+A discrete time system advances in steps instead of continuously. In
+ModelingToolkit a step is a `Shift` of the independent variable:
+`ShiftIndex()` returns an index `k`, and `(k - 1)(x)` is the value of `x` one
+step earlier. This is the Julia `x(k - 1)`.
+
+### Difference equations and FunctionMap
+
+The halving map `x(k) = 0.5 x(k - 1)`:
+
+```{r}
+xd <- Variable("xd", t)
+k <- ShiftIndex(t)
+halving <- mtkcompile(System(list(xd ~ 0.5 * (k - 1)(xd)), t, name = "halving"))
+unknowns(halving)
+observed(halving)
+```
+
+After compilation the unknown is the past value `xd(k - 1)` (printed with a
+subscript `t-1`) and `xd` itself is observed. `DiscreteProblem()` takes
+initial values for the past values, and `FunctionMap()` applies the map once
+per step:
+
+```{r}
+dprob <- DiscreteProblem(halving, list((k - 1)(xd) ~ 1), c(0, 5))
+dsol <- solve(dprob, FunctionMap())
+dsol$t
+dsol[xd]
+dsol[shift2term((k - 1)(xd))]
+```
+
+`shift2term()` turns the shifted expression into the named variable that
+holds it. A value given for `xd` itself is its value at the initial time,
+and the past value is solved for:
+
+```{r}
+solve(DiscreteProblem(halving, list(xd ~ 1), c(0, 5)), FunctionMap())[xd]
+```
+
+Higher shifts give higher order recursions. The Fibonacci numbers:
+
+```{r}
+fy <- Variable("fy", t)
+fib <- mtkcompile(System(list(fy ~ (k - 1)(fy) + (k - 2)(fy)), t, name = "fib"))
+solve(DiscreteProblem(fib, list((k - 1)(fy) ~ 1, (k - 2)(fy) ~ 0), c(0, 9)), FunctionMap())[fy]
+```
+
+### A discrete SIR model
+
+Discrete epidemic models are a common use of difference equations. Each
+step of length `dt` moves a fraction `1 - exp(-rate dt)` between
+compartments:
+
+```{r}
+S <- Variable("S", t); I <- Variable("I", t); R <- Variable("R", t)
+beta <- Parameter("beta", default = 0.05); cc <- Parameter("c", default = 10)
+gam <- Parameter("gamma", default = 0.25); dtp <- Parameter("dt", default = 0.1)
+N <- (k - 1)(S) + (k - 1)(I) + (k - 1)(R)
+infection <- (1 - exp(-beta * cc * (k - 1)(I) / N * dtp)) * (k - 1)(S)
+recovery <- (1 - exp(-gam * dtp)) * (k - 1)(I)
+sir <- mtkcompile(System(list(S ~ (k - 1)(S) - infection,
+                              I ~ (k - 1)(I) + infection - recovery,
+                              R ~ (k - 1)(R) + recovery), t, name = "sir"))
+sir_sol <- solve(DiscreteProblem(sir, list(S ~ 990, I ~ 10, R ~ 0), c(0, 200)), FunctionMap())
+matplot(sir_sol$t, sir_sol[list(S, I, R)], type = "l", lty = 1, xlab = "step", ylab = "people")
+legend("right", c("S", "I", "R"), col = 1:3, lty = 1)
+```
+
+### Raw maps and callbacks
+
+`DiscreteProblem(f, u0, tspan, p)` takes a map `f(u, p, t)` returning the next
+state. Discrete callbacks run between steps:
+
+```{r}
+counter <- DiscreteProblem(function(u, p, t) u + p, 0, c(0, 3), 1)
+solve(counter, FunctionMap())[1]
+solve(counter, FunctionMap(), callback = PresetTimeCallback(1, function(i) i$u[] <- 100))[1]
+```
+
+Discrete equations can also be mixed with continuous ones through clocks,
+`Sample` and `Hold`; the clocked case is covered with the event and hybrid
+system tools.
+
+## Implicit discrete systems
+
+When the next state is only given implicitly, by `F(u_next, u, p, t) = 0`,
+the problem is an implicit discrete problem, as in ImplicitDiscreteSolve.jl.
+Each step solves a nonlinear system. `IDSolve()` uses Newton's method and
+steps by `dt` (default 1); the initial state is first made consistent by one
+solve at the initial time.
+
+```{r}
+cubic <- function(un, u, p, t) un + un^3 - u
+idp <- ImplicitDiscreteProblem(cubic, 2, c(0, 3))
+id_sol <- solve(idp, IDSolve())
+us <- unlist(id_sol$u)
+us
+# each value solves u_next + u_next^3 = u_previous
+us[-1] + us[-1]^3 - us[-4]
+```
+
+From a symbolic system, an algebraic equation that involves the current
+value makes the map implicit:
+
+```{r}
+xi <- Variable("xi", t)
+imp <- mtkcompile(System(list(0 ~ xi^3 + xi - (k - 1)(xi)), t, name = "imp"))
+imp_sol <- solve(ImplicitDiscreteProblem(imp, list((k - 1)(xi) ~ 2, xi ~ 1), c(0, 3)), IDSolve())
+imp_sol[xi]
+```
+
+`SimpleIDSolve()` is the port of SimpleImplicitDiscreteSolve.jl, a light
+solver built on SimpleNonlinearSolve. It reproduces the Julia values to
+rounding. A backward Euler discretization of the Lotka Volterra model with
+step `h = 0.1` is an implicit map:
+
+```{r}
+lv_be <- function(un, u, p, t) {
+  h <- 0.1
+  c(un[1] - u[1] - h * (p[1] * un[1] - p[2] * un[1] * un[2]),
+    un[2] - u[2] - h * (-p[3] * un[2] + p[4] * un[1] * un[2]))
+}
+lv_prob <- ImplicitDiscreteProblem(lv_be, c(1, 1), c(0, 1), p = c(1.5, 1, 3, 1))
+lv_sol <- solve(lv_prob, SimpleIDSolve(), dt = 0.1)
+lv_sol$t
+lv_sol$u[[length(lv_sol$u)]]
+lv_sol$retcode
+```
+
+`SimpleIDSolve()` reports `retcode = "Default"` on success, as the Julia
+package does, and accepts the saving options `save_everystep` and
+`save_start`:
+
+```{r}
+length(solve(lv_prob, SimpleIDSolve(), dt = 0.1, save_everystep = FALSE)$t)
+```
+
+## Partial differential equations
+
+ModelingToolkit represents a PDE problem with a `PDESystem`, a symbolic
+container of equations, boundary and initial conditions, domains and
+variables. Discretization is done by separate packages (MethodOfLines.jl in
+Julia). modelcompR ports the container and the `discretize()` generic, but no
+discretizer: the object is the input of discretization code.
+
+The heat equation `u_t = a u_xx` on `[0, 1]` with `u(0, x) = sin(pi x)`:
+
+```{r}
+tx <- independent_variable("tx"); xx <- independent_variable("xx")
+u <- Variable("u", list(tx, xx)); a <- Parameter("a")
+Dt <- Differential(tx); Dxx <- Differential(xx, 2)
+heat <- PDESystem(Dt(u) ~ a * Dxx(u),
+                  list(Function("u")(0, xx) ~ sin(pi * xx)),
+                  list(tx ~ c(0, 1), VarDomainPairing(xx, Interval(0, 1))),
+                  list(tx, xx), list(u), list(a),
+                  analytic = list(u ~ exp(-a * pi^2 * tx) * sin(pi * xx)), name = "heat")
+heat
+heat$domain[[2]]
+```
+
+The `analytic` solutions become functions called with the parameter values
+first, then the independent variables:
+
+```{r}
+u_exact <- heat$analytic_func[[1]]
+u_exact(0.5, 0.1, 0.25)
+```
+
+### A method of lines by hand
+
+The method of lines replaces the spatial derivative by finite differences on
+a grid and leaves an ODE system in time. With `M` interior points and
+spacing `dx`, `u_i' = a (u_{i-1} - 2 u_i + u_{i+1}) / dx^2` and `u = 0` at
+both ends. The semi discrete system can be written symbolically and compiled
+like any other model:
+
+```{r}
+M <- 9
+dx <- 1 / (M + 1)
+grid <- (1:M) * dx
+ug <- lapply(1:M, function(i) Variable(paste0("ug", i), t))
+ah <- Parameter("ah", default = 0.5)
+nb <- function(i) if (i < 1 || i > M) 0 else ug[[i]]
+mol_eqs <- lapply(1:M, function(i)
+  D(ug[[i]]) ~ ah * (nb(i - 1) - 2 * ug[[i]] + nb(i + 1)) / dx^2)
+mol <- mtkcompile(System(mol_eqs, t, name = "mol"))
+op <- Map(function(v, x0) v ~ sin(pi * x0), ug, grid)
+mol_sol <- solve(ODEProblem(mol, op, c(0, 1)), reltol = 1e-8, abstol = 1e-10)
+u_num <- sapply(ug, function(v) tail(mol_sol[v], 1))
+max(abs(u_num - u_exact(0.5, 1, grid)))
+```
+
+The remaining error, about `3e-4` here, is the error of the second order
+central difference in space, which falls by a factor of about four when the
+grid spacing is halved.
+`PDEProblem(prob, space = )` wraps such a semi discrete problem together
+with its grid, and `PDETimeSeriesSolution()` attaches the grid to the
+solution, as the SciML PDE interface does.
+
+```{r}
+pde_prob <- PDEProblem(ODEProblem(mol, op, c(0, 1)), space = list(xx = grid))
+class(pde_prob)
+```
+
+## Fractional differential equations
+
+A fractional derivative `D^alpha x` of non integer order is a memory
+operator: it depends on the whole past of `x`. ModelingToolkit's
+`fractional_to_ordinary()` replaces it by a sum of exponentials, each
+carried by one extra ODE state, so that the fractional equation becomes an
+ordinary system that any stiff solver can integrate. The arguments are the
+right hand sides, the variables, the orders `alpha`, the accuracy `epsilon`
+of the quadrature and the final time `T` on which it is valid.
+
+The equation `D^0.5 x = 1` with `x(0) = 0` has the solution
+`x = 2 sqrt(t / pi)`:
+
+```{r}
+xf <- Variable("xf", t)
+frac <- fractional_to_ordinary(list(1), list(xf), 0.5, 1e-2, 1)
+length(unknowns(frac))
+frac_sol <- solve(ODEProblem(frac, list(), c(0, 1)), Rodas5P(), reltol = 1e-8, abstol = 1e-10)
+c(numeric = tail(frac_sol[xf], 1), exact = 2 / sqrt(pi))
+```
+
+The difference, about `5e-3`, is the accuracy of the quadrature with
+`epsilon = 1e-2`.
+
+A smaller `epsilon` adds states and accuracy. `linear_fractional_to_ordinary()`
+handles linear equations with several fractional orders,
+`sum_j coeffs[j] D^degrees[j] x = rhs`, here
+`D^3 x + D^2.5 x + D^2 x + 4 D x + D^0.5 x + 4 x = 6 cos(t)`, an example of
+ModelingToolkit's tests:
+
+```{r}
+lin <- linear_fractional_to_ordinary(c(3, 2.5, 2, 1, 0.5, 0), c(1, 1, 1, 4, 1, 4), 6 * cos(t),
+                                     1e-2, 20, initials = c(1, 1, -1), matrix = TRUE)
+length(unknowns(lin))
+lin_sol <- solve(ODEProblem(lin, list(), c(0, 20)), FBDF(), reltol = 1e-8, abstol = 1e-8)
+vars <- c(unknowns(lin), lapply(observed(lin), `[[`, "lhs"))
+x0 <- Filter(function(v) format(v) == "x_0(t)", vars)[[1]]
+lin_sol(c(7, 20), idxs = x0)
+```
+
+ModelingToolkit 11 gives `1.41089` and `1.32103` at these times with
+`epsilon = 1e-3` (69 states); the cheaper `epsilon = 1e-2` used here agrees
+to the digits shown.
+
+## Summary
+
+| Problem | Constructor | Solvers |
+|---|---|---|
+| Delay | `DDEProblem`, `SDDEProblem` | `MethodOfSteps(alg)` |
+| Boundary value | `BVProblem`, `TwoPointBVProblem`, `SecondOrderBVProblem` | `MIRK4`, `MIRK5`, `MIRK6`, `Shooting`, `MultipleShooting` |
+| Discrete | `DiscreteProblem` | `FunctionMap` |
+| Implicit discrete | `ImplicitDiscreteProblem` | `IDSolve`, `SimpleIDSolve` |
+| PDE | `PDESystem`, `PDEProblem` | method of lines by hand, then any ODE solver |
+| Fractional | `fractional_to_ordinary`, `linear_fractional_to_ordinary` | stiff ODE solvers |

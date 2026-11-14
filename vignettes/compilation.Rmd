@@ -1,0 +1,930 @@
+---
+title: "Structural simplification, DAEs and model transformations"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Structural simplification, DAEs and model transformations}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+```{r setup}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+A model written with modelcompR is a set of symbolic equations, usually more
+of them than a numerical solver needs and often in a form that no explicit
+solver can integrate directly. `mtkcompile()` (called `structural_simplify()`
+in older ModelingToolkit releases, and available under that name too) turns
+such a model into a small system of first order equations plus a list of
+*observed* equations from which every eliminated variable can be recovered.
+This article explains each stage of that pipeline, shows how to inspect and
+steer it, and then covers the code generation and model transformation tools
+that work on compiled and uncompiled systems.
+
+The pipeline follows `mtkcompile` of ModelingToolkit.jl closely:
+
+1. **Connection expansion.** `connect()` statements become equality and
+   conservation equations, and the component hierarchy is flattened.
+2. **Alias elimination.** Equations that are integer linear combinations of
+   variables, such as `x ~ y` or `0 ~ a + b`, are reduced with an exact
+   Bareiss elimination; aliases and redundant equations disappear.
+3. **Index reduction.** The Pantelides algorithm differentiates constraint
+   equations until the system has differential index one.
+4. **State selection.** The dummy derivative method decides which of the
+   differentiated variables remain states and which become algebraic.
+5. **Tearing.** Equations that can be solved explicitly for one variable are
+   turned into observed equations; what remains are residuals of algebraic
+   loops.
+
+All examples below use the predefined time variable `t_nounits` and
+derivative `D_nounits`, and a small helper that prints equations one per line.
+
+```{r}
+t <- t_nounits
+D <- D_nounits
+show_eqs <- function(eqs) writeLines(vapply(eqs, format, ""))
+```
+
+## A first compilation
+
+A first order lag with an algebraic output has one differential equation and
+one algebraic one. Compilation keeps `x` as the only state and moves `y` to
+the observed equations.
+
+```{r}
+variables("x(t)", "y(t)")
+parameters("tau = 3")
+lag <- System(list(D(x) ~ (y - x) / tau, y ~ 2 * x), t, name = "lag")
+lagc <- mtkcompile(lag)
+lagc
+show_eqs(observed(lagc))
+```
+
+The result is *complete* (its names are fixed and it can be used to build
+problems) and *scheduled* (it remembers how it was derived). Calling
+`mtkcompile()` on an already compiled system is an error, because the
+information about the original model has been consumed. Observed variables
+remain accessible through solutions, for example `sol[y]`.
+
+## Connection expansion
+
+Acausal component models are written with connectors and `connect()`.
+`expand_connections()` replaces each connection by the equations it implies:
+potential variables are equal and flow variables (declared with
+`connect = Flow`) sum to zero. The RC circuit below is the one of the
+ModelingToolkit acausal components tutorial.
+
+```{r}
+Pin <- connector(function(name) {
+  v <- Variable("v", t); i <- Variable("i", t, connect = Flow)
+  System(list(), t, list(v, i), list(), name = name)
+})
+Ground <- function(name) {
+  g <- Pin(name = "g")
+  System(list(g$v ~ 0), t, list(), list(), systems = list(g), name = name)
+}
+OnePort <- function(name) {
+  p <- Pin(name = "p"); n <- Pin(name = "n")
+  v <- Variable("v", t); i <- Variable("i", t)
+  System(list(v ~ p$v - n$v, 0 ~ p$i + n$i, i ~ p$i), t, list(v, i), list(),
+         systems = list(p, n), name = name)
+}
+two_terminal <- function(name, par, value, law) {
+  op <- OnePort("oneport"); u <- toggle_namespacing(op, FALSE)
+  q <- Parameter(par, default = value)
+  extend(System(list(law(u, q)), t, list(), list(q), name = name), op)
+}
+resistor <- two_terminal("resistor", "R", 2, function(u, R) u$v ~ u$i * R)
+capacitor <- two_terminal("capacitor", "C", 1, function(u, C) D(u$v) ~ u$i / C)
+source <- two_terminal("source", "V", 1, function(u, V) V ~ u$v)
+ground <- Ground("ground")
+rc <- System(list(connect(source$p, resistor$p), connect(resistor$n, capacitor$p),
+                  connect(capacitor$n, source$n), connect(capacitor$n, ground$g)),
+             t, systems = list(resistor, capacitor, source, ground), name = "rc")
+expanded <- expand_connections(rc)
+length(equations(expanded))
+show_eqs(tail(equations(expanded), 6))
+```
+
+The four connections produced six equations; together with the component
+equations there are 20 equations in 20 unknowns. `mtkcompile()` calls
+`expand_connections()` and `flatten()` itself, and reduces the circuit to the
+single capacitor voltage.
+
+```{r}
+rcc <- mtkcompile(rc)
+rcc
+show_eqs(full_equations(rcc))
+sol <- solve(ODEProblem(rcc, list(rcc$capacitor$v ~ 0), c(0, 4)), Tsit5())
+c(computed = tail(sol[rcc$capacitor$v], 1), exact = 1 - exp(-2))
+```
+
+`full_equations()` substitutes the observed equations into the remaining
+ones, which shows the familiar `dv/dt = (V - v) / (R C)`.
+
+## Alias elimination
+
+Most of the 19 eliminated variables above were *aliases*: variables equal to
+another variable or its negative. Alias elimination works on the equations
+whose terms are integer multiples of variables, and it detects redundancy
+exactly. In the flat version of the circuit below, the last equation repeats
+the conservation law `0 ~ is + ir`, so there are ten equations for nine
+unknowns. `alias_elimination()` (the pass on its own) removes the redundant
+equation, and `mtkcompile()` then balances the system.
+
+```{r}
+variables("vs(t)", "is(t)", "vr(t)", "ir(t)", "vc(t)", "ic(t)", "va(t)", "vb(t)", "vg(t)")
+parameters("R = 2", "C = 1", "V = 1")
+flat_rc <- System(list(vs ~ V, vs ~ va - vg, vr ~ va - vb, vr ~ R * ir, vc ~ vb - vg,
+                       D(vc) ~ ic / C, ir ~ ic, 0 ~ is + ir, vg ~ 0, 0 ~ -ir - is),
+                  t, name = "flat_rc")
+length(equations(alias_elimination(flat_rc)))
+flat_c <- mtkcompile(flat_rc)
+unknowns(flat_c)
+show_eqs(observed(flat_c))
+```
+
+When two aliases contradict each other, as `x ~ y` and `x ~ -y`, both
+variables are forced to zero and become the observed equations `x ~ 0` and
+`y ~ 0`.
+
+## The Cartesian pendulum: an index 3 DAE
+
+A pendulum of length `L` written in Cartesian coordinates is the standard
+example of a high index DAE. With the tension `T` as a Lagrange multiplier:
+
+$$x'' = T x, \qquad y'' = T y - g, \qquad 0 = x^2 + y^2 - L^2.$$
+
+The tension appears in no equation that can be solved for it: the constraint
+has to be differentiated twice before `T` enters and three times before the
+system becomes an ODE, so the differential index is three. Explicit and
+implicit ODE solvers alike cannot integrate this form directly.
+
+```{r}
+px <- Variable("x", t, state_priority = 10, guess = 1)
+py <- Variable("y", t, guess = -1)
+tens <- Variable("T", t, guess = 1)
+g <- Parameter("g", default = 9.81)
+len <- Parameter("L", default = 1)
+pend <- System(list(D(D(px)) ~ tens * px, D(D(py)) ~ tens * py - g,
+                    0 ~ px^2 + py^2 - len^2), t, name = "pend")
+pend
+```
+
+### Pantelides index reduction
+
+`dae_index_lowering()` runs the Pantelides algorithm alone (ModelingToolkit's
+`dae_index_lowering`). It finds the minimal set of equations to
+differentiate and replaces the constraint by its second derivative, which
+gives an index one system in which every second derivative and the tension
+are determined.
+
+```{r}
+show_eqs(equations(dae_index_lowering(pend)))
+```
+
+This form has lost the position and velocity constraints; integrating it
+lets the pendulum drift off the circle. `mtkcompile(pend, dummy_derivative =
+FALSE)` produces this index one system with all four positions and
+velocities as states.
+
+```{r}
+show_eqs(equations(mtkcompile(pend, dummy_derivative = FALSE)))
+```
+
+### Dummy derivatives
+
+The default, the dummy derivative method of Mattsson and Söderlind, keeps the
+original constraint and all of its derivatives. To restore a square system it
+declares some derivatives to be ordinary algebraic variables (dummy
+derivatives). Here `y` and its velocity `yˍt` become algebraic, while `x` and
+its velocity `xˍt` remain differential states; the `state_priority = 10` on
+`x` decides which coordinate is kept.
+
+```{r}
+pendc <- mtkcompile(pend)
+pendc
+show_eqs(observed(pendc))
+```
+
+The five unknowns include two differential states and three algebraic
+variables, determined by the position constraint, the velocity constraint and
+the acceleration constraint. The variable names `xˍt` and `yˍtt` are the
+lowered derivative names of ModelingToolkit (`D(x)` becomes `xˍt`).
+
+### Solving the reduced pendulum
+
+`ODEProblem()` accepts values for any variable of the original model,
+including derivatives such as `D(px)`. Here only the angle and the zero
+initial velocity are given; initialization solves the constraints for `y`,
+`yˍt` and `T`, starting from their guesses.
+
+```{r}
+th0 <- 0.5
+prob <- ODEProblem(pendc, list(px ~ sin(th0), D(px) ~ 0), c(0, 3))
+prob$u0
+sol <- solve(prob, Rodas5P(), reltol = 1e-8, abstol = 1e-8)
+sol$retcode
+max(abs(sol[px]^2 + sol[py]^2 - 1))
+```
+
+The constraint holds to the solver tolerance during the whole integration,
+since it is part of the equations. The tension `T` is an algebraic unknown of
+the compiled system and can be queried like the coordinates.
+
+```{r}
+plot(sol$t, sol[px], type = "l", xlab = "t", ylab = "position", ylim = c(-1, 0.6))
+lines(sol$t, sol[py], lty = 2)
+legend("bottomright", c("x(t)", "y(t)"), lty = 1:2, bty = "n")
+sol(3, idxs = list(px, py, tens))
+```
+
+As a check, the angle obeys `theta'' = -(g / L) sin(theta)`; the angle at
+`t = 3` recovered from the Cartesian solution agrees with a direct
+integration of that ODE.
+
+```{r}
+pendulum_angle <- function(u, p, t) c(u[2], -9.81 * sin(u[1]))
+ref <- solve(ODEProblem(pendulum_angle, c(th0, 0), c(0, 3)), Tsit5(), reltol = 1e-10, abstol = 1e-10)
+c(cartesian = atan2(sol(3, idxs = px), -sol(3, idxs = py)), angle_ode = ref(3)[1])
+```
+
+## Steering state selection
+
+State selection uses three pieces of information, all of which mirror
+ModelingToolkit:
+
+* `state_priority` metadata on a variable, or `state_priorities` given to
+  `System()`: higher priority variables are preferred as states and as the
+  representatives of alias groups.
+* `irreducible = TRUE` metadata, or the `irreducibles` argument: the variable
+  is never eliminated, not even as an alias.
+* `guess` metadata does not influence the structure; it seeds the nonlinear
+  solves of initialization.
+
+```{r}
+xs <- Variable("x", t); ys <- Variable("y", t)
+show_eqs(equations(mtkcompile(System(list(D(xs) ~ 2 * xs, ys ~ xs), t, name = "swap"))))
+show_eqs(equations(mtkcompile(System(list(D(xs) ~ 2 * xs, ys ~ xs), t, name = "swap",
+                                     state_priorities = list(ys ~ 10)))))
+yirr <- Variable("y", t, irreducible = TRUE)
+mtkcompile(System(list(D(xs) ~ -xs, yirr ~ 2 * xs), t, name = "irr"))
+```
+
+With the priority, the differential equation is rewritten in terms of `y`.
+The irreducible `y` stays an algebraic unknown, so the result is a DAE with
+one differential and one algebraic equation.
+
+## Tearing and algebraic loops
+
+After index reduction, each algebraic variable is matched to an equation.
+When an equation is linear in its matched variable with a coefficient that
+may be divided by, the variable is solved for explicitly. When a group of
+algebraic equations forms a loop (a strongly connected component, SCC),
+tearing picks some variables as *tearing variables* that stay unknowns and
+solves the rest of the loop in terms of them.
+
+```{r}
+variables("h(t)", "w3(t)")
+parameters("p = 0.3")
+w1 <- Variable("w1", t, guess = 1)
+w2 <- Variable("w2", t, guess = 0.5)
+loop <- System(list(D(h) ~ w1 - h, 0 ~ w1 - sin(w2) - h, 0 ~ w2 - cos(w1) + p,
+                    w3 ~ w1 + w2), t, name = "loop")
+loopc <- mtkcompile(loop)
+show_eqs(equations(loopc))
+show_eqs(observed(loopc))
+```
+
+`w2` was solved from the third equation, and `w1` remains the tearing
+variable of the loop, determined by the residual `0 ~ w1 - sin(w2) - h`. The
+compiled system is a semi-explicit DAE of index one. Two tearing algorithms
+are available through `tearing_alg`: `"carpanzano"` (the default) and
+`"modia"`. On this small loop both make the same choice.
+
+```{r}
+show_eqs(equations(mtkcompile(loop, tearing_alg = "modia")))
+```
+
+The individual passes are exported for experiments: `tearing()` tears
+without index reduction, `dummy_derivative()` reduces the index and selects
+states, and `tearing_substitution()` substitutes the observed equations into
+the result.
+
+```{r}
+variables("q(t)", "r(t)", "s(t)")
+parameters("k")
+torn <- tearing(System(list(D(q) ~ -k * r, 0 ~ q - r + s, 0 ~ s - sin(q)), t, name = "torn"))
+show_eqs(observed(torn))
+show_eqs(equations(tearing_substitution(torn)))
+```
+
+### Solving loops inside the right-hand side
+
+Two options remove algebraic loops from the compiled system altogether.
+`inline_linear_sccs = TRUE` solves each linear block symbolically when it has
+at most `analytical_linear_scc_limit` variables (default 2) and with a
+numerical linear solve at run time otherwise, as ModelingToolkit does.
+
+```{r}
+variables("z(t)", "v1(t)", "v2(t)")
+parameters("a = 2", "b = 3")
+lin <- System(list(D(z) ~ -z + v1, a * v1 + v2 ~ z, v1 - b * v2 ~ sin(t)), t, name = "lin")
+show_eqs(equations(mtkcompile(lin)))
+lin_inline <- mtkcompile(lin, inline_linear_sccs = TRUE)
+show_eqs(equations(lin_inline))
+show_eqs(observed(lin_inline))
+```
+
+`inline_nonlinear_sccs = TRUE` is an extension of modelcompR: each torn
+nonlinear block is solved by a nested Newton iteration in the generated
+right-hand side. The DAE becomes an ODE, which an explicit method such as
+`Tsit5()` can integrate.
+
+```{r}
+loop_ode <- mtkcompile(loop, inline_nonlinear_sccs = TRUE)
+show_eqs(observed(loop_ode))
+s_ode <- solve(ODEProblem(loop_ode, list(h ~ 0.5), c(0, 2)), Tsit5(), reltol = 1e-10, abstol = 1e-10)
+s_dae <- solve(ODEProblem(loopc, list(h ~ 0.5), c(0, 2)), Rodas5P(), reltol = 1e-10, abstol = 1e-10)
+rbind(ode = s_ode(2, idxs = list(h, w1, w2, w3)), dae = s_dae(2, idxs = list(h, w1, w2, w3)))
+```
+
+## Which coefficients may be divided by
+
+Solving `0 ~ c * v + rest` for `v` divides by `c`, which is only safe when
+`c` cannot vanish. Three options, documented under `?mtkcompile_options`,
+control this:
+
+* `allow_symbolic` (default `FALSE`): also divide by coefficients that
+  contain unknowns.
+* `allow_parameter` (default `TRUE`): divide by coefficients that contain
+  parameters. A parameter whose default value is zero is never divided by.
+* `conservative` (default `FALSE`): for numeric coefficients, only divide by
+  1 and -1.
+
+```{r}
+variables("e1(t)", "e2(t)")
+parameters("kk")
+show_eqs(equations(mtkcompile(System(list(D(e1) ~ -e1, 0 ~ e1 * e2 - 1), t, name = "c1"))))
+show_eqs(observed(mtkcompile(System(list(D(e1) ~ -e1, 0 ~ e1 * e2 - 1), t, name = "c1"),
+                             allow_symbolic = TRUE)))
+show_eqs(equations(mtkcompile(System(list(D(e1) ~ -e1, 0 ~ kk * e2 - e1), t, name = "c2"),
+                              allow_parameter = FALSE)))
+show_eqs(equations(mtkcompile(System(list(D(e1) ~ -e1, 0 ~ e1 + 2 * e2), t, name = "c3"),
+                              conservative = TRUE)))
+```
+
+In the last case the coefficient 2 of `e2` is not 1 or -1, so the equation
+stays a residual. In this implementation `conservative` only restricts
+numeric coefficients; a parameter coefficient such as `kk` is still divided
+by unless `allow_parameter = FALSE`.
+
+## Other options of mtkcompile
+
+**Balance checks.** By default the system must have as many equations as
+highest order variables. Violations raise conditions with the class names of
+ModelingToolkit, listing the likely culprits. `fully_determined = FALSE`
+skips the check and keeps surplus variables as unknowns.
+
+```{r}
+variables("f1(t)", "f2(t)")
+err <- tryCatch(mtkcompile(System(list(D(f1) ~ f1 + f2), t, name = "under")), error = identity)
+class(err)[1]
+err <- tryCatch(mtkcompile(System(list(D(f1) ~ f2, 0 ~ f1 + 1, 0 ~ f1 - 2), t, name = "over")),
+                error = identity)
+cat(conditionMessage(err))
+unknowns(mtkcompile(System(list(D(f1) ~ f1 + f2), t, name = "under"), fully_determined = FALSE))
+```
+
+Structurally singular systems (balanced, but with no perfect matching) raise
+`InvalidSystemException`.
+
+**Zero derivatives.** With `eliminate_mm_zeros = TRUE`, a state with
+`D(x) ~ 0` is integrated analytically to the observed `x ~ x#0`, where the
+new parameter `x#0` is solved for at initialization. This is ModelingToolkit's
+default behavior; modelcompR keeps such states by default.
+
+```{r}
+variables("m1(t)", "m2(t)")
+mtkcompile(System(list(D(m1) ~ 0, D(m2) ~ m1), t, name = "int"), eliminate_mm_zeros = TRUE)
+```
+
+**Simplification.** `simplify = TRUE` simplifies the resulting expressions.
+
+```{r}
+show_eqs(equations(mtkcompile(System(list(D(m1) ~ (m1^2 - 1) / (m1 - 1)), t, name = "s"),
+                              simplify = TRUE)))
+```
+
+**Base pipeline.** `structural = FALSE` runs only the simpler
+ModelingToolkitBase pipeline: higher order derivatives are lowered and
+trivially solvable observed equations removed, without alias elimination,
+index reduction or tearing.
+
+```{r}
+mtkcompile(System(list(D(D(m1)) ~ -m1, m2 ~ 2 * m1), t, name = "osc"), structural = FALSE)
+```
+
+**Additional passes.** `additional_passes` is a list of functions applied to
+the compiled system. `IfLifting` is one such pass: it replaces conditions in
+the equations by discrete parameters switched by events, so that the solver
+stops exactly at each discontinuity.
+
+```{r}
+variables("l1(t)", "l2(t)")
+mtkcompile(System(list(D(l1) ~ abs(l2), l2 ~ sin(t)), t, name = "abs"),
+           additional_passes = list(IfLifting))
+```
+
+## Mass matrix DAEs and DAEProblem
+
+A compiled system with algebraic equations is an index one DAE in
+semi-explicit form, `M u' = f(u, p, t)`, whose mass matrix `M` has a zero row
+for each algebraic equation. `ODEProblem()` builds a mass matrix problem, the
+form ModelingToolkit uses by default; it is solved by Rosenbrock methods such
+as `Rodas5P()` and by BDF methods such as `FBDF()`.
+
+```{r}
+da <- Variable("a", t)
+db <- Variable("b", t, guess = 0.5)
+dc <- Parameter("c", default = 1)
+dae1 <- mtkcompile(System(list(D(da) ~ -da + db, 0 ~ db^3 + db - dc * da), t, name = "dae1"))
+calculate_massmatrix(dae1)
+pm <- ODEProblem(dae1, list(da ~ 1), c(0, 3))
+pm$u0
+sm <- solve(pm, Rodas5P(), reltol = 1e-10, abstol = 1e-10)
+sm(3, idxs = list(da, db))
+```
+
+The algebraic unknown `b` had no value; initialization solved
+`b^3 + b = 1` from the guess 0.5.
+
+`DAEProblem()` builds the fully implicit form `F(u', u, p, t) = 0`
+(ModelingToolkit's `DAEProblem`), solved by `DFBDF()` or `DImplicitEuler()`.
+Initial derivatives are given as `D(x) ~ value`, and `differential_vars`
+records which unknowns have derivatives. Before solving, `u0` holds the
+guess for `b` and `du0` the given derivative; the solver computes consistent
+values at the first step.
+
+```{r}
+pd <- DAEProblem(dae1, list(da ~ 1, D(da) ~ -0.3), c(0, 3))
+rbind(u0 = pd$u0, du0 = pd$du0)
+pd$differential_vars
+sd <- solve(pd, DFBDF(), reltol = 1e-8, abstol = 1e-8)
+sd(c(0, 3), idxs = list(da, db))
+```
+
+Both forms give the same trajectory. The mass matrix form is usually faster
+for semi-explicit systems and lets every Rosenbrock or BDF method be used,
+while the implicit form is the natural target for fully implicit solvers.
+`DAEFunction(sys, jac = TRUE)` also generates the iteration matrix
+`dF/du + gamma dF/du'` as a function of `(du, u, p, gamma, t)`.
+
+```{r}
+dfun <- DAEFunction(dae1, jac = TRUE)
+dfun$jac(c(-0.3, 0), c(1, 0.68), 1, 10, 0)
+```
+
+## Inspecting a compiled system
+
+Besides `unknowns()`, `equations()`, `observed()` and `full_equations()`,
+several accessors describe the result:
+
+* `observables(sys)`: the left-hand sides of the observed equations;
+* `diff_equations(sys)` and `alg_equations(sys)`: the two kinds of
+  equations;
+* `calculate_massmatrix(sys)`: the mass matrix;
+* `get_schedule(sys)`: the order in which the algebraic blocks are solved;
+* `get_tearing_state(sys)`: the structural state after compilation.
+
+```{r}
+observables(pendc)
+show_eqs(alg_equations(pendc))
+get_schedule(pendc)$var_sccs
+```
+
+The structural information itself lives in a `TearingState`, the object the
+whole pipeline operates on. Built from the original pendulum, it lists every
+variable together with the derivative chain linking it to its derivative,
+the variable-equation incidence graph and, after `find_solvables()`, the
+subgraph of pairs where the equation can be solved for the variable.
+
+```{r}
+ts <- TearingState(pend)
+ts
+ts$structure$graph
+find_solvables(ts)
+ts$structure$solvable_graph
+highest_order_variable_mask(ts)(seq_along(ts$fullvars))
+```
+
+Only the second derivatives and the tension are highest order variables;
+those are the ones the equations must determine. The incidence helpers of
+ModelingToolkit are available as well: `sorted_incidence_matrix()` gives the
+incidence of the compiled system with rows and columns in solve order (the
+columns are the variables of its tearing state), `but_ordered_incidence()`
+the block upper triangular incidence of the highest order variables, and
+`map_variables_to_equations()` the equation that determines each variable.
+
+```{r}
+sorted_incidence_matrix(pendc)
+show_eqs(get_tearing_state(pendc)$fullvars)
+bt <- but_ordered_incidence(TearingState(pend))
+bt[[1]]
+vmap <- map_variables_to_equations(pendc)
+writeLines(paste(names(vmap), "<-", vapply(vmap, format, "")))
+```
+
+`asgraph()`, `equation_dependencies()`, `variable_dependencies()`,
+`eqeq_dependencies()` and `varvar_dependencies()` build the dependency
+graphs of ModelingToolkit's dependency graph utilities, for example to find
+which equations share variables.
+
+```{r}
+asgraph(pend)
+```
+
+## Debugging a model
+
+`debug_system()` wraps calls to functions with restricted domains (by
+default `log`, `sqrt`, `^`, `/`, `inv`, `asin` and `acos`) so that the first
+call that produces a non-finite value stops the simulation with a message
+naming the call and its inputs. The model below drains two tanks with
+`D(u) ~ -sqrt(u)`, which reaches zero in finite time; the solver then
+evaluates the square root of a slightly negative level.
+
+```{r}
+u1 <- Variable("u1", t); u2 <- Variable("u2", t)
+tanks <- System(list(D(u1) ~ -sqrt(u1), D(u2) ~ -sqrt(u2)), t,
+                initial_conditions = list(u1 ~ 1, u2 ~ 2), name = "tanks")
+dtanks <- debug_system(mtkcompile(tanks), functions = "sqrt")
+res <- tryCatch(solve(ODEProblem(dtanks, list(), c(0, 10))), error = conditionMessage)
+cat(res)
+```
+
+**Assertions** are conditions attached to a system with `assertions =
+list(list(condition, message))`. While an assertion fails, the generated
+right-hand side returns `NaN`, so the solver rejects the step and stops if it
+cannot avoid the region. The warning below is the expected outcome.
+
+```{r}
+atanks <- System(list(D(u1) ~ -sqrt(u1), D(u2) ~ -sqrt(u2)), t,
+                 initial_conditions = list(u1 ~ 1, u2 ~ 2), name = "tanks",
+                 assertions = list(list(u1 + u2 >= 2, "the tanks hold less than 2 units")))
+atanksc <- mtkcompile(atanks)
+asol <- withCallingHandlers(solve(ODEProblem(atanksc, list(), c(0, 10)), Tsit5()),
+                            warning = function(w) {
+                              message("warning: ", conditionMessage(w))
+                              invokeRestart("muffleWarning")
+                            })
+asol$retcode
+tail(asol$t, 1)
+```
+
+`debug_system()` also enables the messages of failing assertions through the
+parameter `ASSERTION_LOG_VARIABLE` (value 1 by default; set it to 0 with
+`remake()` to silence them).
+
+```{r}
+dprob <- ODEProblem(debug_system(atanksc, functions = character()), list(), c(0, 10))
+msgs <- character()
+invisible(withCallingHandlers(suppressWarnings(solve(dprob, Tsit5(), dtmin = 0.1)),
+                              message = function(m) {
+                                msgs <<- c(msgs, conditionMessage(m))
+                                invokeRestart("muffleMessage")
+                              }))
+cat(msgs[1])
+```
+
+## Inputs, outputs and disturbances
+
+Variables can be marked as inputs, outputs or disturbances with metadata.
+Passing `inputs` to `mtkcompile()` turns those variables into parameters
+of the compiled system, so their values are supplied from outside; `outputs`
+are kept available as observed variables; `disturbance_inputs` are treated
+like inputs. This is how ModelingToolkit prepares models for control design.
+
+```{r}
+cx <- Variable("x", t)
+cu <- Variable("u", t, input = TRUE)
+cy <- Variable("y", t, output = TRUE)
+cd <- Variable("d", t, disturbance = TRUE)
+ck <- Parameter("k")
+plant <- System(list(D(cx) ~ -ck * cx + 2 * cu + cd, cy ~ 2 * cx), t, name = "plant")
+c(isinput(cu), isoutput(cy), isdisturbance(cd))
+unbound_inputs(plant)
+io <- mtkcompile(plant, inputs = list(cu), outputs = list(cy), disturbance_inputs = list(cd))
+io
+```
+
+`unbound_inputs()` lists the inputs not driven by any equation; once a
+parent model connects an equation to an input, `is_bound()` is `TRUE` and the
+input disappears from that list (`bound_inputs()`, `bound_outputs()` and
+`unbound_outputs()` are the companions).
+
+`generate_control_function()` compiles the system with the given inputs and
+returns the function `f(x, u, p, t)` of ModelingToolkit, together with the
+order of its states `dvs` and parameters `ps`. Unknown disturbances are set
+to zero; disturbances given as `known_disturbance_inputs` become an extra
+argument `w`. With `implicit_dae = TRUE` the function is the residual
+`f(dx, x, u, p, t)`.
+
+```{r}
+cf <- generate_control_function(plant, list(cu), list(cd))
+cf$dvs
+cf$ps
+cf$f(1, 0.5, 3, 0)
+calculate_control_jacobian(cf$io_sys)
+generate_control_jacobian(cf$io_sys)(1, 3, 0)
+cfw <- generate_control_function(plant, list(cu), list(), known_disturbance_inputs = list(cd))
+cfw$f(1, 0.5, 3, 0, 0.25)
+```
+
+With `x = 1`, `u = 0.5` and `k = 3` the derivative is `-3 + 1 = -2`, and the
+known disturbance adds `0.25`. The empty list given as `disturbance_inputs` in
+the last call matters: by default every variable with `disturbance = TRUE`
+metadata is an unknown disturbance and is set to zero, even when it is also
+listed in `known_disturbance_inputs`. The control Jacobian is the derivative of the
+right-hand side with respect to the inputs, here the input and the
+disturbance.
+
+## Code generation
+
+Every numerical problem is built from R functions generated from the
+symbolic equations. They can also be generated directly, which is useful for
+custom solvers or for checking derivatives. The functions take `(u, p, t)`
+with the state and parameter vectors in the order of `unknowns(sys)` and
+`parameters(sys)`. That order is chosen by the compiler and need not be the
+declaration order, as the Lorenz system shows; it is safest to take the
+vectors from a problem. The result is a plain vector in the order of
+`unknowns(sys)`; names that R carries over from a named input vector do not
+label the entries reliably, so they are dropped here with `unname()`.
+
+```{r}
+variables("lx(t)", "ly(t)", "lz(t)")
+parameters("sigma = 10", "rho = 28", "beta = 8/3")
+lorenz <- mtkcompile(System(list(D(lx) ~ sigma * (ly - lx), D(ly) ~ lx * (rho - lz) - ly,
+                                 D(lz) ~ lx * ly - beta * lz), t, name = "lorenz"))
+vapply(unknowns(lorenz), format, "")
+lprob <- ODEProblem(lorenz, list(lx ~ 1, ly ~ 2, lz ~ 3), c(0, 1))
+lprob$u0
+f <- generate_rhs(lorenz)
+f
+unname(f(lprob$u0, lprob$p, 0))
+calculate_jacobian(lorenz)
+generate_jacobian(lorenz)(lprob$u0, lprob$p, 0)
+```
+
+`calculate_tgrad()` and `calculate_paramjac()` give the partial derivatives
+with respect to time and parameters, and `generate_tgrad()` and
+`generate_paramjac()` compile them. A forced decay has a nonzero time
+gradient:
+
+```{r}
+fx <- Variable("x", t); fk <- Parameter("k", default = 1)
+forced <- mtkcompile(System(list(D(fx) ~ -fk * fx + sin(t)), t, name = "forced"))
+calculate_tgrad(forced)
+calculate_paramjac(forced)
+generate_tgrad(forced)(1, 1, 0)
+```
+
+`ODEFunction(sys, jac = TRUE, tgrad = TRUE)` bundles the right-hand side, the
+Jacobian, the time gradient and the mass matrix, and `ODEProblem(sys, op,
+tspan, jac = TRUE)` passes the symbolic Jacobian to implicit solvers instead
+of finite differences.
+
+```{r}
+ofun <- ODEFunction(lorenz, jac = TRUE, tgrad = TRUE)
+names(ofun)
+ljprob <- ODEProblem(lorenz, list(lx ~ 1, ly ~ 2, lz ~ 3), c(0, 1), jac = TRUE)
+solve(ljprob, Rodas5P())(1)
+```
+
+Arbitrary expressions of a system's variables, including observed ones,
+compile with `build_explicit_observed_function()` (also called
+`generate_custom_function()`). For expressions outside any system,
+`build_function()` plays the role of Symbolics' `build_function`; with
+`expression = TRUE` it returns the generated code.
+
+```{r}
+obs <- build_explicit_observed_function(lorenz, list(lx + ly, lx * lz))
+unname(obs(lprob$u0, lprob$p, 0))
+bx <- Symbol("bx"); by <- Symbol("by"); bk <- Symbol("bk")
+bf <- build_function(list(bx^2 + bk, sin(by)), list(bx, by), bk)
+bf(c(2, 0), 3)
+build_function(list(bx^2 + bk, sin(by)), list(bx, by), bk, expression = TRUE)
+```
+
+**Sparsity.** The structural sparsity of a model is visible in its
+incidence matrix, and the numerical sparsity pattern of a generated
+right-hand side can be obtained by tracing it with `jacobian_sparsity()`
+(the analog of SparseConnectivityTracer). `column_coloring()` then groups
+the columns that can share one directional derivative.
+
+```{r}
+variables("c1(t)", "c2(t)", "c3(t)")
+chain <- mtkcompile(System(list(D(c1) ~ -c1, D(c2) ~ c1 - c2, D(c3) ~ c2 - c3), t, name = "chain"))
+cprob <- ODEProblem(chain, list(c1 ~ 1, c2 ~ 0, c3 ~ 0), c(0, 1))
+fc <- generate_rhs(chain)
+S <- jacobian_sparsity(function(u) fc(u, cprob$p, 0), cprob$u0)
+S
+column_coloring(S)
+```
+
+The rows and columns follow `unknowns(chain)`, here `c3, c2, c1`.
+
+## Model transformations
+
+The functions in this section rewrite a system into another system with the
+same solutions in new variables, or with additional quantities. They follow
+`basic_transformations.jl` of ModelingToolkit.
+
+### Changing the independent variable
+
+`change_independent_variable(sys, iv)` uses a variable of the model as the
+new independent variable. The projectile below moves with constant speed `v`
+in `x`, so `x` can replace time; the old time becomes an unknown `t(x)`, and
+the derivative `xˍt = dx/dt` appears as a new unknown.
+
+```{r}
+px2 <- Variable("x", t); py2 <- Variable("y", t)
+pg <- Parameter("g", default = 9.81); pv <- Parameter("v")
+proj <- System(list(D(D(py2)) ~ -pg, D(px2) ~ pv), t,
+               initialization_eqs = list(D(px2) ~ D(py2)), name = "proj")
+proj_x <- change_independent_variable(proj, px2)
+proj_x
+proj_xc <- mtkcompile(proj_x, allow_symbolic = TRUE)
+psol <- solve(ODEProblem(proj_xc, list(proj_xc$y ~ 0, pv ~ 8), c(0, 10)), reltol = 1e-8, abstol = 1e-8)
+c(computed = tail(psol[proj_xc$y], 1), exact = 10 - 9.81 * 100 / (2 * 64))
+```
+
+The transformed equations divide by `xˍt`, so compilation needs
+`allow_symbolic = TRUE`. With `add_old_diff = TRUE`, the equation
+`dt/dx = 1 / xˍt` for the old independent variable is added as well.
+
+### Liouville transform
+
+`liouville_transform(sys)` appends the unknown `trJ` with
+`D(trJ) ~ -tr(J) trJ`, where `J` is the Jacobian of the right-hand side. In
+a probabilistic setting `trJ` transports a density along the trajectory. For
+`D(x) ~ -k x` the trace is `-k`, so `trJ = exp(k t)`.
+
+```{r}
+lx1 <- Variable("x", t); lk <- Parameter("k")
+liou <- mtkcompile(liouville_transform(System(list(D(lx1) ~ -lk * lx1), t, name = "decay")))
+show_eqs(equations(liou))
+lsol <- solve(ODEProblem(liou, list(lx1 ~ 1, liou$trJ ~ 1, lk ~ 0.5), c(0, 2)))
+c(computed = tail(lsol[liou$trJ], 1), exact = exp(1))
+```
+
+### Change of variables
+
+`change_of_variables(sys, iv, forward_subs, backward_subs)` applies the
+substitutions `forward_subs` (new variables in terms of old) and
+`backward_subs` (old in terms of new) using the chain rule (and Itô's lemma
+for stochastic systems). Taking the logarithm of an exponential decay gives
+a linear equation.
+
+```{r}
+gx <- Variable("x", t); gz <- Variable("z", t); gal <- Parameter("alpha")
+growth <- mtkcompile(System(list(D(gx) ~ gal * gx), t, name = "growth",
+                            initial_conditions = list(gx ~ 1, gal ~ -0.5)))
+logsys <- change_of_variables(growth, t, list(log(gx) ~ gz), list(gx ~ exp(gz)))
+logsys
+gsol <- solve(ODEProblem(logsys, list(), c(0, 1)))
+c(computed = tail(gsol[gx], 1), exact = exp(-0.5))
+```
+
+### Accumulations
+
+`add_accumulations(sys)` adds, for each unknown `x`, a state
+`accumulation_x` with `D(accumulation_x) ~ x`, the running integral. A list
+of equations `acc ~ expr` accumulates arbitrary expressions instead.
+
+```{r}
+ax <- Variable("x", t); acc <- Variable("acc", t)
+show_eqs(equations(add_accumulations(System(list(D(ax) ~ -ax), t, name = "s"))))
+accsys <- mtkcompile(add_accumulations(System(list(D(ax) ~ -ax), t, name = "s"), list(acc ~ ax^2)))
+asol2 <- solve(ODEProblem(accsys, list(ax ~ 1), c(0, 1)), reltol = 1e-10, abstol = 1e-10)
+c(computed = tail(asol2[acc], 1), exact = (1 - exp(-2)) / 2)
+```
+
+### Fractional differential equations
+
+`fractional_to_ordinary(eqs, variables, alphas, epsilon, T)` approximates
+the Caputo fractional equations `D^alpha x = rhs` by a system of ordinary
+equations using an exponential sum quadrature of the fractional kernel,
+accurate to `epsilon` on `[0, T]`. `linear_fractional_to_ordinary()` handles
+linear equations with several fractional orders. The equation
+`D^0.5 x = 1` with `x(0) = 0` has the solution `x(t) = 2 sqrt(t / pi)`.
+
+```{r}
+fx2 <- Variable("x", t)
+frac <- fractional_to_ordinary(list(1), list(fx2), 0.5, 1e-2, 1)
+length(unknowns(frac))
+fsol <- solve(ODEProblem(frac, list(), c(0, 1)), Rodas5P(), reltol = 1e-8, abstol = 1e-10)
+c(computed = tail(fsol[fx2], 1), exact = 2 / sqrt(pi))
+```
+
+The returned system is already complete. The agreement improves as
+`epsilon` decreases, at the cost of more auxiliary unknowns.
+
+### Other system transformations
+
+* `convert_system_indepvar(sys, iv)` renames the independent variable, or
+  makes a time independent nonlinear system depend on a new one.
+* `substitute_component(sys, old, new)` swaps a subsystem for another
+  component with the same name and interface, and `isolate_subsystem()`
+  extracts the part of a model between two analysis points.
+* `respecialize(sys, mapping)` records the class of parameters that hold
+  non-numeric values such as functions.
+
+```{r}
+tau2 <- independent_variable("tau")
+nx <- Variable("xs"); na <- Parameter("a")
+convert_system_indepvar(System(list(0 ~ nx^2 - na), name = "ns"), tau2, name = "ts")
+sx <- Variable("x", t); sk <- Parameter("k")
+model <- System(list(), t, systems = list(System(list(D(sx) ~ -sk * sx), t, name = "part")),
+                name = "model")
+show_eqs(equations(substitute_component(model, model$part,
+                                        System(list(D(sx) ~ sk * sx), t, name = "part"))))
+```
+
+The linear state space utilities `similarity_transform()` and
+`reorder_unknowns()` work on the matrices returned by `linearize()` and are
+covered with linearization.
+
+### Stochastic transformations
+
+Stochastic systems, covered in their own article, have three transformations
+of their own: `stochastic_integral_transform(sys, -1/2)` converts an Itô
+system to Stratonovich form (and `1/2` back), `Girsanov_transform(sys, u)`
+adds a likelihood weight that reduces the variance of Monte Carlo estimates,
+and `noise_to_brownians(sys)` rewrites noise equations with explicit
+`Brownian` variables.
+
+```{r}
+variables("sx1(t)")
+parameters("sa", "sb")
+gbm <- SDESystem(list(D(sx1) ~ sa * sx1), list(sb * sx1), t, name = "gbm")
+show_eqs(equations(stochastic_integral_transform(gbm, -1/2)))
+gir <- Girsanov_transform(gbm, sx1, theta0 = 0.1)
+show_eqs(equations(gir))
+get_noise_eqs(gir)
+```
+
+### From numerical code to a symbolic model
+
+`modelingtoolkitize(prob)` traces the R function of an `ODEProblem`,
+`NonlinearProblem`, `OptimizationProblem` or `SDEProblem` with symbolic
+inputs and returns the equivalent symbolic system, as ModelingToolkit's
+`modelingtoolkitize`. Names come from named `u0` and `p` vectors, from the
+`u_names` and `p_names` arguments, or default to `x₁, x₂, ...` and
+`α₁, α₂, ...`. The symbolic model then gives access to everything above, for
+example the analytic Jacobian.
+
+```{r}
+lotka <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
+nprob <- ODEProblem(lotka, c(1, 1), c(0, 10), c(1.5, 1, 3, 1))
+lv <- modelingtoolkitize(nprob, name = "lv")
+lv
+lvprob <- ODEProblem(mtkcompile(lv), list(), c(0, 10), jac = TRUE)
+lvprob$f$jac(lvprob$u0, lvprob$p, 0)
+rbind(numeric = solve(nprob, reltol = 1e-9, abstol = 1e-9)(10),
+      symbolic = solve(lvprob, reltol = 1e-9, abstol = 1e-9)(10, idxs = unknowns(lv)))
+```
+
+A mass matrix in the numerical problem turns the corresponding equations
+into algebraic ones, and named vectors give readable names.
+
+```{r}
+swing <- function(u, p, t) c(u[2], -p["g"] * sin(u[1]))
+modelingtoolkitize(ODEProblem(swing, c(theta = 0.1, omega = 0), c(0, 1), c(g = 9.81)), name = "swing")
+semi <- function(u, p, t) c(-u[1] + u[2], u[1] + u[2] - 1)
+show_eqs(equations(modelingtoolkitize(ODEProblem(semi, c(0.5, 0.5), c(0, 1),
+                                                 mass_matrix = diag(c(1, 0))))))
+```
+
+Tracing requires code whose control flow does not depend on the values of
+the state; `if (u[1] > 0)` cannot be traced and gives an explanatory error.
+
+## Summary
+
+| Task | modelcompR | ModelingToolkit.jl |
+|:-----|:-----------|:-------------------|
+| Compile a model | `mtkcompile()` | `mtkcompile` |
+| Expand connections | `expand_connections()` | `expand_connections` |
+| Alias elimination | `alias_elimination()` | `alias_elimination` |
+| Pantelides | `dae_index_lowering()` | `dae_index_lowering` |
+| Dummy derivatives | `dummy_derivative()` | `dummy_derivative` |
+| Tearing | `tearing()`, `tearing_substitution()` | `tearing`, `tearing_substitution` |
+| Structural state | `TearingState()`, `get_tearing_state()` | `TearingState`, `get_tearing_state` |
+| Debugging | `debug_system()`, `assertions` | `debug_system`, `assertions` |
+| Control functions | `generate_control_function()` | `generate_control_function` |
+| Code generation | `generate_rhs()`, `generate_jacobian()`, `build_function()` | `generate_rhs`, `generate_jacobian`, `build_function` |
+| Transformations | `change_independent_variable()`, `liouville_transform()`, `change_of_variables()`, `add_accumulations()`, `fractional_to_ordinary()` | same names |
+| From numerical code | `modelingtoolkitize()` | `modelingtoolkitize` |

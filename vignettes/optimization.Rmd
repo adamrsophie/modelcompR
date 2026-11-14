@@ -1,0 +1,768 @@
+---
+title: "Optimization and dynamic optimization"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Optimization and dynamic optimization}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+modelcompR ports the optimization layer of the SciML stack: the
+`OptimizationProblem` interface of Optimization.jl, the way ModelingToolkit
+turns a symbolic system with a cost into such a problem, the solver wrappers
+(OptimizationOptimJL, OptimizationNLopt, OptimizationIpopt,
+OptimizationMadNLP, OptimizationPRIMA, OptimizationManopt,
+OptimizationMetaheuristics, OptimizationSciPy and others) and the dynamic
+optimization (optimal control) interface of ModelingToolkit, which
+transcribes a system with inputs by direct collocation. All solvers are
+native R ports; no Julia, Python or C optimization library is called.
+
+This article goes through the features group by group:
+
+1. symbolic optimization problems and their solutions;
+2. constraints and bounds;
+3. problems from plain R functions and the choice of derivatives;
+4. the solver families;
+5. linear, mixed integer and conic programs;
+6. callbacks, statistics and caches;
+7. multiobjective problems;
+8. parameter estimation of an ODE model;
+9. dynamic optimization and optimal control.
+
+```{r setup}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+## Symbolic optimization problems
+
+In ModelingToolkit an optimization model is a `System` with no equations and
+one or more `costs`. The unknowns are the decision variables and the
+parameters are fixed data. `complete()` marks the system as ready to build a
+problem, exactly as `complete(sys)` in Julia. The Rosenbrock function with
+parameters `a` and `b` reads:
+
+```{r}
+x <- Variable("x"); y <- Variable("y")
+a <- Parameter("a"); b <- Parameter("b")
+rosen <- complete(System(list(), costs = list((a - x)^2 + b * (y - x^2)^2),
+                         unknowns = list(x, y), ps = list(a, b), name = "rosenbrock"))
+prob <- OptimizationProblem(rosen, list(x ~ -1, y ~ 2, a ~ 1, b ~ 100))
+prob
+```
+
+The operating point gives the starting values of the unknowns and the
+values of the parameters. The gradient of the cost is generated
+symbolically (`grad = TRUE` is the default); `hess = TRUE` also generates
+the Hessian. Without an algorithm, `solve()` uses `LBFGSB()` for problems
+without constraints:
+
+```{r}
+sol <- solve(prob)
+sol
+```
+
+An `OptimizationSolution` holds the minimizer `sol$u` (named by the
+unknowns), the cost `sol$objective`, the return code `sol$retcode`, the
+algorithm, the statistics `sol$stats` and the raw result of the optimizer in
+`sol$original`. It supports symbolic indexing, both of unknowns and of
+expressions, and `sol$ps` indexes the parameters:
+
+```{r}
+sol$u
+sol$objective
+sol$retcode
+sol[x]
+sol[x + y]
+sol$ps[b]
+```
+
+`remake()` changes parameters or starting values without rebuilding the
+generated functions. With `a = 2` the minimum moves to `(a, a^2) = (2, 4)`:
+
+```{r}
+unname(solve(remake(prob, p = list(a ~ 2)))$u)
+```
+
+The derivatives are available as R functions and as symbolic expressions:
+
+```{r}
+calculate_cost_gradient(rosen)
+g <- generate_cost_gradient(rosen)
+g(c(-1, 2), c(1, 100))
+```
+
+`OptimizationSystem(cost, unknowns, ps)` is the older constructor of
+ModelingToolkit and builds the same kind of system:
+
+```{r}
+os <- complete(OptimizationSystem((1 - x)^2 + 100 * (y - x^2)^2, list(x, y), list(), name = "os"))
+unname(solve(OptimizationProblem(os, list(x ~ -1, y ~ 2)))$u)
+```
+
+## Constraints and bounds
+
+Constraints are given in the `constraints` argument of `System()`. An
+equation `g ~ h` is an equality constraint and `Inequality(g, h)` means
+`g <= h` (with `">="` as a third argument for the other direction). The
+classic example of the Optimization.jl documentation minimizes the
+Rosenbrock function inside the unit disk:
+
+```{r}
+crosen <- complete(System(list(), costs = list((a - x)^2 + b * (y - x^2)^2),
+                          unknowns = list(x, y), ps = list(a, b), name = "crosen",
+                          constraints = list(Inequality(x^2 + y^2, 1))))
+cprob <- OptimizationProblem(crosen, list(x ~ 0, y ~ 0, a ~ 1, b ~ 100),
+                             hess = TRUE, cons_h = TRUE)
+c(cprob$lcons, cprob$ucons)
+csol <- solve(cprob)
+csol$alg$name
+csol$u
+sum(csol$u^2)
+```
+
+The constraint is canonicalized to `x^2 + y^2 - 1 <= 0`, so the problem has
+`lcons = -Inf` and `ucons = 0`. The default algorithm for constrained
+problems is `AugLag()`, an augmented Lagrangian method. The solution lies on
+the circle. Many other solvers handle the same problem, and they all agree:
+
+```{r}
+algs <- list(Ipopt = IpoptOptimizer(), IPNewton = IPNewton(),
+             SLSQP = NLopt$LD_SLSQP(), MadNLP = MadNLPOptimizer())
+t(sapply(algs, function(alg) solve(cprob, alg)$u))
+```
+
+A solver that cannot handle constraints says so rather than ignoring them:
+
+```{r}
+tryCatch(solve(cprob, LBFGSB()), error = function(e) conditionMessage(e))
+```
+
+Bounds come from the `bounds` metadata of the variables, which may refer to
+parameters, or from the `lb` and `ub` arguments. With `x <= 0.5` the
+Rosenbrock minimum is at `(0.5, 0.25)`:
+
+```{r}
+xb <- Variable("xb", bounds = c(-1, 0.5)); yb <- Variable("yb")
+bsys <- complete(System(list(), costs = list((1 - xb)^2 + 100 * (yb - xb^2)^2), name = "rb"))
+bprob <- OptimizationProblem(bsys, list(xb ~ 0, yb ~ 0))
+rbind(lb = bprob$lb, ub = bprob$ub)
+unname(solve(bprob)$u)
+```
+
+As in OptimizationOptimJL, an Optim method without native bound support
+(such as `BFGS()`) is run inside `Fminbox`:
+
+```{r}
+fb <- solve(bprob, BFGS())
+class(fb$alg)[1]
+unname(fb$u)
+```
+
+Equality and inequality constraints can be mixed. The point of the line
+`x + y = 1` closest to the origin is `(0.5, 0.5)`; adding `x <= 0.2` moves
+it to `(0.2, 0.8)`:
+
+```{r}
+ms <- complete(System(list(), costs = list(x^2 + y^2), name = "mix",
+                      constraints = list(x + y ~ 1, Inequality(x, 0.2))))
+unname(solve(OptimizationProblem(ms, list(x ~ 0, y ~ 0)))$u)
+```
+
+`constraints_to_penalties()` turns the constraints into weighted quadratic
+penalty costs, which any unconstrained solver can then minimize.
+
+## Problems from plain R functions
+
+The Optimization.jl interface does not need a symbolic model. A cost is a
+function `f(u, p)` of the decision vector and the parameters, and
+`OptimizationProblem(f, u0, p)` builds the problem. Gradients, Hessians and
+constraint functions are optional R functions of `(u, p)`:
+
+```{r}
+rosenf <- function(u, p) (p[1] - u[1])^2 + p[2] * (u[2] - u[1]^2)^2
+roseng <- function(u, p) c(-2 * (p[1] - u[1]) - 4 * p[2] * u[1] * (u[2] - u[1]^2),
+                           2 * p[2] * (u[2] - u[1]^2))
+rp <- OptimizationProblem(rosenf, c(-1.2, 1), c(1, 100), grad = roseng)
+solve(rp, BFGS())$u
+```
+
+Constraints are a function `cons(u, p)` with bounds `lcons <= cons(u, p) <= ucons`:
+
+```{r}
+discf <- function(u, p) u[1]^2 + u[2]^2
+rcp <- OptimizationProblem(rosenf, c(0, 0), c(1, 100), cons = discf, lcons = -Inf, ucons = 1)
+solve(rcp, IpoptOptimizer())$u
+```
+
+In Julia the derivative backend is chosen with an ADTypes object in
+`OptimizationFunction(f, AutoForwardDiff())`. The same call works here:
+the second argument of `OptimizationFunction()` is the gradient, and an
+ADType there is recorded as the problem's AD choice. The interior point
+solvers (Ipopt and MadNLP) read it: with `AutoForwardDiff()` (or any choice
+other than finite differences) they differentiate the R function with the
+package's forward mode dual numbers, and with `AutoFiniteDiff()` they take
+central differences. The other solvers use the derivatives the problem
+supplies and finite differences otherwise.
+
+```{r}
+fad <- OptimizationFunction(rosenf, AutoForwardDiff(), cons = discf)
+ffd <- OptimizationFunction(rosenf, AutoFiniteDiff(), cons = discf)
+solve(OptimizationProblem(fad, c(0, 0), c(1, 100), lcons = -Inf, ucons = 1), IpoptOptimizer())$u
+solve(OptimizationProblem(ffd, c(0, 0), c(1, 100), lcons = -Inf, ucons = 1), IpoptOptimizer())$u
+```
+
+`sense = MaxSense` maximizes; the reported objective is the value of the
+function itself:
+
+```{r}
+mp <- OptimizationProblem(function(u, p) -(u[1] - 1)^2 + 3, 0, sense = MaxSense)
+s <- solve(mp, NelderMead())
+c(s$u, s$objective)
+```
+
+## Solver families
+
+Every algorithm is passed as the second argument of `solve()`. The common
+options `maxiters`, `maxtime`, `abstol` and `reltol` are translated to each
+solver's own settings, as the Julia wrappers do, and other named arguments
+go to the solver. The traits `requiresgradient()`, `allowsbounds()`,
+`allowsconstraints()` and the others describe an algorithm:
+
+```{r}
+c(requiresgradient(BFGS()), allowsconstraints(IpoptOptimizer()), requiresbounds(SAMIN()))
+```
+
+### Built in methods
+
+`LBFGSB()` (L-BFGS-B, the default without constraints), `Nlminb()` (the PORT
+quasi Newton method) and `AugLag()` (the augmented Lagrangian, the default
+with constraints) are the methods that need no external port.
+
+### Optim.jl
+
+The methods of Optim.jl are ported with their line searches: first order
+methods (`GradientDescent()`, `ConjugateGradient()`, `BFGS()`, `LBFGS()`),
+second order methods (`Newton()`, `NewtonTrustRegion()`), the derivative
+free `NelderMead()`, the interior point `IPNewton()` for constraints, and the
+global `ParticleSwarm()`, `SimulatedAnnealing()` and `SAMIN()`. Newton
+methods use the symbolic Hessian of the problem:
+
+```{r}
+hprob <- OptimizationProblem(rosen, list(x ~ -1, y ~ 2, a ~ 1, b ~ 100), hess = TRUE)
+optim_algs <- list(BFGS = BFGS(), LBFGS = LBFGS(), CG = ConjugateGradient(),
+                   Newton = Newton(), NewtonTR = NewtonTrustRegion(), NelderMead = NelderMead())
+res <- t(sapply(optim_algs, function(alg) {
+  s <- solve(hprob, alg)
+  c(x = s$u[[1]], y = s$u[[2]], iterations = s$stats$iterations)
+}))
+res
+```
+
+The global methods need finite bounds:
+
+```{r}
+box <- OptimizationProblem(rosenf, c(0, 0), c(1, 100), lb = c(-2, -2), ub = c(2, 2))
+set.seed(1)
+solve(box, ParticleSwarm(lower = box$lb, upper = box$ub, n_particles = 20), maxiters = 200)$u
+set.seed(1)
+solve(box, SAMIN(), maxiters = 4000)$u
+```
+
+### NLopt
+
+`NLopt` holds a constructor for every NLopt algorithm identifier, so
+`NLopt$LD_LBFGS()` is the Julia `NLopt.LD_LBFGS()`. The prefix encodes local
+or global (`L`, `G`) and derivative based or derivative free (`D`, `N`).
+`Opt(algorithm, n)` exposes NLopt's settings as fields. The stochastic
+algorithms draw from NLopt's own random generator, seeded with
+`NLopt$srand()`.
+
+```{r}
+solve(rp, NLopt$LD_LBFGS())$u
+solve(OptimizationProblem(rosenf, c(-1.2, 1), c(1, 100)), NLopt$LN_NELDERMEAD(), maxiters = 2000)$u
+NLopt$srand(1)
+solve(box, NLopt$GN_CRS2_LM(), maxiters = 3000)$u
+opt <- Opt("LN_SBPLX", 2)
+opt$xtol_rel <- 1e-8
+s <- solve(OptimizationProblem(rosenf, c(-1.2, 1), c(1, 100)), opt)
+s$u
+s$original$ret
+```
+
+### Ipopt and MadNLP
+
+`IpoptOptimizer()` and `MadNLPOptimizer()` are ports of the primal dual
+interior point methods of Ipopt 3.14 and MadNLP 0.11, with their filter line
+searches and restoration phases. They take the fields of the Julia structs,
+and `additional_options` passes any solver option by name. Here Ipopt runs
+with the adaptive barrier update and a looser acceptable tolerance:
+
+```{r}
+ip <- solve(cprob, IpoptOptimizer(acceptable_tol = 1e-6,
+                                  additional_options = list(mu_strategy = "adaptive")))
+ip$u
+ip$retcode
+ip$stats
+names(ip$original)
+```
+
+MadNLP chooses its linear solver and KKT system with fields as well; its
+status is MadNLP's own and is mapped to the return code:
+
+```{r}
+proj <- OptimizationProblem(function(u, p) sum((u - c(2, 1))^2), c(0, 0), numeric(),
+                            cons = discf, lcons = -Inf, ucons = 1)
+md <- solve(proj, MadNLPOptimizer(linear_solver = "LapackCPUSolver"), abstol = 1e-10)
+md$u
+md$original$status
+```
+
+The projection of `(2, 1)` on the unit disk is `(2, 1) / sqrt(5)`, which is
+`r round(2 / sqrt(5), 7)` and `r round(1 / sqrt(5), 7)`.
+
+### PRIMA
+
+PRIMA modernizes Powell's derivative free methods: `UOBYQA()` and `NEWUOA()`
+(unconstrained), `BOBYQA()` (bounds), `LINCOA()` (bounds and linear
+constraints) and `COBYLA()` (nonlinear constraints). `maxiters` sets the
+evaluation budget and options such as `rhobeg` and `rhoend` go straight to
+the solver.
+
+```{r}
+q <- function(u, p) (u[1] - 1)^2 + (u[2] + 2)^2
+solve(OptimizationProblem(q, c(0, 0), numeric()), UOBYQA())$u
+solve(OptimizationProblem(q, c(0, 0), numeric(), lb = c(-3, -1), ub = c(3, 3)),
+      BOBYQA(), rhobeg = 0.5)$u
+solve(OptimizationProblem(q, c(0, 0), numeric(), cons = function(u, p) u[1] - u[2],
+                          lcons = -Inf, ucons = 2), LINCOA())$u
+solve(OptimizationProblem(q, c(0, 0), numeric(), cons = function(u, p) u[1] + u[2],
+                          lcons = -2, ucons = 0), COBYLA())$u
+```
+
+The bound `u2 >= -1` is active for `BOBYQA()`, and the linear constraint
+`u1 - u2 <= 2` is active for `LINCOA()`, whose solution `(0.5, -1.5)` is the
+projection of `(1, -2)` on that half plane.
+
+### SciPy
+
+The `Scipy*` algorithms port `scipy.optimize`: `ScipyMinimize(method)` with
+every method of `minimize` (and shortcuts such as `ScipyBFGS()`,
+`ScipyNelderMead()`, `ScipySLSQP()`, `ScipyTrustConstr()`), the scalar
+minimizers, least squares, root finding, linear programming and the global
+methods (`ScipyDifferentialEvolution()`, `ScipyDualAnnealing()`,
+`ScipyShgo()`, `ScipyDirect()`, `ScipyBasinhopping()`, `ScipyBrute()`).
+
+```{r}
+plain <- OptimizationProblem(rosenf, c(-1.2, 1), c(1, 100))
+s <- solve(plain, ScipyMinimize("BFGS"))
+s$u
+s$original$nit
+suppressWarnings(solve(rcp, ScipySLSQP()))$u
+set.seed(1)
+solve(box, ScipyDifferentialEvolution())$u
+```
+
+As `scipy.optimize.minimize` does, `ScipySLSQP()` warns that the constraint
+options SLSQP cannot use (finite difference settings, `keep_feasible`,
+`hess`) are ignored; the warning is suppressed above.
+
+### Manopt
+
+The Manopt optimizers minimize over a Riemannian manifold given with the
+problem's `manifold` argument. On `Euclidean(n)` they are ordinary methods;
+on `Sphere(n)` (unit vectors in n + 1 dimensions) they keep the iterates
+normalized. Minimizing the Rayleigh quotient on the sphere finds the
+eigenvector of the smallest eigenvalue:
+
+```{r}
+solve(OptimizationProblem(rosenf, c(0, 0), c(1, 100), manifold = Euclidean(2)),
+      QuasiNewtonOptimizer())$u
+A <- diag(c(3, 1, 2))
+rq <- function(u, p) sum(u * (A %*% u))
+round(solve(OptimizationProblem(rq, c(1, 1, 1) / sqrt(3), numeric(), manifold = Sphere(2)),
+            GradientDescentOptimizer())$u, 6)
+```
+
+### Evolutionary and black box methods
+
+OptimizationMetaheuristics (`DE()`, `ECA()`, `PSO()`, `SHADE()` and others),
+the CMA evolution strategies (`CMAEvolutionStrategyOpt()`, `GCMAESOpt()`) and
+the Borg multiobjective algorithm of BlackBoxOptim (`BBO_borg_moea()`) are
+global, population based searches. The stochastic ones use R's random
+numbers, or a `seed` argument:
+
+```{r}
+set.seed(1)
+s <- solve(box, DE(), maxiters = 200)
+c(s$u, s$objective)
+set.seed(1)
+solve(box, ECA(), maxiters = 200)$u
+solve(plain, CMAEvolutionStrategyOpt(), seed = 1)$u
+```
+
+### Polyalgorithms and gradient flows
+
+`PolyOpt()` (OptimizationPolyalgorithms) runs Adam for a while and then
+BFGS, the recipe the SciML documentation recommends for neural network and
+parameter fitting losses. The ODE optimizers of OptimizationODE follow the
+gradient flow `du/dt = -grad f(u)` to a steady state with an ODE solver
+(`ODEGradientDescent()`, `RKChebyshevDescent()`, `RKAccelerated()`,
+`HighOrderDescent()`, or any solver in `ODEOptimizer(alg)`):
+
+```{r}
+s <- solve(rp, PolyOpt())
+s$alg$name
+s$u
+quad <- OptimizationProblem(function(u, p) sum((u - p)^2), c(2, 2), c(1, 1),
+                            grad = function(u, p) 2 * (u - p))
+solve(quad, RKAccelerated())$u
+solve(quad, ODEGradientDescent(), dt = 0.1, maxiters = 200)$u
+```
+
+## Linear, mixed integer and conic programs
+
+### Linear programming with HiGHS
+
+`ScipyLinprog()` solves a linear program with the port of the HiGHS simplex
+and interior point solvers (`"highs"`, `"highs-ds"`, `"highs-ipm"`), or
+SciPy's legacy `"simplex"`. The cost function returns the cost vector `c`,
+and the constraint matrices are given as in `scipy.optimize.linprog`:
+`A_ub %*% u <= b_ub` and `A_eq %*% u == b_eq`. Problem bounds are variable
+bounds.
+
+```{r}
+lp <- OptimizationProblem(function(u, p) c(-1, -2, 0.5), c(0, 0, 0), numeric(),
+                          lb = c(0, -1, -Inf), ub = c(3, Inf, 2))
+ls <- solve(lp, ScipyLinprog(),
+            A_ub = rbind(c(1, 1, 1), c(2, 0.5, 0), c(0, 1, -1)), b_ub = c(4, 5, 1.5),
+            A_eq = rbind(c(1, -1, 2)), b_eq = 0.5)
+ls$u
+ls$objective
+ls$original$ineqlin$marginals
+ls$original$message
+```
+
+The marginals are the dual values (sensitivities of the optimum to the right
+hand sides): the second inequality is slack, so its marginal is zero.
+
+### Mixed integer programming
+
+`ScipyMilp()` runs the port of the HiGHS branch and cut MIP solver, as
+`scipy.optimize.milp`. `integrality` marks each variable as continuous (0),
+integer (1), semicontinuous (2) or semi integer (3), and the constraints are
+`lb_con <= A %*% u <= ub_con`. In this small example two integer variables
+must be equal, `2 u1 + 2 u2 + u3 <= 7`, and the continuous `u3` is at most 2:
+
+```{r}
+mip <- OptimizationProblem(function(u, p) c(-1, -1, -0.5), c(0, 0, 0), numeric(),
+                           lb = c(0, 0, 0), ub = c(Inf, Inf, 2))
+A <- rbind(c(2, 2, 1), c(1, -1, 0))
+ms <- solve(mip, ScipyMilp(), integrality = c(1, 1, 0), A = A,
+            lb_con = c(-Inf, 0), ub_con = c(7, 0))
+ms$u
+ms$objective
+ms$original$mip_gap
+```
+
+The linear relaxation (the same problem without integrality) reaches the
+objective `-3.5`, for instance at `u1 = u2 = 1.75, u3 = 0` (the relaxed
+optimum is not unique); integrality costs half a unit:
+
+```{r}
+rs <- solve(mip, ScipyLinprog(), A_ub = A[1, , drop = FALSE], b_ub = 7,
+            A_eq = A[2, , drop = FALSE], b_eq = 0)
+rs$u
+rs$objective
+```
+
+For symbolic models, unknowns created with `integer = TRUE` or
+`binary = TRUE` make `solve()` choose `BranchAndBound()`, which branches on
+the relaxations solved by the continuous methods. A knapsack with values 10,
+13, 7 and 8, weights 3, 4, 2 and 3 and capacity 7:
+
+```{r}
+v <- c(10, 13, 7, 8); w <- c(3, 4, 2, 3)
+bs <- lapply(1:4, function(i) Variable(paste0("take", i), binary = TRUE))
+ksys <- complete(System(list(), costs = list(-Reduce(`+`, Map(`*`, v, bs))), name = "knapsack",
+                        constraints = list(Inequality(Reduce(`+`, Map(`*`, w, bs)), 7))))
+ks <- solve(OptimizationProblem(ksys, lapply(bs, function(b) b ~ 0)))
+ks$alg$name
+ks$u
+-ks$objective
+```
+
+### Conic programs through MathOptInterface
+
+`ConvexOptimizationProblem()` with `ConvexMOI()` follows the
+MathOptInterface route of Optimization.jl: the objective and each
+`ConeConstraint(g, set)` are lowered to cones of `MOI` (`MOI$Zeros`,
+`MOI$Nonnegatives`, `MOI$SecondOrderCone`, ...) and solved with the port of
+the Clarabel conic solver. The solution carries the duals and the MOI status
+codes:
+
+```{r}
+cons <- list(ConeConstraint(function(u, p) u[1] + u[2] - 1, MOI$Zeros(1)),
+             ConeConstraint(function(u, p) c(u[1], u[2]), MOI$Nonnegatives(2)))
+cvx <- solve(ConvexOptimizationProblem(function(u, p) u[1] + 2 * u[2], c(0.5, 0.5),
+                                       constraints = cons), ConvexMOI())
+round(cvx$u, 6)
+cvx$objective
+cvx$original$termination_status
+```
+
+## Callbacks, statistics and caches
+
+`solve(prob, alg, callback = cb)` calls `cb(state, loss)` after every
+evaluation of the objective (not once per iteration, so line search trial
+points appear too). `state` holds the current point, objective, iteration
+and parameters. Returning `TRUE` stops the solve with the return code
+`Terminated`:
+
+```{r}
+seen <- numeric()
+last_state <- NULL
+cb <- function(state, loss) {
+  seen <<- c(seen, loss)
+  last_state <<- state
+  FALSE
+}
+s <- solve(rp, BFGS(), callback = cb)
+length(seen)
+names(last_state)
+stopped <- solve(rp, BFGS(), callback = function(state, loss) loss < 1)
+stopped$retcode
+stopped$objective
+```
+
+`sol$stats` is an `OptimizationStats` with the numbers of iterations and of
+function, gradient and Hessian evaluations, and the time:
+
+```{r}
+s$stats
+s$stats$fevals
+```
+
+`init(prob, alg)` returns an `OptimizationCache` that `solve_integrator()`
+solves (Julia's `solve!`), and `reinit()` changes the starting point or the
+parameters of the cache:
+
+```{r}
+cache <- init(quad, BFGS())
+solve_integrator(cache)$u
+solve_integrator(reinit(cache, p = c(3, -1)))$u
+```
+
+## Multiobjective problems
+
+With `multiobjective = TRUE` the costs of a system stay a vector objective.
+`WeightedSumScan()` traces the Pareto front by weighted sums and `NSGA2()`
+by a genetic algorithm. For the costs `x^2` and `(x - 2)^2` every point of
+`[0, 2]` is Pareto optimal:
+
+```{r}
+xm <- Variable("xm", bounds = c(-1, 3))
+mos <- complete(System(list(), costs = list(xm^2, (xm - 2)^2), name = "mo"))
+front <- solve(OptimizationProblem(mos, list(xm ~ 1), multiobjective = TRUE), WeightedSumScan(n = 5))
+cbind(front$u, front$objective)
+```
+
+## Parameter estimation of an ODE model
+
+Fitting the parameters of a differential equation is an optimization
+problem whose loss solves the ODE. This is the pattern of the SciML
+parameter estimation tutorials: `remake()` the `ODEProblem` with the trial
+parameters inside the loss, solve it on the data times, and compare. The
+Lotka Volterra model generates the data with `al = 1.5` and `de = 1`:
+
+```{r}
+t <- t_nounits; D <- D_nounits
+variables("prey(t)", "pred(t)")
+parameters("al", "be", "ga", "de")
+lv <- mtkcompile(System(list(D(prey) ~ al * prey - be * prey * pred,
+                             D(pred) ~ -ga * pred + de * prey * pred), t, name = "lv"))
+oprob <- ODEProblem(lv, list(prey ~ 1, pred ~ 1, al ~ 1.5, be ~ 1, ga ~ 3, de ~ 1), c(0, 5))
+tsave <- seq(0, 5, by = 0.5)
+truth <- solve(oprob, Tsit5(), saveat = tsave)
+data <- cbind(truth[prey], truth[pred])
+loss <- function(theta, p) {
+  s <- solve(remake(oprob, p = list(al ~ theta[1], de ~ theta[2])), Tsit5(), saveat = tsave)
+  sum((cbind(s[prey], s[pred]) - data)^2)
+}
+fit <- solve(OptimizationProblem(loss, c(1.2, 0.8), numeric()), NelderMead())
+fit$u
+fit$objective
+fit$stats$fevals
+```
+
+The loss is a black box to the optimizer, so a derivative free method (or
+finite differences) is the simple choice. The next section shows the
+alternative of ModelingToolkit's dynamic optimization, where the
+parameters become variables of one collocation problem.
+
+## Dynamic optimization
+
+`DynamicOptProblem(sys, op, tspan, dt = )` is the optimal control interface
+of ModelingToolkit (`JuMPDynamicOptProblem` and its siblings in Julia). The
+system has control inputs, declared with `input = TRUE` and passed to
+`mtkcompile(sys, inputs = )`, and costs and constraints in which
+`EvalAt(t1)(x)` is the value of `x` at time `t1` (written `x(t1)` in Julia)
+and `Integral(expr, list(t, t0, tf))` is a running (Lagrange) cost. The
+problem is transcribed by direct collocation into a nonlinear program, which
+is solved by the native interior point method. `solve()` returns a
+`DynamicOptSolution` with `model` (objective, iterations, optimized
+parameters and final time), `sol` (an `ODESolution` of the states) and
+`input_sol` (the inputs).
+
+### A linear quadratic problem and the collocation schemes
+
+Minimizing the integral of `x^2 + u^2` with `x' = u` and `x(0) = 1` has the
+exact optimal cost `tanh(1)`. The second argument of `solve()` selects the
+collocation scheme: `"trapezoidal"` (the default), `"hermite_simpson"`,
+`"backward_euler"`, `"RadauIIA5"`, `"LagrangeRadau(n)"`,
+`"LagrangeLegendre(n)"`, `"RK4"` or a Butcher tableau `list(A = , b = , c = )`.
+
+```{r}
+xs <- Variable("xs", t); us <- Variable("us", t, input = TRUE)
+lqr <- mtkcompile(System(list(D(xs) ~ us), t, name = "lqr",
+                         costs = list(Integral(xs^2 + us^2, list(t, 0, 1)))), inputs = list(us))
+dprob <- DynamicOptProblem(lqr, list(xs ~ 1, us ~ 0), c(0, 1), dt = 0.1)
+schemes <- c("trapezoidal", "hermite_simpson", "RadauIIA5", "LagrangeLegendre(2)")
+sapply(schemes, function(m) solve(dprob, m)$model$objective - tanh(1))
+```
+
+The higher order schemes are far more accurate on the same grid. Between the
+nodes the solution is the collocation polynomial of the scheme, and the
+optimal input is `-sinh(1 - t) / cosh(1)`:
+
+```{r}
+hs <- solve(dprob, "hermite_simpson")
+hs
+hs$sol(c(0.25, 0.5))
+cbind(hs$input_sol(c(0.25, 0.5)), exact = -sinh(1 - c(0.25, 0.5)) / cosh(1))
+```
+
+### The Julia backends
+
+The JuMP, CasADi, InfiniteOpt and Pyomo backends of ModelingToolkit have the
+same constructors here. Each builds the native problem and its collocation
+object selects the transcription that backend uses; the `solver` argument
+(`"ipopt"` in Julia) is accepted but not used. JuMP and CasADi hold the
+input constant over each step and integrate the cost by the trapezoidal rule
+on the nodes, so their optimal cost differs from `tanh(1)` by the
+discretization:
+
+```{r}
+jsol <- solve(JuMPDynamicOptProblem(lqr, list(xs ~ 1, us ~ 0), c(0, 1), dt = 0.1),
+              JuMPCollocation("ipopt"))
+c(method = jsol$model$method, objective = jsol$model$objective)
+psol <- solve(PyomoDynamicOptProblem(lqr, list(xs ~ 1, us ~ 0), c(0, 1), dt = 0.1),
+              PyomoCollocation("ipopt"))
+c(method = psol$model$method, objective = psol$model$objective)
+isol <- solve(InfiniteOptDynamicOptProblem(lqr, list(xs ~ 1, us ~ 0), c(0, 1), dt = 0.1),
+              InfiniteOptCollocation("ipopt", "OrthogonalCollocation(3)"))
+isol$model$objective
+```
+
+InfiniteOpt adds derivative variables at every support and integrates the
+cost by the trapezoidal rule over all supports; with Lobatto collocation on
+this grid that quadrature is coarse, hence the lower objective, as with the
+Julia backend.
+
+### Minimum time: the double integrator
+
+A free final time is a parameter `tf` in `tspan = list(0, tf)`, with the
+number of grid points given by `steps`. Driving `x'' = u`, `|u| <= 1`, from
+`x = 1` at rest to the origin at rest in minimum time gives `tf = 2`, with a
+bang bang control that switches from `-1` to `1` at `t = 1`.
+ModelingToolkit warns that the problem is "overdetermined" whenever the
+fixed initial values and the final constraints together outnumber the
+states, as here; the problem is nevertheless well posed, so the warning is
+suppressed.
+
+```{r}
+xd <- Variable("xd", t); vd <- Variable("vd", t)
+ud <- Variable("ud", t, bounds = c(-1, 1), input = TRUE)
+tf <- Parameter("tf")
+block <- mtkcompile(System(list(D(xd) ~ vd, D(vd) ~ ud), t, costs = list(tf), name = "block",
+                           constraints = list(EvalAt(tf)(vd) ~ 0, EvalAt(tf)(xd) ~ 0)),
+                    inputs = list(ud))
+mprob <- suppressWarnings(DynamicOptProblem(block, list(xd ~ 1, vd ~ 0, ud ~ 0, tf ~ 1),
+                                            list(0, tf), steps = 21))
+msol <- solve(mprob)
+msol$model$final_time
+round(unname(unlist(msol$input_sol$u)), 3)
+```
+
+### A state constraint: the Bryson Denham problem
+
+The Bryson Denham problem minimizes the control effort
+`integral of u^2 / 2` for `x'' = u` from `x = 0, x' = 1` to `x = 0, x' = -1`
+at `t = 1`, with the state constraint `x <= l`. A bound on an observed
+variable is a path constraint at every collocation point. For `l = 1/9` the
+exact optimal cost is `4 / (9 l) = 4`.
+
+```{r}
+y1 <- Variable("y1", t); y2 <- Variable("y2", t)
+pos <- Variable("pos", t, bounds = c(-Inf, 1 / 9))
+acc <- Variable("acc", t, input = TRUE)
+bd <- mtkcompile(System(list(D(y1) ~ y2, D(y2) ~ acc, pos ~ y1), t, name = "bryson",
+                        costs = list(Integral(acc^2 / 2, list(t, 0, 1))),
+                        constraints = list(EvalAt(1)(y1) ~ 0, EvalAt(1)(y2) ~ -1)),
+                 inputs = list(acc))
+bdprob <- suppressWarnings(DynamicOptProblem(bd, list(y1 ~ 0, y2 ~ 1, acc ~ 0), c(0, 1), dt = 0.05))
+bdsol <- solve(bdprob, "hermite_simpson")
+bdsol$model$objective
+max(bdsol$sol[y1])
+plot(bdsol$sol$t, bdsol$sol[y1], type = "l", xlab = "t", ylab = "position",
+     main = "Bryson Denham: the position rides the bound 1/9")
+abline(h = 1 / 9, lty = 2)
+```
+
+### Parameter estimation by collocation
+
+With `tune_parameters = TRUE` the tunable parameters become decision
+variables of the collocation problem, and costs at data times fit the
+model. This estimates `al` and `de` of the Lotka Volterra model from
+observations of the prey alone (parameters declared `tunable = FALSE` stay
+fixed):
+
+```{r}
+al <- Parameter("al", default = 1.5); be <- Parameter("be", default = 1, tunable = FALSE)
+ga <- Parameter("ga", default = 3, tunable = FALSE); de <- Parameter("de", default = 1)
+xp <- Variable("xp", t); yp <- Variable("yp", t)
+eqs <- list(D(xp) ~ al * xp - be * xp * yp, D(yp) ~ -ga * yp + de * xp * yp)
+ts <- seq(0, 2, by = 0.1)
+obs <- solve(ODEProblem(mtkcompile(System(eqs, t, name = "lvdata")),
+                        list(xp ~ 4, yp ~ 2, al ~ 2.5, de ~ 1.8), c(0, 2)),
+             Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-10)[xp]
+fitcosts <- lapply(seq_along(ts), function(i) (EvalAt(ts[i])(xp) - obs[i])^2)
+spe <- mtkcompile(System(eqs, t, costs = fitcosts, name = "spe"))
+eprob <- DynamicOptProblem(spe, list(xp ~ 4, yp ~ 2), c(0, 2), dt = 0.1, tune_parameters = TRUE)
+esol <- solve(eprob, "RadauIIA5")
+esol$model$parameters
+```
+
+The true values 2.5 and 1.8 are recovered. The scheme matters here: the
+collocation equations are the model the data are fitted to, and on this
+coarse grid the second order trapezoidal rule is not accurate enough to
+reproduce the solution of the ODE, so its estimates are biased. Use a high
+order scheme, or a finer grid, for estimation.
+
+## Summary
+
+- `System(list(), costs = , constraints = )` with `complete()` and
+  `OptimizationProblem(sys, op)` give a symbolic problem with generated
+  derivatives; `OptimizationProblem(f, u0, p)` builds one from R functions.
+- `solve(prob, alg)` accepts the Optim, NLopt, Ipopt, MadNLP, PRIMA, SciPy,
+  Manopt, Metaheuristics, CMA, BlackBoxOptim, polyalgorithm and ODE
+  optimizers, with the common options `maxiters`, `maxtime`, `abstol`,
+  `reltol` and `callback`.
+- `ScipyLinprog()`, `ScipyMilp()`, `BranchAndBound()` and `ConvexMOI()`
+  cover linear, mixed integer and conic programs.
+- `DynamicOptProblem()` and the backend constructors transcribe optimal
+  control and estimation problems by direct collocation, with free final
+  times, path constraints and a choice of collocation schemes.

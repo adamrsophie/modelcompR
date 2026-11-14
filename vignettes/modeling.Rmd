@@ -1,0 +1,903 @@
+---
+title: "Modeling: variables, equations, systems and components"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Modeling: variables, equations, systems and components}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+```{r setup, message = FALSE}
+library(modelcompR)
+```
+
+This article covers everything that happens before `mtkcompile()`: declaring
+the independent variable, unknowns, parameters and constants with their
+metadata; writing equations; assembling them into a `System`; querying a
+system; building hierarchical models from components; connecting components
+through connectors; checking units; and working with the expressions
+through symcompR. Each part names the ModelingToolkit (MTK) construct it
+corresponds to. The article ends with an RC circuit assembled from
+components and simulated.
+
+Accessors such as `equations()` and `unknowns()` return plain R lists. To
+print them one per line, this article uses a small helper:
+
+```{r}
+pp <- function(x) writeLines(vapply(x, format, ""))
+```
+
+## The independent variable and the derivative
+
+In MTK, `using ModelingToolkit: t_nounits as t, D_nounits as D` gives the
+time variable and its derivative operator. modelcompR exports the same two
+objects. The name `t` is not exported because it would mask `base::t()`;
+assign the objects to short names in your own code instead.
+
+```{r}
+t <- t_nounits
+D <- D_nounits
+t
+D
+getdescription(t)
+```
+
+`Differential(iv)` builds the derivative operator for any independent
+variable, and `independent_variable()` declares new ones, the
+`@independent_variables` macro. Powers of the operator give higher
+derivatives. Derivatives of unknowns stay unevaluated; `expand_derivatives()`
+applies the chain rule to expressions around them.
+
+```{r}
+s <- independent_variable("s")
+Ds <- Differential(s)
+Ds
+variables("pos(t)")
+D(D(pos))
+Differential(t, 2)(pos)
+expand_derivatives(D(pos^2 + sin(t)))
+```
+
+## Declaring variables and parameters from strings
+
+`variables()` and `parameters()` are the R counterparts of `@variables` and
+`@parameters`. Each argument is a declaration string; the function creates
+the symbol and assigns it in the calling environment, so `x` below is an
+ordinary R object afterwards. A name followed by `(t)` depends on the
+independent variable `t`, which is looked up in the calling environment.
+
+```{r}
+variables("x(t) = 1", "y(t)")
+parameters("k = 0.5", "m")
+x
+k
+getdefault(x)
+hasdefault(y)
+```
+
+The text after `=` is evaluated as R code in the calling environment, so a
+default can be a number, a symbolic expression of other variables, or `NA`.
+These three cases mean different things. A numeric default becomes an
+initial condition (or a parameter value) of every system the variable
+appears in. A symbolic default becomes a binding: the variable is then
+determined by that expression. `NA` is Julia's `missing`: the value is
+unknown and is solved for during initialization.
+
+```{r}
+parameters("k2 = 2 * k", "kfree = NA")
+getdefault(k2)
+getdefault(kfree)
+```
+
+Array variables are written with a range after the declaration. They are
+returned as a list of scalar variables `z[1]`, `z[2]`, and so on, and a
+vector default is split over the elements.
+
+```{r}
+variables("z(t)[1:3] = c(1, 2, 3)")
+z
+getdefault(z[[3]])
+```
+
+The `.meta` argument attaches the same metadata to every variable in the
+call. For metadata that differs per variable, use `Variable()` (next
+section).
+
+```{r}
+variables("ua(t)", "ub(t)", .meta = list(description = "a state", bounds = c(0, 1)))
+getdescription(ua)
+getbounds(ub)
+```
+
+`constants()` declares constants (`@constants`), `brownians()` declares
+Brownian variables for stochastic models (`@brownians`), and `discretes()`
+declares discrete parameters (`@discretes`): parameters that events are
+allowed to change.
+
+```{r}
+constants("c0 = 299792458")
+brownians("wn")
+isconstant(c0)
+isbrownian(wn)
+```
+
+## Variable(), Parameter() and metadata
+
+`Variable()` and `Parameter()` declare one symbol and return it, without
+assigning anything; `Variable("x", t, default = 1)` is `@variables x(t) = 1`.
+Every metadata field of MTK has an argument.
+
+```{r}
+pos2 <- Variable("pos2", t,
+  default = 1, guess = 0.5, bounds = c(0, 10),
+  description = "position of the cart", state_priority = 5,
+  irreducible = TRUE, input = FALSE)
+getdefault(pos2)
+getguess(pos2)
+getbounds(pos2)
+getdescription(pos2)
+state_priority(pos2)
+isirreducible(pos2)
+isinput(pos2)
+isoutput(pos2)
+```
+
+The meaning of the fields:
+
+* `default`: initial condition or binding, as described above.
+* `guess`: starting value for the nonlinear solve of initialization, for
+  variables that are solved for rather than given.
+* `bounds`: `c(lower, upper)`, used by optimization and some solvers.
+* `description` and `unit`: documentation, and the input of unit checking
+  (see the units section).
+* `input`, `output`, `disturbance`: causal roles, used by causal
+  connections, linearization and control function generation.
+* `irreducible`: the variable is kept as an unknown by `mtkcompile()` even
+  when it could be eliminated.
+* `state_priority`: a number; higher values are preferred as
+  differential states during index reduction.
+* `connect`: `Flow` or `Stream` for connector variables (see connectors).
+* `tunable` (parameters only): whether the parameter is exposed as tunable,
+  `TRUE` by default. Further fields such as `dist`, `nominal` and `misc`
+  pass through `...`.
+
+```{r}
+damp <- Parameter("damp", default = 0.1, tunable = FALSE, dist = "Uniform(0, 1)")
+istunable(damp)
+getdist(damp)
+getnominal(damp)
+isparameter(damp)
+isvariable(pos2)
+```
+
+`Constant()` declares a constant (`@constants`): a parameter kind that
+always has a value and is never tunable. `Brownian()`, `Poissonian()` and
+`Discrete()` are the single symbol forms of the other kinds.
+
+```{r}
+grav0 <- Constant("grav0", 9.81, description = "standard gravity")
+isconstant(grav0)
+Discrete("count", t, default = 0)
+```
+
+Metadata can be read and changed after declaration. `getmetadata()` and
+`setmetadata()` are the general forms; the `set*` functions return a copy
+of the variable and also update the package registry, so the new value is
+seen wherever the name appears. The names of the metadata keys are
+exported as `VariableUnit`, `VariableBounds` and so on, for code ported from
+MTK.
+
+```{r}
+pos2 <- setguess(pos2, 0.25)
+getguess(pos2)
+pos2 <- setmetadata(pos2, "misc", list(color = "red"))
+getmetadata(pos2, "misc")
+VariableBounds
+```
+
+`toparam()` turns a variable into a parameter with the same name and
+metadata, and `tovar()` does the reverse.
+
+```{r}
+isparameter(toparam(pos2))
+isvariable(tovar(damp))
+```
+
+Metadata is attached to the returned object and also stored in a registry
+keyed by the variable name, which is how a bare symbol found inside an
+expression recovers its metadata. Declaring the same name twice with
+different metadata replaces the registry entry, so give distinct quantities
+distinct names.
+
+## Operators on variables: Initial and Pre
+
+`Initial(x)` stands for the initial value of `x`. A compiled system gets a
+parameter `Initial(x)` for each such reference, and these parameters are
+hidden from `parameters()` unless `initial_parameters = TRUE` is passed.
+`Pre(x)` is the value just before an event, used in event affects (see the
+events article).
+
+```{r}
+Initial(x)
+isinitial(Initial(x))
+Pre(x)
+```
+
+A typical use binds a parameter to the initial value of an algebraic
+variable. Here `zi` is determined by `zi^3 + zi = xi`, and the rate `r` is
+fixed to whatever `zi` is at the start.
+
+```{r}
+xi <- Variable("xi", t); zi <- Variable("zi", t); r <- Parameter("r")
+ib <- mtkcompile(System(list(D(xi) ~ -r * xi, 0 ~ zi^3 + zi - xi), t,
+                        name = "ib", bindings = list(r ~ Initial(zi)),
+                        guesses = list(zi ~ 1)))
+pp(parameters(ib))
+pp(parameters(ib, initial_parameters = TRUE))
+prob <- ODEProblem(ib, list(xi ~ 2), c(0, 1))
+c(prob[zi], prob$ps[r])
+```
+
+The value `zi = 1` solves `zi^3 + zi = 2`, so `r` is 1.
+
+## Equations
+
+An equation is written as an R formula, exactly as in Julia: `D(x) ~ -k * x`.
+Both sides are evaluated in the environment where the formula was created.
+`Equation(lhs, rhs)` builds the same object explicitly, and `as_equation()`
+converts a formula.
+
+```{r}
+e1 <- Equation(D(x), -k * x)
+e1
+class(e1)
+e2 <- as_equation(D(y) ~ x - y)
+eq_lhs(e2)
+eq_rhs(e2)
+```
+
+An equation whose sides are arrays is expanded elementwise, and a scalar
+side is broadcast.
+
+```{r}
+print(as_equation(D(z) ~ -z))
+```
+
+Equations that contain a derivative of an unknown are differential
+equations; the others are algebraic.
+
+```{r}
+is_diff_equation(e2)
+is_alg_equation(as_equation(0 ~ x^2 + y^2 - 1))
+```
+
+`Inequality()`, with the shorthands `%<~%` and `%>~%` (Julia's `≲` and
+`≳`), states constraints for optimization problems.
+
+```{r}
+(x^2 + y^2) %<~% 1
+```
+
+## Systems
+
+`System(eqs, iv, ...)` is the single system type of MTK 11. With an
+independent variable it describes differential, differential algebraic,
+stochastic, jump, delay or discrete equations; without one it is a
+nonlinear system, or an optimization problem when `costs` are given. A name
+is required; it plays the role of `@named`.
+
+```{r}
+variables("q(t) = 1", "qv(t)", "qe(t)")
+parameters("kq = 2", "cq")
+osc <- System(
+  list(D(q) ~ qv, D(qv) ~ -kq * q - cq * qv, qe ~ kq * q^2 / 2 + qv^2 / 2), t,
+  name = "osc",
+  initial_conditions = list(qv ~ 0.5),
+  bindings = list(cq ~ kq / 10),
+  guesses = list(qv ~ 0))
+osc
+```
+
+When `unknowns` and `ps` are not given they are inferred from the
+equations: declared parameters become parameters and everything that
+depends on `t` becomes an unknown. The variable maps take formulas
+`x ~ value`, pairs `list(x, value)` or named lists. Defaults declared on
+the variables are collected automatically: `q` brings its default 1, and
+`kq` its default 2.
+
+The accessors have the MTK names.
+
+```{r}
+pp(unknowns(osc))
+pp(parameters(osc))
+pp(equations(osc))
+get_iv(osc)
+independent_variables(osc)
+nameof(osc)
+```
+
+`initial_conditions()`, `bindings()` and `guesses()` return variable maps.
+`defaults()` merges the first two, as the older MTK API did, and
+`bound_parameters()` lists the parameters that have a binding.
+
+```{r}
+initial_conditions(osc)
+bindings(osc)
+guesses(osc)
+defaults(osc)
+pp(bound_parameters(osc))
+```
+
+`set_defaults()` returns a copy with extra initial conditions.
+
+```{r}
+initial_conditions(set_defaults(osc, q ~ 3))
+```
+
+`names()` lists what `$` can reach: subsystems, unknowns, parameters and
+observed variables.
+
+```{r}
+names(osc)
+```
+
+### Compiled systems, observed and full equations
+
+`mtkcompile()` simplifies a system structurally. Equations that only define
+a variable, such as the energy `qe` above, are removed from the equations
+and kept as observed equations, and `qe` is no longer an unknown.
+
+```{r}
+osc_c <- mtkcompile(osc)
+osc_c
+pp(observed(osc_c))
+pp(observables(osc_c))
+iscomplete(osc)
+iscomplete(osc_c)
+```
+
+`full_equations()` substitutes the observed equations into the equations.
+The difference shows when an observed variable appears on a right hand
+side. Observed equations can also be given to `System()` directly through
+`observed`:
+
+```{r}
+variables("w1(t) = 1", "w2(t)")
+fe <- System(list(D(w1) ~ -w2), t, observed = list(w2 ~ 2 * w1), name = "fe")
+pp(equations(fe))
+pp(full_equations(fe))
+```
+
+The RC circuit at the end shows the same on a compiled model. A compiled
+system is turned into a problem directly, and observed variables can be
+read from the solution:
+
+```{r}
+sol <- solve(ODEProblem(osc_c, list(), c(0, 2)))
+sol$retcode
+sol(2)
+sol(2, idxs = qe)
+```
+
+### Own fields and hierarchical accessors
+
+`equations()`, `unknowns()`, `parameters()`, `observed()` and the variable
+map accessors include all subsystems, namespaced. The `get_*` functions,
+such as `get_eqs()` and `get_unknowns()`, and the `*_toplevel` functions
+return only the system's own entries. `diff_equations()` and
+`alg_equations()` split the equations by kind.
+
+```{r}
+pp(diff_equations(osc))
+pp(alg_equations(osc))
+length(get_systems(osc))
+```
+
+## Hierarchical models
+
+### Components are R functions
+
+MTK's `@component` functions and `@mtkmodel` blocks become ordinary R
+functions that take a `name` and return a `System`. The variables are
+declared inside the function, so every instance gets its own copy.
+
+```{r}
+Decay <- function(name, rate = 1) {
+  x <- Variable("x", t, default = 1)
+  kd <- Parameter("kd", default = rate)
+  System(list(D(x) ~ -kd * x), t, name = name)
+}
+a <- Decay("a", rate = 1)
+b <- Decay("b", rate = 2)
+```
+
+`compose(sys, ...)` adds subsystems to a system; passing `systems =` to
+`System()` does the same. The variables of a subsystem are namespaced with
+its name and the separator `₊`, as in MTK.
+
+```{r}
+top <- compose(System(list(), t, name = "top"), a, b)
+top
+hierarchy(top)
+pp(equations(top))
+```
+
+### Namespaced access with `$`
+
+`sys$sub$x` is Julia's `sys.sub.x`. On a system that is not complete, the
+result is namespaced from the top, which is the form needed when writing
+equations in an enclosing system. `nonamespace()` returns the variable as
+written inside the subsystem (`@nonamespace`), and `renamespace()` adds a
+prefix explicitly.
+
+```{r}
+top$a$x
+nonamespace(top$a$x)
+renamespace("plant", a$x)
+```
+
+Once a system is complete (after `complete()` or `mtkcompile()`), `$` no
+longer adds the top level name, since the problem is built from that
+system; `namespace()` forces the full name when needed. `flatten()`
+collapses the hierarchy into one system with namespaced variables.
+
+```{r}
+top_c <- complete(top)
+top_c$a$x
+namespace(top_c$a$x)
+flatten(top)
+```
+
+Inside a component it is often convenient to read the variables of a
+subsystem without its prefix. `toggle_namespacing(sys, FALSE)` returns a
+copy whose `$` access does not namespace; the RC circuit below uses this to
+extend a base component.
+
+### named()
+
+`named(sys <- Constructor(...))` calls the constructor with
+`name = "sys"` and assigns the result, the `@named` macro. Symbolic
+arguments are wrapped in `ParentScope()`, so a parameter passed into a
+component refers to the parameter of the enclosing system.
+
+```{r}
+Lag1 <- function(name, gain) {
+  xl <- Variable("xl", t, default = 0)
+  System(list(D(xl) ~ gain - xl), t, name = name)
+}
+kshared <- Parameter("kshared", default = 3)
+named(lag1 <- Lag1(gain = kshared))
+nameof(lag1)
+pp(parameters(System(list(), t, systems = list(lag1), name = "plant")))
+```
+
+The parameter appears as `kshared`, not `lag1₊kshared`.
+
+### extend()
+
+`extend(sys, base)` merges the equations, variables, maps and subsystems of
+`base` into `sys`; it is Julia's `extend`, used by `@extend`. Inheritance
+of a common interface (the `OnePort` of the circuit library below) is
+written this way.
+
+```{r}
+Base1 <- function(name) {
+  xb <- Variable("xb", t, default = 0)
+  System(list(), t, list(xb), list(), name = name)
+}
+base1 <- Base1("base1")
+u <- toggle_namespacing(base1, FALSE)
+ext <- extend(System(list(D(u$xb) ~ 1), t, name = "ext"), base1)
+ext
+```
+
+### component() and mtkmodel()
+
+`component(f)` marks a constructor as a component; the systems it builds
+record the constructor name in their metadata, as `@component` does.
+`rename_system()` changes the name of an existing system.
+
+```{r}
+DecayC <- component(Decay)
+get_metadata(DecayC(name = "dc"))$gui_metadata
+nameof(rename_system(a, "a2"))
+```
+
+`mtkmodel()` builds a constructor from declarations, the counterpart of an
+`@mtkmodel` block. Declarations are strings as in `variables()`, blocks such
+as `equations` are quoted expressions evaluated where the declarations are
+bound, and the constructor's arguments override the declared defaults.
+
+```{r}
+Lag <- mtkmodel("Lag",
+  parameters = list("tau = 1"),
+  variables = list("xm(t) = 0", "um(t)"),
+  equations = quote(list(D(xm) ~ (um - xm) / tau, um ~ 1)))
+Lag
+lag <- Lag(name = "lag", tau = 0.5)
+initial_conditions(lag)
+```
+
+## Scopes
+
+By default, a variable used in a subsystem belongs to that subsystem and is
+namespaced with it (`LocalScope`). `ParentScope(x)` makes it refer to the
+variable of the same name one level up, and `GlobalScope(x)` to the top
+level variable. Nested `ParentScope()` calls go up further levels.
+
+```{r}
+Sub <- function(name) {
+  xs <- Variable("xs", t)
+  pg <- GlobalScope(Parameter("pg"))
+  pp_ <- ParentScope(Parameter("pp_"))
+  pl <- Parameter("pl")
+  System(list(D(xs) ~ -pg * pp_ * pl * xs), t, name = name)
+}
+mid <- System(list(), t, systems = list(Sub("sub")), name = "mid")
+outer <- System(list(), t, systems = list(mid), name = "outer")
+pp(equations(outer))
+pp(parameters(outer))
+```
+
+`pl` is local to `sub`, `pp_` belongs to `mid`, and `pg` to the top.
+`collect_scoped_vars()` lists the variables of a system that refer to the
+enclosing system. A scope can also be applied to a symbolic default:
+`2 * ParentScope(kg)` passed as a parameter value binds the component's
+parameter to the parent's `kg`.
+
+```{r}
+kg <- Parameter("kg", default = 3)
+d1 <- Decay("d1", rate = 2 * ParentScope(kg))
+bindings(System(list(), t, systems = list(d1), name = "host"))
+```
+
+## Connectors and connections
+
+Acausal models connect components through connectors: small systems whose
+variables are shared at a connection. `connector(f)` marks a constructor as
+a connector (`@connector`). In `connect(a, b, ...)`, potential variables
+(connect type `"Equality"`, the default) are set equal, and variables with
+`connect = Flow` sum to zero, entering with a negative sign when the
+connector is on the outside of the system that holds the connection.
+`connector_type()` classifies a connector.
+
+```{r}
+Pin <- connector(function(name) {
+  v <- Variable("v", t)
+  i <- Variable("i", t, connect = Flow)
+  System(list(), t, list(v, i), list(), name = name)
+})
+pa <- Pin(name = "pa")
+connector_type(pa)
+getconnect(nonamespace(pa$i))
+connect(pa, Pin(name = "pb"))
+```
+
+A connection is placed directly in the equation list.
+`expand_connections()` replaces it by equations; `mtkcompile()` does this
+automatically. Here two components each have one pin and inject a fixed
+current:
+
+```{r}
+Terminal <- function(name, i0) {
+  p <- Pin(name = "p")
+  System(list(p$i ~ i0), t, systems = list(p), name = name)
+}
+ta <- Terminal("ta", 1)
+tb <- Terminal("tb", -1)
+joint <- System(list(connect(ta$p, tb$p)), t, systems = list(ta, tb), name = "joint")
+pp(equations(expand_connections(joint)))
+```
+
+The voltages are set equal and the currents into the joint sum to zero. A
+connector that is a direct subsystem of the system holding the connection,
+the outside connector of a composite component, enters the current balance
+with a negative sign, and a connector left unconnected gets zero flow.
+
+### Causal connections
+
+`connect()` also joins causal variables marked `output` and `input`; the
+first argument is the output and the others are inputs, each of which is
+set equal to it.
+
+```{r}
+yo <- Variable("yo", t, output = TRUE)
+ui <- Variable("ui", t, input = TRUE)
+src <- System(list(yo ~ sin(t)), t, name = "src")
+xk <- Variable("xk", t)
+filt <- System(list(D(xk) ~ ui - xk), t, name = "filt")
+loop <- System(list(connect(src$yo, filt$ui)), t, systems = list(src, filt), name = "loop")
+pp(equations(expand_connections(loop)))
+```
+
+### Stream variables
+
+Variables with `connect = Stream` carry a quantity transported by a flow,
+such as specific enthalpy in a fluid port. A connector with stream
+variables may have at most one flow variable. `instream(h)` is the value of
+`h` flowing into the connector, which `expand_connections()` resolves with
+the mixing rule of the Modelica specification.
+
+```{r}
+Port <- connector(function(name) {
+  P <- Variable("P", t)
+  mf <- Variable("mf", t, connect = Flow)
+  hs <- Variable("hs", t, connect = Stream)
+  System(list(), t, list(P, mf, hs), list(), name = name)
+})
+connector_type(Port(name = "tmp"))
+Reservoir <- function(name, h0, m0) {
+  port <- Port(name = "port")
+  hin <- Variable("hin", t)
+  System(list(port$hs ~ h0, hin ~ instream(port$hs), port$mf ~ m0, port$P ~ 1), t,
+         list(hin), list(), systems = list(port), name = name)
+}
+r1 <- Reservoir("r1", h0 = 2, m0 = -1)
+r2 <- Reservoir("r2", h0 = 3, m0 = 1)
+pipe <- System(list(connect(r1$port, r2$port)), t, systems = list(r1, r2), name = "pipe")
+pp(equations(expand_connections(pipe)))
+```
+
+With two connectors the rule is simple: what flows into one is what the
+other emits, so `r1₊hin` is `r2₊port₊hs`. With three or more, `instream`
+becomes a flow weighted average.
+
+`domain_connect()` connects domains only (a fluid with shared properties,
+say): it shares the parameters of a domain source connector without
+generating equations.
+
+## Units
+
+Units are strings in the `unit` metadata: SI base and derived units with SI
+prefixes, products, quotients and powers, such as `"m/s^2"`, `"kJ"` or
+`"ms"`. `get_unit()` propagates units through an expression and signals a
+`ValidationError` when they are inconsistent. As in MTK with
+DynamicQuantities, units must agree exactly: `"kJ"` and `"J"` are
+different. To use units on derivatives, the independent variable needs a
+unit too; here a separate time variable `ts` is declared so that `t` keeps
+no unit.
+
+```{r}
+ts <- setmetadata(independent_variable("ts"), "unit", "s")
+Dts <- Differential(ts)
+hgt <- Variable("hgt", ts, unit = "m")
+vel <- Variable("vel", ts, unit = "m/s")
+grav <- Parameter("grav", unit = "m/s^2", default = 9.81)
+get_unit(vel / ts)
+get_unit(grav * ts^2)
+get_unit(Dts(hgt))
+```
+
+`validate()` checks an expression, equation, list of equations or system.
+It returns `TRUE`, or warns about each inconsistent equation and returns
+`FALSE`.
+
+```{r}
+validate(list(Dts(hgt) ~ vel, Dts(vel) ~ -grav))
+validate(Dts(hgt) ~ grav)
+```
+
+Functions such as `exp` need dimensionless arguments, and the terms of a
+sum must have the same unit.
+
+```{r}
+tryCatch(get_unit(hgt + vel), error = function(e) conditionMessage(e))
+class(tryCatch(get_unit(exp(hgt)), error = function(e) e))[1]
+```
+
+`System()` runs the unit check whenever a variable carries a unit, and
+stops on an inconsistency. The `checks` argument takes the flags
+`CheckAll`, `CheckNone`, `CheckComponents` and `CheckUnits`, combined with
+`bitwOr()`; `CheckComponents` alone keeps the structural checks and skips
+the units.
+
+```{r}
+fall <- System(list(Dts(hgt) ~ vel, Dts(vel) ~ -grav), ts, name = "fall")
+validate(fall)
+try(System(list(Dts(hgt) ~ grav), ts, name = "bad"))
+System(list(Dts(hgt) ~ grav), ts, name = "unchecked", checks = CheckComponents)
+```
+
+## Working with symcompR
+
+Expressions in modelcompR are symcompR expressions (class `sym`): `x(t)` is
+the application of an undefined function to `t`, and a parameter is a
+symbol. The symcompR functions that take expressions therefore work on
+them.
+
+```{r}
+class(x)
+simplify((x^2 - 1) / (x - 1))
+simplify(sin(x)^2 + cos(x)^2)
+expand((x + k)^2)
+factor_sym(x^2 - k^2)
+diff(k * x^2, x)
+diff(k * x^2, k)
+subs(k * x^2, k, 3)
+```
+
+`latex()` takes an expression; apply it to each side of an equation.
+
+```{r}
+eq <- as_equation(D(x) ~ -k * x^2 / m)
+paste(latex(eq_lhs(eq)), "=", latex(eq_rhs(eq)))
+```
+
+modelcompR adds a few helpers of its own, named after Symbolics.jl:
+`get_variables()` lists the variables of an expression, `collect_vars()`
+splits them into unknowns and parameters, `substitute_vars()` substitutes
+(MTK's `substitute`, renamed to keep `base::substitute`), `toexpr()`
+converts to R code, `Term()` builds a call of a symbolic function, and
+`build_function()` compiles an expression to an R function of a numeric
+vector. Use `build_function()` rather than symcompR's `lambdify()` for
+expressions that contain `x(t)`.
+
+```{r}
+pp(get_variables(D(x) ~ -k * x + t))
+str(lapply(collect_vars(D(x) ~ -k * sin(x), t), function(v) vapply(v, format, "")))
+substitute_vars(-k * x, list(k ~ 2))
+toexpr(D(x) ~ -k * sin(x))
+Term("f", k, 2)
+f <- build_function(-k * x^2, list(x, k))
+f(c(2, 3))
+```
+
+Symbols and functions created with symcompR directly can be used in
+models. An undefined function applied to `t` is an unknown, as in MTK. A
+bare symbol is an unknown of a system without an independent variable;
+in a time dependent system it is rejected, since it is not a function of
+`t` and is not declared as a parameter.
+
+```{r}
+fx <- symcompR::Function("fx")(t)
+System(list(D(fx) ~ -k * fx), t, name = "from_symcompr")
+sy <- symcompR::Symbol("sy")
+System(list(0 ~ sy^2 - k), name = "nonlinear")
+```
+
+### Masking rules
+
+No modelcompR export masks a function of base R or of the packages R
+attaches by default; that is why time is `t_nounits` and MTK's `substitute`
+is `substitute_vars()`. A few names are shared with symcompR, and
+`library(modelcompR)` reports the functions among them as masked:
+
+```{r}
+intersect(getNamespaceExports("modelcompR"), getNamespaceExports("symcompR"))
+```
+
+`Stream` is a string value in modelcompR (the connect type), so a call
+`Stream(...)` still reaches symcompR's function. Each of the other names is
+a function that hands arguments that are not modelcompR objects to the
+symcompR function, so both packages can be attached together: `compose()`
+of two expressions is symcompR's function composition, and `flatten()` of a
+list flattens the list.
+
+```{r}
+compose(sy^2, sy + 1)
+unlist(flatten(list(1, list(2, 3))))
+```
+
+## Worked example: an RC circuit from components
+
+This is the acausal component tutorial of MTK. A `Pin` carries a voltage
+and a current (a flow variable). `OnePort` is the common interface of two
+terminal elements: the voltage across it and the current through it.
+`Resistor`, `Capacitor` and `ConstantVoltage` extend `OnePort` with their
+constitutive equation, and `Ground` fixes the voltage of one pin to zero.
+
+```{r}
+Pin <- connector(function(name) {
+  v <- Variable("v", t)
+  i <- Variable("i", t, connect = Flow)
+  System(list(), t, list(v, i), list(), name = name)
+})
+
+Ground <- component(function(name) {
+  g <- Pin(name = "g")
+  System(list(g$v ~ 0), t, list(), list(), systems = list(g), name = name)
+}, type = "Ground")
+
+OnePort <- function(name) {
+  p <- Pin(name = "p")
+  n <- Pin(name = "n")
+  v <- Variable("v", t)
+  i <- Variable("i", t)
+  System(list(v ~ p$v - n$v, 0 ~ p$i + n$i, i ~ p$i), t, list(v, i), list(),
+         systems = list(p, n), name = name)
+}
+
+Resistor <- function(name, R = 1) {
+  op <- OnePort("oneport")
+  u <- toggle_namespacing(op, FALSE)
+  Rp <- Parameter("R", default = R)
+  extend(System(list(u$v ~ u$i * Rp), t, list(), list(Rp), name = name), op)
+}
+
+Capacitor <- function(name, C = 1) {
+  op <- OnePort("oneport")
+  u <- toggle_namespacing(op, FALSE)
+  Cp <- Parameter("C", default = C)
+  extend(System(list(D(u$v) ~ u$i / Cp), t, list(), list(Cp), name = name), op)
+}
+
+ConstantVoltage <- function(name, V = 1) {
+  op <- OnePort("oneport")
+  u <- toggle_namespacing(op, FALSE)
+  Vp <- Parameter("V", default = V)
+  extend(System(list(Vp ~ u$v), t, list(), list(Vp), name = name), op)
+}
+```
+
+The circuit: the source drives the resistor and the capacitor in series,
+and the negative side is grounded.
+
+```{r}
+resistor <- Resistor("resistor", R = 2)
+capacitor <- Capacitor("capacitor", C = 1)
+vsource <- ConstantVoltage("source", V = 1)
+ground <- Ground("ground")
+rc <- System(
+  list(connect(vsource$p, resistor$p),
+       connect(resistor$n, capacitor$p),
+       connect(capacitor$n, vsource$n),
+       connect(capacitor$n, ground$g)),
+  t, systems = list(resistor, capacitor, vsource, ground), name = "rc")
+hierarchy(rc)
+```
+
+Expanding the connections gives 20 equations in 20 unknowns: the element
+equations plus, for each connection, equal voltages and a current balance.
+
+```{r}
+ex <- expand_connections(rc)
+c(equations = length(equations(ex)), unknowns = length(unknowns(ex)))
+pp(tail(equations(ex), 7))
+```
+
+`mtkcompile()` reduces this to a single differential equation for the
+capacitor voltage; the other 19 variables become observed. The compiled
+equation refers to the observed current `capacitor₊i`, and
+`full_equations()` substitutes the observed equations to give the familiar
+form `dv/dt = (V - v) / (R C)`.
+
+```{r}
+rc_c <- mtkcompile(rc)
+rc_c
+pp(full_equations(rc_c))
+```
+
+Since `rc_c` is complete, `rc_c$capacitor$v` refers to the capacitor voltage
+directly. The capacitor starts discharged; the voltage approaches the source
+voltage as `1 - exp(-t / (R * C))`, and the current decays from `V / R`.
+`plot(sol)` draws the unknowns against time; the figure below samples the
+dense output directly to show an observed variable next to the state.
+
+```{r}
+prob <- ODEProblem(rc_c, list(rc_c$capacitor$v ~ 0), c(0, 10))
+sol <- solve(prob, Tsit5(), reltol = 1e-8, abstol = 1e-10)
+sol$retcode
+tt <- c(1, 2, 5, 10)
+cbind(t = tt,
+      v_capacitor = sol(tt, idxs = rc_c$capacitor$v),
+      analytic = 1 - exp(-tt / 2),
+      i_resistor = sol(tt, idxs = rc_c$resistor$i))
+tg <- seq(0, 10, length.out = 200)
+matplot(tg, cbind(sol(tg, idxs = rc_c$capacitor$v), sol(tg, idxs = rc_c$resistor$i)),
+        type = "l", lty = 1, col = c("black", "firebrick"), xlab = "t", ylab = "")
+legend("right", c("capacitor voltage", "resistor current"), lty = 1,
+       col = c("black", "firebrick"), bty = "n")
+```
+
+The parameters keep their defaults from the component constructors and can
+be overridden in the problem, here halving the resistance:
+
+```{r}
+prob2 <- ODEProblem(rc_c, list(rc_c$capacitor$v ~ 0, rc_c$resistor$R ~ 1), c(0, 10))
+sol2 <- solve(prob2, Tsit5(), reltol = 1e-8, abstol = 1e-10)
+c(simulated = sol2(2, idxs = rc_c$capacitor$v), analytic = 1 - exp(-2))
+```

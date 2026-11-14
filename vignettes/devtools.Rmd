@@ -1,0 +1,567 @@
+---
+title: "Benchmarking, convergence testing and global error estimation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Benchmarking, convergence testing and global error estimation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+A numerical solution is only useful when its error is known. This article
+covers the tools modelcompR provides to measure, test and estimate errors:
+
+* the port of **DiffEqDevTools.jl**: convergence tests against analytic
+  solutions (`test_convergence()`), errors against reference solutions
+  (`appxtrue()`), work precision benchmarks (`WorkPrecisionSet()`,
+  `Shootout()`), tags for organizing benchmarks, and Runge Kutta tableau
+  tools (order conditions and stability regions);
+* the port of **GlobalDiffEq.jl**: methods that estimate the *global* error
+  of a solve, not just the local error per step (`GLEE24()`,
+  `GlobalErrorEstimation()`, `GlobalAdjoint()`, `GlobalRichardson()`);
+* a short description of how modelcompR itself is checked against the Julia
+  packages.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+## A test problem with an analytic solution
+
+Most tools need the exact solution. As in SciMLBase, it is attached to the
+problem through the `analytic` argument of `ODEFunction()`, a function
+`analytic(u0, p, t)`. The system
+
+```
+u1' = -u1^2,     u1(0) = 1,   u1(t) = 1 / (1 + t)
+u2' = u1 u2,     u2(0) = 2,   u2(t) = 2 (1 + t)
+```
+
+is used throughout:
+
+```{r}
+f <- function(u, p, t) c(-u[1] * u[1], u[1] * u[2])
+an <- function(u0, p, t) c(1 / (1 + t), 2 * (1 + t))
+prob <- ODEProblem(ODEFunction(f, analytic = an), c(1, 2), c(0, 1))
+has_analytic(prob$f)
+```
+
+A solution of a problem with an analytic solution stores its errors.
+`calculate_solution_errors()` computes them; the names follow
+DiffEqDevTools: `final` is the error at the final time, `l2` and `l_inf`
+are the root mean square and maximum errors over the saved time points, and
+the dense errors `L2` and `L_inf` are computed on a fine grid through the
+interpolant.
+
+```{r}
+sol <- solve(prob, Tsit5(), reltol = 1e-6, abstol = 1e-8)
+sol <- calculate_solution_errors(sol, dense_errors = TRUE)
+str(sol$errors)
+```
+
+## Convergence tests
+
+A method of order `p` has a global error proportional to `dt^p`. Halving the
+step should divide the error by `2^p`. `test_convergence(dts, prob, alg)`
+solves the problem at each fixed step in `dts`, collects the errors in a
+`ConvergenceSimulation`, and estimates the order `Oest` as the mean of
+`log2(e_i / e_{i+1})` over adjacent steps.
+
+```{r}
+dts <- 1 / 2^(3:6)
+sim_euler <- test_convergence(dts, prob, Euler())
+sim_euler
+sim_euler$errors$final
+sim_euler$Oest$final
+```
+
+The estimated order of the explicit Euler method is 1, as it should be.
+Higher order methods show their order as long as the errors stay above
+rounding:
+
+```{r}
+orders <- sapply(list(Euler(), Heun(), RK4(), Tsit5()), function(alg) {
+  test_convergence(dts, prob, alg)$Oest$final
+})
+setNames(round(orders, 2), c("Euler", "Heun", "RK4", "Tsit5"))
+```
+
+`dense_errors = TRUE` adds the interpolation errors `L2` and `L_inf`, which
+test the dense output as well as the steps. `plot()` draws every error
+series against the step size on log scales; the slope is the order.
+
+```{r}
+sim_rk4 <- test_convergence(dts, prob, RK4(), dense_errors = TRUE)
+names(sim_rk4$errors)
+unlist(sim_rk4$Oest)
+plot(sim_rk4, xlab = "dt", main = "RK4 convergence")
+```
+
+The convergence axis need not be a step size. With a list of problems,
+`test_convergence(probs, axis, alg)` solves each problem and uses `axis` as
+the horizontal coordinate, here the final time:
+
+```{r}
+probs <- lapply(c(0.5, 1), function(T) remake(prob, tspan = c(0, T)))
+test_convergence(probs, c(0.5, 1), RK4(), dt = 1 / 8, adaptive = FALSE)$errors$final
+```
+
+### Without an analytic solution
+
+When no analytic solution exists, `analyticless_test_convergence()` first
+computes a reference with a very small step (`test_dt`, given as a setup
+with its own algorithm) and measures the errors against it:
+
+```{r}
+plain <- ODEProblem(f, c(1, 2), c(0, 1))
+sim_heun <- analyticless_test_convergence(dts, plain, Heun(),
+                                          list(alg = RK4(), dt = 1 / 512, adaptive = FALSE))
+sim_heun$Oest$final
+```
+
+### Other problem types
+
+The same tests run on DAEs, DDEs and SDEs. For stochastic problems the
+analytic solution takes the Brownian path `W` as a fourth argument, the
+errors are averaged over `trajectories`, and both strong and weak errors are
+reported (the SDE tests print their progress as messages, suppressed
+here). Here is a delay equation with its exact solution on `[0, 2]`:
+
+```{r}
+fdd <- function(u, h, p, t) -h(p, t - 1)
+andd <- function(u0, h, p, t) if (t <= 1) 1 - t else -(2 * (t - 1) - (t * t - 1) / 2)
+ddprob <- DDEProblem(DDEFunction(fdd, analytic = andd), 1, function(p, t) 1, c(0, 2),
+                     constant_lags = 1)
+test_convergence(c(1 / 8, 1 / 16, 1 / 32), ddprob, MethodOfSteps(Euler()))$Oest$final
+```
+
+and a scalar SDE with additive noise, `du = 2 t dt + 0.5 dW`, whose solution is
+`u0 + t^2 + W / 2`. The Euler Maruyama method is exact for the noise term
+here, so its error is the drift error of order one:
+
+```{r}
+sde_an <- function(u0, p, t, W) u0 + t * t + 0.5 * W
+sprob <- SDEProblem(SDEFunction(function(u, p, t) 2 * t, function(u, p, t) 0.5, analytic = sde_an),
+                    1, c(0, 1))
+sim_em <- suppressMessages(
+  test_convergence(c(1 / 8, 1 / 16, 1 / 32), sprob, EM(), trajectories = 20, seed = 1))
+names(sim_em$errors)
+sim_em$Oest$final
+```
+
+## Errors against a reference solution
+
+`appxtrue(sol, ref)` computes the errors of `sol` against a reference
+solution `ref`, usually a solve at much tighter tolerances. It is the
+function behind the analyticless tests.
+
+```{r}
+coarse <- solve(prob, Euler(), dt = 1 / 16)
+ref <- solve(prob, RK4(), dt = 1 / 256, adaptive = FALSE)
+unlist(appxtrue(coarse, ref)$errors)
+```
+
+A reference can also be given as values only, with `TestSolution(t, u)`.
+Without an interpolant, only the final error can be computed:
+
+```{r}
+appxtrue(coarse, TestSolution(ref$t, ref$u))$errors
+```
+
+## Work precision diagrams
+
+A fair comparison of solvers looks at cost and accuracy together. A *work
+precision diagram* plots the run time of each method against the error it
+achieves over a range of tolerances. `WorkPrecision(prob, alg, abstols,
+reltols)` solves the problem at each tolerance pair, timing `numruns` runs,
+and `WorkPrecisionSet(prob, abstols, reltols, setups)` does this for a list
+of setups. Each setup is a list with the algorithm `alg` and optionally its
+own `dts` (for fixed step methods), `name`, `tags` and solver options.
+
+```{r}
+abstols <- 1 / 10^(4:7)
+reltols <- 1 / 10^(2:5)
+setups <- list(list(alg = BS3()),
+               list(alg = Tsit5()),
+               list(alg = Vern7()),
+               list(alg = RK4(), dts = 1 / 2^(2:5), adaptive = FALSE))
+wps <- WorkPrecisionSet(prob, abstols, reltols, setups, numruns = 2,
+                        error_estimates = c("final", "l2"))
+wps
+```
+
+Every entry is a `WorkPrecision` holding the errors, times and solver
+statistics at each tolerance:
+
+```{r}
+wps[[2]]$errors$final
+vapply(wps[[2]]$stats, function(s) as.numeric(s$nf), 0)
+available_errors(wps)
+```
+
+`plot()` draws the diagram. Lower and further to the left is better: the
+same error in less time. Run times on a shared machine are noisy, which is
+what `numruns` (the minimum time of several runs is kept) is for.
+
+```{r}
+plot(wps, main = "Work precision on the test problem")
+```
+
+The axes can be changed. `y` may name the number of function evaluations
+`"nf"`, a machine independent measure of work, and `xvar` another error:
+
+```{r}
+plot(wps, y = "nf", xvar = "l2", main = "Function evaluations against l2 error")
+```
+
+The view `"dt_convergence"` plots the errors against the time steps of the
+fixed step entries with fitted orders.
+
+### Shootouts
+
+`Shootout(prob, setups)` compares methods at a single setting, ranking them
+by efficiency (the inverse of error times time):
+
+```{r}
+sh <- Shootout(prob, list(list(alg = Euler()), list(alg = Heun()), list(alg = RK4())),
+               dt = 1 / 16, adaptive = FALSE, numruns = 2)
+sh$names
+signif(as.numeric(sh$errors), 3)
+```
+
+`ShootoutSet(probs, setups)` runs one shootout per problem.
+
+### Tags
+
+Large benchmarks are easier to read when entries are grouped. Every setup is
+tagged automatically with its order, whether it is adaptive, and its family
+(`explicit`, `implicit`, `rosenbrock`, `sde`, ...), and setups may add their
+own `tags`:
+
+```{r}
+auto_tags(Tsit5())
+auto_tags(Rodas5P())
+lapply(wps$wps, `[[`, "tags")
+```
+
+`tag_kind()` classifies a tag, and the selection functions filter a set:
+
+```{r}
+tag_kind(c("rk", "adaptive", "order_5", "reference"))
+filter_by_tags(wps, "adaptive")$names
+exclude_by_tags(wps, "order_3")$names
+unique_tags(wps)
+```
+
+`best_by_tag(set, tag)` keeps the entry of a tag with the smallest area under
+its work precision curve (`wp_area()`), `best_of_families()` the best of each
+family, and `merge_wp_sets()` concatenates sets. `autoplot(set)` returns a
+list of subsets ready for plotting: all entries, the best of each family
+and one panel per family.
+
+```{r}
+round(vapply(wps$wps, wp_area, 0), 2)
+best_by_tag(wps, "adaptive")$names
+names(autoplot(wps))
+```
+
+The automatic tags come from the algorithm traits, so `RK4` counts as
+adaptive (it has an error estimate) even though this setup runs it with
+fixed steps. The setups here carry no family tags such as `rk` or
+`rosenbrock`, so `autoplot()` returns only the panel of all entries; with
+family tags it adds the best of each family and one panel per family.
+
+### Automatic differentiation variants
+
+Implicit methods use Jacobians, and the way they are computed affects the
+cost. `with_autodiff_variants(setups, ad_backends)` duplicates each setup
+whose algorithm takes an `autodiff` option, once per backend, with names and
+tags that identify the variant:
+
+```{r}
+v <- with_autodiff_variants(list(list(alg = Rodas5P()), list(alg = Tsit5())),
+                            ad_backends = list(AutoFiniteDiff(), AutoForwardDiff()))
+vapply(v, function(s) if (is.null(s$name)) s$alg$name else s$name, "")
+lapply(v, `[[`, "tags")
+```
+
+`Tsit5()` is explicit and has no Jacobian, so it is kept once.
+
+## Runge Kutta tableaus
+
+An explicit Runge Kutta method is defined by its Butcher tableau: the stage
+matrix `A`, the nodes `c` and the weights `b`. `ExplicitRKTableau(A, c, b,
+order)` builds one, and the `construct*()` functions give the tableaus of
+the classic methods, such as `constructTsit5ExplicitRK()`.
+
+```{r}
+A <- matrix(c(0, 0, 0, 0,
+              0.5, 0, 0, 0,
+              0, 0.5, 0, 0,
+              0, 0, 1, 0), 4, byrow = TRUE)
+rk4 <- ExplicitRKTableau(A, c(0, 0.5, 0.5, 1), c(1 / 6, 1 / 3, 1 / 3, 1 / 6), 4)
+```
+
+### Order conditions
+
+A tableau has order `p` when it satisfies the order conditions of every
+order up to `p`, one for each rooted tree. `residual_order_condition(tab, k)`
+returns the residuals of the conditions of order `k`; with a reducer and a
+mapper it summarizes them, for example the largest absolute residual.
+`check_tableau()` verifies the declared order and errors when it is wrong.
+
+```{r}
+vapply(1:5, function(k) residual_order_condition(rk4, k, `+`, abs), 0)
+check_tableau(rk4)
+```
+
+The conditions of order 5 fail, so RK4 has order 4. With
+`embedded = TRUE` the residuals of the embedded weights are computed
+instead. The tableau returned by `constructTsit5ExplicitRK()` is a case where
+this matters: its main weights satisfy the conditions only up to order 4,
+while the embedded weights satisfy them up to order 5, so
+`check_tableau()` rejects the declared order 5. This is the behavior of
+DiffEqDevTools.jl, whose `check_tableau` fails on the same tableau:
+
+```{r}
+tsit5 <- constructTsit5ExplicitRK()
+signif(vapply(1:6, function(k) residual_order_condition(tsit5, k, `+`, abs), 0), 3)
+signif(vapply(1:5, function(k) residual_order_condition(tsit5, k, `+`, abs, embedded = TRUE), 0), 3)
+try(check_tableau(tsit5))
+```
+
+`deduce_Butcher_tableau(alg)` recovers the tableau of an implemented solver
+by probing it with linear problems, which checks that an algorithm and its
+documented tableau agree:
+
+```{r}
+round(deduce_Butcher_tableau(RK4())$A, 4)
+```
+
+The deduced tableau of `RK4()` has a fifth stage at the end of the step with
+zero weight: the implementation evaluates `f` there for its residual error
+estimate, the reason `RK4()` is adaptive.
+
+### Stability regions
+
+Applied to the test equation `y' = lambda y`, a Runge Kutta step multiplies
+the solution by the stability function `R(z)` with `z = lambda dt`. The
+method is stable where `|R(z)| <= 1`. `stability_region(z, tab)` evaluates
+`R(z)`; `stability_region(tab)` returns the left end of the stability
+interval on the negative real axis, and `imaginary_stability_interval()`
+the extent along the imaginary axis. Both accept an algorithm in place of a
+tableau.
+
+```{r}
+stability_region(-2.5, rk4)
+c(RK4 = stability_region(rk4), Euler = stability_region(Euler()),
+  Tsit5 = stability_region(Tsit5()), Tsit5_tableau = stability_region(tsit5))
+imaginary_stability_interval(RK4())
+alg_stability_size(Tsit5())
+```
+
+The solver `Tsit5()` and the tableau of `constructTsit5ExplicitRK()` have
+different stability intervals because, as shown above, the weights of that
+tableau are not those the solver propagates. `alg_stability_size()` is the
+trait of the solver, the length of its real stability interval.
+
+`plot()` of a tableau draws the region in the complex plane, and
+`order_star = TRUE` draws the order star `|R(z) / exp(z)| < 1`:
+
+```{r, fig.width = 7, fig.height = 3.5}
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(rk4, dx = 0.05, dy = 0.05, xlim = c(-4, 1), ylim = c(-3.5, 3.5), main = "RK4")
+plot(tsit5, dx = 0.05, dy = 0.05, xlim = c(-4, 1), ylim = c(-3.5, 3.5), main = "Tsit5")
+par(op)
+```
+
+## Global error estimation
+
+Adaptive solvers control the *local* error: the error made in a single step,
+assuming the step starts from the exact solution. The *global* error at the
+end of the integration is the accumulation of the local errors, propagated
+and amplified or damped by the dynamics. A tolerance of `1e-6` does not
+guarantee a final error of `1e-6`. GlobalDiffEq.jl provides methods that
+estimate the global error, and some that control it; modelcompR ports them.
+
+The test problem is the Lotka Volterra model:
+
+```{r}
+lv <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2], -p[3] * u[2] + p[4] * u[1] * u[2])
+lv_prob <- ODEProblem(lv, c(1, 1), c(0, 5), c(1.5, 1, 3, 1))
+lv_ref <- solve(lv_prob, Vern9(), reltol = 1e-13, abstol = 1e-13)
+lv_true <- lv_ref$u[[length(lv_ref$t)]]
+```
+
+### GLEE methods
+
+The GLEE methods (global error estimating general linear methods of
+Constantinescu, 2016) carry an estimate of the global error along with the
+solution, at little extra cost. `GLEE23()`, `GLEE24()` and `GLEE35()` are of
+orders 2, 2 and 3; `MM5GEE()` is the Makazaga and Murua scheme built on the
+Dormand Prince 5(4) pair. The solution has a `global_error` field, also
+returned by `global_error_estimate(sol)`:
+
+```{r}
+for (alg in list(GLEE24(), GLEE35(), MM5GEE())) {
+  s <- solve(lv_prob, alg, reltol = 1e-6, abstol = 1e-8)
+  n <- length(s$t)
+  cat(sprintf("%-7s steps %4d  estimate % .2e % .2e  true % .2e % .2e\n", alg$name, n,
+              global_error_estimate(s, n)[1], global_error_estimate(s, n)[2],
+              lv_true[1] - s$u[[n]][1], lv_true[2] - s$u[[n]][2]))
+}
+```
+
+The estimates are of the size of the true errors. They are asymptotic
+estimates, so a component whose true error is much smaller than the others,
+as the second component for GLEE24, may be estimated only to the size of
+the dominant error. The estimate is available at every saved time:
+
+```{r}
+s24 <- solve(lv_prob, GLEE24(), reltol = 1e-6, abstol = 1e-8)
+ge <- do.call(rbind, global_error_estimate(s24))
+true_err <- lv_ref(s24$t) - do.call(rbind, s24$u)
+matplot(s24$t, ge, type = "l", lty = 1, xlab = "t", ylab = "global error",
+        main = "GLEE24: estimate (solid) and true error (dashed)")
+matlines(s24$t, true_err, lty = 2)
+```
+
+`has_global_error(alg)` tells whether an algorithm produces these estimates.
+
+```{r}
+c(GLEE24 = has_global_error(GLEE24()), Tsit5 = has_global_error(Tsit5()))
+```
+
+### Companion equations: GlobalErrorEstimation
+
+`GlobalErrorEstimation(alg)` works with any solver that has a dense output
+with a first derivative. After the solve, the dense output `P(t)` does not
+satisfy the ODE exactly; its *defect* is `d(t) = f(P(t), p, t) - P'(t)`. The
+global error `e(t) = y(t) - P(t)` satisfies a *companion* equation driven by
+the defect, which is integrated from `e(t0) = 0`. Two forms are available:
+
+* `equation = DefectCorrection` (the default) integrates
+  `e' = f(P + e) - f(P) + d` exactly;
+* `equation = ErrorTransport` linearizes it to `e' = J(P) e + d`, with the
+  Jacobian vector product from `autodiff`.
+
+`mode = InterpolatingMode` (the default) integrates the companion after the
+forward solve, on its dense output; `mode = SimultaneousMode` integrates both
+together. `global_error_estimate(prob, alg)` returns the 2-norm of the
+estimated error at the final time:
+
+```{r}
+tsit <- solve(lv_prob, Tsit5(), abstol = 1e-6, reltol = 1e-6)
+true_norm <- sqrt(sum((lv_true - tsit$u[[length(tsit$t)]])^2))
+est <- c(
+  DefectCorrection = global_error_estimate(lv_prob, GlobalErrorEstimation(Tsit5()),
+                                           abstol = 1e-6, reltol = 1e-6),
+  ErrorTransport = global_error_estimate(lv_prob,
+                                         GlobalErrorEstimation(Tsit5(), equation = ErrorTransport),
+                                         abstol = 1e-6, reltol = 1e-6),
+  Simultaneous = global_error_estimate(lv_prob,
+                                       GlobalErrorEstimation(Tsit5(), mode = SimultaneousMode),
+                                       abstol = 1e-6, reltol = 1e-6))
+c(est, true = true_norm)
+```
+
+The companion solve uses its own tighter tolerances (`companion_abstol`,
+`companion_reltol`) and may use a different solver (`companion_alg`).
+
+**Global error control.** Given a target `gtol`, `solve()` with
+`GlobalErrorEstimation(alg, gtol = )` tightens the local tolerances until the
+estimated final error is below `gtol` and returns that solution:
+
+```{r}
+ctrl <- solve(lv_prob, GlobalErrorEstimation(Tsit5(), gtol = 1e-7))
+sqrt(sum((lv_true - ctrl$u[[length(ctrl$t)]])^2))
+```
+
+### Adjoint estimates: GlobalAdjoint
+
+`GlobalAdjoint(alg)` (Cao and Petzold, 2004) estimates the error by the
+adjoint method: for a direction `v`, the error component `<v, e(T)>` is the
+integral of the defect weighted by the adjoint solution with `lambda(T) = v`.
+`samples` random orthogonal directions give a probabilistic estimate of the
+norm; as many samples as states give the exact norm of the linearized
+estimate.
+
+```{r}
+c(adjoint = adjoint_error_estimate(lv_prob, GlobalAdjoint(Tsit5(), samples = 2),
+                                   abstol = 1e-6, reltol = 1e-6),
+  true = true_norm)
+```
+
+With `gtol`, `solve()` controls the error as above. `scope = TrajectoryError`
+estimates the error at every saved time instead of only the end, and
+`control = StepGridRefinement` refines a fixed step grid instead of the
+tolerances.
+
+```{r}
+lin <- ODEProblem(function(u, p, t) p * u, 1, c(0, 1), 1)
+ga <- solve(lin, GlobalAdjoint(Tsit5(), samples = 1, gtol = 1e-6))
+c(estimate = tail(ga$global_error, 1), true = abs(exp(1) - ga$u[[length(ga$t)]]))
+```
+
+### Global Richardson extrapolation
+
+`GlobalRichardson(alg)` solves the problem with fixed steps `dt`, `dt / 2`,
+`dt / 4`, ... and extrapolates the values at the times `seq(t0, tf, by = dt)`
+to zero step size, until the estimated error is below the tolerance. The
+returned solution is the finest of the fixed step solves, with the
+extrapolated values in `sol$extrapolated` (one column per time):
+
+```{r}
+gr <- solve(lv_prob, GlobalRichardson(RK4()), dt = 0.25, reltol = 1e-6, abstol = 1e-8)
+length(gr$t)
+gr$extrapolated[, ncol(gr$extrapolated)] - lv_true
+```
+
+## How modelcompR is validated against Julia
+
+modelcompR is a port, so its results are compared with the Julia packages
+themselves. Julia is never needed to use or test the package: the reference
+values are computed once in Julia and stored in the test files.
+
+* `tools/julia/reference.jl` runs ModelingToolkit on a set of models (an RC
+  circuit, the Cartesian pendulum, the Robertson problem, Lotka Volterra and
+  others) and writes trajectories and compiled system structures to
+  `tests/testthat/fixtures/julia/`. The R tests compare against these files.
+* For the solver packages, `tools/*-probe.jl` scripts (for example
+  `tools/DiffEqDevTools-probe.jl` and `tools/globaldiffeq-probe.jl`) print the
+  values of specific runs: errors, step counts, function evaluation counts,
+  estimated global errors. The tests compare with them, usually to about
+  `1e-12` relative error. Where R deliberately differs from Julia, the test
+  says so next to the comparison.
+* `tools/upstream_status.tsv` records, for each upstream function, whether it
+  is ported.
+* Other tests use analytic solutions and convergence orders, the techniques
+  of this article.
+
+For example, DiffEqDevTools.jl reports the final errors of the Euler method
+on the test problem above as `0.04773824454478556`, `0.02419923396292173`,
+`0.012194281310070193` and `0.006122276238434227`, with an estimated order
+of `0.9876684899043942`. The R values agree to the last digits:
+
+```{r}
+julia_final <- c(0.04773824454478556, 0.02419923396292173, 0.012194281310070193,
+                 0.006122276238434227)
+sim_euler$errors$final / julia_final - 1
+sim_euler$Oest$final - 0.9876684899043942
+```
+
+Run times are never compared, only errors, counts and tags.
+
+## Summary
+
+| Task | Functions | Julia package |
+|---|---|---|
+| Errors of a solution | `calculate_solution_errors`, `appxtrue`, `TestSolution` | DiffEqDevTools |
+| Convergence tests | `test_convergence`, `analyticless_test_convergence`, `ConvergenceSimulation` | DiffEqDevTools |
+| Benchmarks | `WorkPrecision`, `WorkPrecisionSet`, `Shootout`, `ShootoutSet` | DiffEqDevTools |
+| Tags | `auto_tags`, `filter_by_tags`, `best_by_tag`, `autoplot`, `with_autodiff_variants` | DiffEqDevTools |
+| Tableaus | `ExplicitRKTableau`, `residual_order_condition`, `check_tableau`, `stability_region`, `deduce_Butcher_tableau` | DiffEqDevTools |
+| Global errors | `GLEE23`, `GLEE24`, `GLEE35`, `MM5GEE`, `GlobalErrorEstimation`, `GlobalAdjoint`, `GlobalRichardson` | GlobalDiffEq |

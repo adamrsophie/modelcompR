@@ -1,0 +1,940 @@
+---
+title: "Events, callbacks, clocks and initialization"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Events, callbacks, clocks and initialization}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+```{r setup}
+suppressPackageStartupMessages(library(modelcompR))
+t <- t_nounits
+D <- D_nounits
+```
+
+A continuous model rarely lives alone. Balls bounce, doses are given at set
+times, controllers sample a plant and update their outputs once per period,
+and a simulation has to start from values that satisfy every algebraic
+constraint of the model. This article covers the parts of modelcompR that
+handle these situations:
+
+1. symbolic events attached to a `System`, which correspond to the
+   `continuous_events` and `discrete_events` of ModelingToolkit.jl;
+2. the numeric callback layer that the solvers run, a port of the callbacks
+   of DiffEqBase.jl and DiffEqCallbacks.jl;
+3. clocks and synchronous discrete time systems, after the `Clock`,
+   `Sample`, `Hold` and `ShiftIndex` operators of ModelingToolkit, including
+   state machines;
+4. initialization: initial conditions, bindings, guesses, `Initial(x)`,
+   initialization equations, the initialization problem, and the
+   `initializealg` options of the integrators.
+
+# Symbolic continuous events
+
+A continuous event has a *condition*, an equation `lhs ~ rhs` that becomes
+true when `lhs - rhs` crosses zero, and an *affect*, a list of equations
+that say how the state changes at that instant. The solver locates the
+crossing by root finding on its dense interpolant, so the event time is
+accurate to the tolerance of the root finder and not to the step size.
+
+Affect equations relate the values after the event to the values before
+it. `Pre(v)` is the value of `v` just before the event; a variable without
+`Pre()` is the value after it. So `v ~ -Pre(v)` reverses the velocity.
+
+## The bouncing ball
+
+The classic example: a ball falls under gravity and bounces elastically
+when it reaches the floor. The event is written as a pair
+`list(conditions, affects)`.
+
+```{r}
+x <- Variable("x", t, default = 1)
+v <- Variable("v", t, default = 0)
+ball <- System(list(D(x) ~ v, D(v) ~ -9.8), t, name = "ball",
+               continuous_events = list(list(x ~ 0), list(v ~ -Pre(v))))
+continuous_events(ball)
+ball <- mtkcompile(ball)
+sol <- solve(ODEProblem(ball, list(), c(0, 3)), Tsit5())
+sol$retcode
+min(sol[x])
+```
+
+The times at which events fired are recorded in `sol$events`. For a drop
+from height one the first impact is at `sqrt(2 / 9.8)`, and with an elastic
+bounce every later impact comes two flight times after the previous one.
+
+```{r}
+ev_t <- vapply(sol$events, `[[`, 0, "t")
+ev_t
+sqrt(2 / 9.8) * c(1, 3, 5)
+```
+
+At each event time the solution keeps two rows, the state just before and
+just after the affect, so the jump in the velocity is visible in the saved
+values.
+
+```{r}
+i <- which(sol$t == ev_t[1])
+sol[v][i]
+plot(sol)
+```
+
+The constructor `SymbolicContinuousCallback()` builds the same event
+explicitly, and `%=>%` is an infix shorthand for the pair. A condition list
+with several equations fires when any of them crosses zero. Here a particle
+moves between two walls at `y = -1.5` and `y = 1.5`:
+
+```{r}
+y <- Variable("y", t, default = 0)
+vy <- Variable("vy", t, default = 2)
+walls <- list(y ~ -1.5, y ~ 1.5) %=>% list(vy ~ -Pre(vy))
+box <- mtkcompile(System(list(D(y) ~ vy, D(vy) ~ 0), t, name = "walls",
+                         continuous_events = walls))
+sol <- solve(ODEProblem(box, list(), c(0, 4)))
+vapply(sol$events, `[[`, 0, "t")
+range(sol[y])
+```
+
+A list of single formulas, without affects, is a list of condition only
+events. These only stop the integrator at the crossing, which is useful
+to make the solver step exactly onto a discontinuity.
+
+## Upward and downward crossings: `affect_neg`
+
+By default an affect runs for crossings in both directions. `affect_neg`
+gives a separate affect for downward crossings (where `lhs - rhs` goes from
+positive to negative); `affect_neg = NULL` makes downward crossings stop the
+integrator without changing anything. In the next example two counters
+record how often `x = sin(t)` passes `0.5` upward and downward. Counters are
+parameters, and a parameter may only be changed by an event when it is
+declared in `discrete_parameters`; ModelingToolkit requires such parameters
+to be time dependent, which is why they are created with `Parameter(name, t)`.
+
+```{r}
+x <- Variable("x", t, default = 0)
+up <- Parameter("up", t, default = 0)
+dn <- Parameter("dn", t, default = 0)
+cross <- SymbolicContinuousCallback(list(x ~ 0.5), list(up ~ Pre(up) + 1),
+                                    affect_neg = list(dn ~ Pre(dn) + 1),
+                                    discrete_parameters = list(up, dn))
+cs <- mtkcompile(System(list(D(x) ~ cos(t)), t, name = "neg",
+                        continuous_events = cross))
+sol <- solve(ODEProblem(cs, list(), c(0, 10)), reltol = 1e-8, abstol = 1e-10)
+c(up = sol$ps[up], down = sol$ps[dn])
+vapply(sol$events, `[[`, 0, "t")
+c(pi / 6, 5 * pi / 6, 13 * pi / 6, 17 * pi / 6)
+```
+
+`sol$ps[p]` gives the value of a parameter at the end of the solve. The
+values in force at other times are kept as a parameter history, so the
+solution can be indexed and interpolated in a discrete parameter just as in
+an unknown.
+
+The argument `rootfind` chooses where the affect is applied: `"left"` (the
+default, SciMLBase's `LeftRootFind`) just before the crossing, `"right"`
+just after it, and `"none"` at the end of the step that contains it.
+
+# Symbolic discrete events
+
+A discrete event is checked at specific times rather than located by root
+finding. Its condition is one of:
+
+* a number `dt`: a periodic event every `dt`;
+* a numeric vector or a list of numbers: events at preset times (use
+  `list(2)` for a single time, since a single number means a period);
+* a `Clock()`: a periodic event with a phase, which also fires at the
+  initial time when the clock ticks there;
+* a symbolic boolean, which fires after a step when it holds.
+
+## Preset times: a dose
+
+A dose given at `t = 2` raises the input `d` of a first order decay. The
+dose is a time dependent discrete parameter.
+
+```{r}
+yd <- Variable("yd", t, default = 1)
+k <- Parameter("k", default = 1)
+d <- Parameter("d", t, default = 0)
+dose <- SymbolicDiscreteCallback(list(2), list(d ~ 1), discrete_parameters = d)
+dsys <- mtkcompile(System(list(D(yd) ~ -k * yd + d), t, name = "dose",
+                          discrete_events = dose))
+sol <- solve(ODEProblem(dsys, list(), c(0, 4)), Tsit5(), reltol = 1e-8, abstol = 1e-10)
+i <- which(sol$t == 2)
+sol[d][i]
+sol(c(1, 3), idxs = d)
+c(tail(sol[yd], 1), 1 + (exp(-2) - 1) * exp(-2))
+```
+
+The rows before and after the event each carry the parameter values in
+force with them, so `sol[d]` jumps from 0 to 1 exactly at `t = 2`. This
+differs on purpose from ModelingToolkit 11, which gives both rows the
+value after the event.
+
+## Periodic events and `Discrete()` variables
+
+`Discrete("c", t)` declares a discrete variable, the `@discretes` of
+ModelingToolkit. It is stored as a parameter, and an affect equation with
+it on the left-hand side changes it without listing it in
+`discrete_parameters`. A period of `1.0` fires at `t = 1, 2, 3`:
+
+```{r}
+x <- Variable("x", t, default = 0)
+cc <- Discrete("c", t, default = 1)
+per <- mtkcompile(System(list(D(x) ~ cc), t, name = "per",
+                         discrete_events = list(1.0, list(cc ~ Pre(cc) + 1))))
+sol <- solve(ODEProblem(per, list(), c(0, 3.5)), reltol = 1e-9, abstol = 1e-9)
+c(sol$ps[cc], tail(sol[x], 1), 1 + 2 + 3 + 4 * 0.5)
+```
+
+A `Clock(dt, phase)` condition ticks on the absolute lattice
+`phase + k dt`, including the initial time when it lies on the lattice, but
+never at the final time.
+
+```{r}
+cnt <- Discrete("cnt", t, default = 0)
+tick <- SymbolicDiscreteCallback(Clock(0.1), list(cnt ~ Pre(cnt) + 1))
+clk <- mtkcompile(System(list(D(x) ~ t), t, name = "clk", discrete_events = tick))
+solve(ODEProblem(clk, list(x ~ 0, cnt ~ 0), c(0, 1)))$ps[cnt]
+```
+
+## Symbolic conditions
+
+A condition can be a symbolic boolean built with symcompR's `Eq`, `<`, `&`
+and so on. It is tested after every step, so pass the times it tests as
+`tstops` to make the integrator step onto them. Here cells grow toward a
+carrying level, and at `t = tinject` a batch of `M` cells is injected only
+if the population is still below 50.
+
+```{r}
+N <- Variable("N", t, default = 0)
+M <- Parameter("M", default = 50)
+tinj <- Parameter("tinject", default = 10)
+alpha <- Parameter("alpha", default = 100)
+inject <- list(Eq(t, tinj), list(N ~ Pre(N) + M))
+cells <- mtkcompile(System(list(D(N) ~ alpha - N), t, name = "cells",
+                           discrete_events = inject))
+sol <- solve(ODEProblem(cells, list(), c(0, 20)), tstops = 10, reltol = 1e-9, abstol = 1e-9)
+sol[N][sol$t == 10]
+guarded <- list(Eq(t, tinj) & (N < 50), list(N ~ Pre(N) + M))
+cells2 <- mtkcompile(System(list(D(N) ~ alpha - N), t, name = "cells2",
+                            discrete_events = guarded))
+sol2 <- solve(ODEProblem(cells2, list(), c(0, 20)), tstops = 10, reltol = 1e-9, abstol = 1e-9)
+sum(sol2$t == 10)
+```
+
+The first model saves two rows at `t = 10` (before and after the
+injection); in the second the guard is false and only one row is saved.
+Note that `M` and `tinject`, used only in the event, are still parameters
+of the compiled system.
+
+# Kinds of affects
+
+## Affects are solved with the model
+
+Symbolic affects are not plain assignments. The affect equations are solved
+together with the algebraic and observed equations of the system: unknowns
+that the affect does not fix keep their values, and the others change so
+that the system stays consistent. Setting the observed variable `y ~ 2x` to
+3 therefore moves `x` to 1.5:
+
+```{r}
+x <- Variable("x", t, default = 1)
+yo <- Variable("yo", t)
+obs <- mtkcompile(System(list(D(x) ~ 0, yo ~ 2 * x), t, name = "obs",
+                         discrete_events = list(list(1), list(yo ~ 3))))
+sol <- solve(ODEProblem(obs, list(), c(0, 2)))
+c(tail(sol[x], 1), tail(sol[yo], 1))
+```
+
+In a DAE with the constraint `x y = p`, incrementing `x` makes `y`
+compensate. If instead `y` is held with `y ~ Pre(y)` and `p` is a discrete
+parameter, the event changes `p`.
+
+```{r}
+x <- Variable("x", t, default = 1)
+ya <- Variable("ya", t, guess = 1)
+p <- Parameter("p", t, default = 2)
+eqs <- list(x * ya ~ p, D(x) ~ 0)
+s1 <- mtkcompile(System(eqs, t, name = "dae1",
+                        discrete_events = list(list(1), list(x ~ Pre(x) + 1))))
+sol1 <- solve(ODEProblem(s1, list(), c(0, 2)))
+c(x = tail(sol1[x], 1), y = tail(sol1[ya], 1))
+ev <- SymbolicDiscreteCallback(list(1), list(x ~ Pre(x) + 1, ya ~ Pre(ya)),
+                               discrete_parameters = p)
+s2 <- mtkcompile(System(eqs, t, name = "dae2", discrete_events = ev))
+sol2 <- solve(ODEProblem(s2, list(), c(0, 2)))
+c(y = tail(sol2[ya], 1), p = sol2$ps[p])
+```
+
+A parameter that is changed by an affect without being a discrete
+parameter makes the affect unsolvable, and `solve()` reports it:
+
+```{r}
+dp <- Parameter("dp", default = 0)
+nd <- mtkcompile(System(list(D(x) ~ dp), t, name = "nd",
+                        discrete_events = list(list(1), list(dp ~ 1))))
+tryCatch(solve(ODEProblem(nd, list(), c(0, 2))), error = function(e) conditionMessage(e))
+```
+
+## `AssignmentAffect`
+
+`AssignmentAffect()` assigns values computed entirely from the state
+before the event: each right-hand side is wrapped in `Pre()`. A swap is
+then simply written as two assignments.
+
+```{r}
+a <- Variable("a", t, default = 1)
+b <- Variable("b", t, default = 2)
+swap <- mtkcompile(System(list(D(a) ~ 0, D(b) ~ 0), t, name = "swap",
+                          discrete_events = list(list(1),
+                                                 AssignmentAffect(list(a ~ b, b ~ a)))))
+sol <- solve(ODEProblem(swap, list(), c(0, 2)))
+c(tail(sol[a], 1), tail(sol[b], 1))
+```
+
+## Imperative affects
+
+`ImperativeAffect(f, modified, observed, ctx)` runs an R function, the
+functional or imperative affect of ModelingToolkit. `modified` and
+`observed` are named lists of variables or expressions. When the event
+fires, `f(modified, observed, ctx, integ)` receives their current values
+as named lists and returns a named list of new values for some of the
+`modified` entries. A furnace with hysteresis switches on below one
+threshold and off above another:
+
+```{r}
+temp <- Variable("temp", t)
+on_th <- Parameter("on_threshold", default = 0.5)
+off_th <- Parameter("off_threshold", default = 0.7)
+power <- Parameter("power", default = 1)
+leak <- Parameter("leakage", default = 0.1)
+on <- Discrete("furnace_on", t, default = 0)
+off_ev <- SymbolicContinuousCallback(list(temp ~ off_th),
+  ImperativeAffect(function(m, o, ctx, integ) list(furnace_on = 0),
+                   modified = list(furnace_on = on)))
+on_ev <- SymbolicContinuousCallback(list(temp ~ on_th),
+  ImperativeAffect(function(m, o, ctx, integ) list(furnace_on = 1),
+                   modified = list(on)))
+heater <- mtkcompile(System(list(D(temp) ~ on * power - temp^2 * leak), t,
+                            name = "heater", continuous_events = list(off_ev, on_ev)))
+sol <- solve(ODEProblem(heater, list(temp ~ 0, on ~ 1), c(0, 10)))
+length(sol$events)
+range(sol[temp][sol$t > sol$events[[1]]$t])
+plot(sol)
+```
+
+Returning a name that is not in `modified` is an error ("Tried to write
+back"), which catches typos. The `integ` argument is the integrator, so an
+imperative affect can also stop the simulation with `terminate()`:
+
+```{r}
+x <- Variable("x", t, default = 0)
+stop_at <- ImperativeAffect(function(m, o, ctx, integ) {
+  terminate(integ)
+  NULL
+})
+term <- mtkcompile(System(list(D(x) ~ 1), t, name = "term",
+                          continuous_events = list(list(x ~ 2), stop_at)))
+sol <- solve(ODEProblem(term, list(), c(0, 10)))
+c(sol$retcode, tail(sol$t, 1))
+```
+
+## Initialize and finalize affects
+
+An event may also carry affects that run once when the integration starts
+(`initialize`) and once when it ends (`finalize`). The condition below never
+fires; the event only sets `a` at the start and counts the finalization.
+
+```{r}
+a <- Parameter("a", t, default = 0)
+b <- Parameter("b", t, default = 0)
+life <- SymbolicContinuousCallback(list(x ~ 100), NULL, initialize = list(a ~ 3),
+                                   finalize = list(b ~ Pre(b) + 1),
+                                   discrete_parameters = list(a, b))
+ls <- mtkcompile(System(list(D(x) ~ a), t, name = "life", continuous_events = life))
+sol <- solve(ODEProblem(ls, list(), c(0, 1)))
+c(a0 = sol[a][1], x1 = tail(sol[x], 1), b = sol$ps[b])
+```
+
+## Events of subsystems
+
+Events of a subsystem are namespaced with it, so they keep working after
+composition. `continuous_events()` collects the events of the whole
+hierarchy, and `continuous_events_toplevel()` only those of the top system.
+
+```{r}
+xi <- Variable("xi", t, default = 1)
+inner <- System(list(D(xi) ~ -1), t, name = "inner",
+                continuous_events = list(list(xi ~ 0), list(xi ~ Pre(xi) + 1)))
+outer <- System(list(), t, name = "outer", systems = list(inner))
+continuous_events(outer)[[1]]$conditions[[1]]
+length(continuous_events_toplevel(outer))
+oc <- mtkcompile(outer)
+sol <- solve(ODEProblem(oc, list(), c(0, 2.5)))
+tail(sol[oc$inner$xi], 1)
+```
+
+# The numeric callback layer
+
+Symbolic events compile to numeric callbacks, and the same callbacks can be
+passed directly to `solve()` through `callback`, for problems built from R
+functions as well as from systems. This is the interface of DiffEqBase.jl:
+a condition is a function `(u, t, integ)` and an affect a function
+`(integ)` that changes the integrator in place through `integ$u` and
+`integ$p`.
+
+## Continuous, discrete and vector callbacks
+
+`ContinuousCallback(condition, affect)` fires when `condition` crosses
+zero. The bouncing ball written with plain functions:
+
+```{r}
+fall <- ODEProblem(function(u, p, t) c(u[2], -9.8), c(1, 0), c(0, 2))
+bounce <- ContinuousCallback(function(u, t, integ) u[1],
+                             function(integ) integ$u[2] <- -integ$u[2])
+sol <- solve(fall, Tsit5(), callback = bounce)
+min(vapply(sol$u, `[`, 0, 1))
+```
+
+`VectorContinuousCallback()` takes a vector valued condition and calls
+the affect with the index of the component that crossed. Two independent
+balls dropped from different heights:
+
+```{r}
+two <- ODEProblem(function(u, p, t) c(u[3], u[4], -9.8, -9.8), c(1, 2, 0, 0), c(0, 2))
+vcb <- VectorContinuousCallback(function(u, t, integ) u[1:2],
+                                function(integ, idx) integ$u[idx + 2] <- -integ$u[idx + 2])
+sol <- solve(two, Tsit5(), callback = vcb)
+c(min(vapply(sol$u, `[`, 0, 1)), min(vapply(sol$u, `[`, 0, 2)))
+```
+
+`DiscreteCallback(condition, affect)` checks a logical condition after each
+step. `PresetTimeCallback(times, affect)` fires at given times, which it
+adds as stops of the integrator, and `PeriodicCallback(affect, dt)` fires
+every `dt`. `CallbackSet()` combines any number of callbacks.
+
+```{r}
+decay <- ODEProblem(function(u, p, t) -u, 1, c(0, 3))
+kick <- PresetTimeCallback(c(1, 2), function(integ) integ$u[1] <- integ$u[1] + 1)
+hits <- 0
+count <- PeriodicCallback(function(integ) hits <<- hits + 1, 0.5)
+floor_cb <- DiscreteCallback(function(u, t, integ) u[1] < 0.2,
+                             function(integ) integ$u[1] <- 0.2)
+sol <- solve(decay, Tsit5(), callback = CallbackSet(kick, count, floor_cb))
+hits
+sol(c(0.99, 1.01, 2.5))
+```
+
+The periodic callback fired at `t = 0.5, 1, ..., 2.5`; it never fires at
+the initial or final time unless `initial_affect` or `final_affect` asks
+for it.
+
+## Stopping and step control
+
+`terminate(integ)` inside an affect stops the integration with retcode
+`"Terminated"`. `TerminateSteadyState()` does this automatically when the
+derivative falls below its tolerances, which is a convenient way to
+integrate "until steady state":
+
+```{r}
+ss <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 1e6)), Tsit5(),
+            callback = TerminateSteadyState())
+c(ss$retcode, signif(tail(ss$t, 1), 4))
+```
+
+`StepsizeLimiter(dtFE)` caps the step at a fraction of a function of the
+state, and `IterativeCallback(time_choice, affect)` schedules each next
+event from the previous one.
+
+```{r}
+prob <- ODEProblem(function(u, p, t) -u, c(1, 2), c(0, 1))
+max(diff(solve(prob, Tsit5(), callback = StepsizeLimiter(function(u, p, t) 0.01))$t))
+times <- numeric()
+it <- IterativeCallback(function(integ) if (integ$t < 0.7) integ$t + 0.3 else NULL,
+                        function(integ) times <<- c(times, integ$t))
+invisible(solve(prob, Tsit5(), callback = it))
+times
+```
+
+## Saving and integrating
+
+`SavingCallback(f, saved)` stores `f(u, t, integ)` in a `SavedValues()`
+container at the times `saveat`, or after every step when `saveat` is
+empty, without changing the steps of the solver.
+`FunctionCallingCallback()` just calls a function.
+`IntegratingSumCallback()` accumulates the integral of a function of the
+state over the solve.
+
+```{r}
+sv <- SavedValues()
+invisible(solve(prob, Tsit5(), callback = SavingCallback(function(u, t, integ) sum(u), sv,
+                                                         saveat = 0.25)))
+cbind(t = sv$t, saved = unlist(sv$saveval), exact = 3 * exp(-sv$t))
+iv <- IntegrandValuesSum()
+invisible(solve(prob, Tsit5(), callback = IntegratingSumCallback(function(u, t, integ) u, iv)))
+rbind(callback = iv$integrand, exact = (1 - exp(-1)) * c(1, 2))
+```
+
+## Domains and manifolds
+
+`PositiveDomain()` rejects steps that leave the positive orthant, and
+`ManifoldProjection(g)` projects the state back onto the manifold
+`g(u) = 0` after every step. With loose tolerances the harmonic oscillator
+drifts off its circle; the projection keeps it there to rounding.
+
+```{r}
+ho <- ODEProblem(function(u, p, t) c(u[2], -u[1]), c(1, 0), c(0, 100))
+free <- solve(ho, Tsit5(), reltol = 1e-3, abstol = 1e-3)
+proj <- solve(ho, Tsit5(), reltol = 1e-3, abstol = 1e-3,
+              callback = ManifoldProjection(function(u, p, t) sum(u^2) - 1))
+c(free = sum(tail(free$u, 1)[[1]]^2) - 1, projected = sum(tail(proj$u, 1)[[1]]^2) - 1)
+```
+
+The other ports of DiffEqCallbacks.jl are `GeneralDomain()`,
+`AutoAbstol()`, `IntegratingCallback()`, `IntegratingGKCallback()`,
+`LinearizingSavingCallback()`, `ProbIntsUncertainty()` and
+`AdaptiveProbIntsUncertainty()`; see their help pages.
+
+# Clocks and synchronous systems
+
+A clocked variable changes only at the ticks of a clock and holds its
+value in between. modelcompR follows the synchronous semantics of
+ModelingToolkit (after Modelica's chapter 16):
+
+* `Clock(dt, phase)` is a periodic clock; `SolverStepClock()` ticks at
+  every step of the solver; `ContinuousClock()` is the continuous time
+  domain.
+* `ShiftIndex(clock)` gives an index `k`: `k(x)` is `x` at the current tick
+  and `(k - 1)(x)` the value one tick earlier. `Shift(t, -1)(x)` is the
+  lower level operator.
+* `Sample(clock)(x)` (or `Sample(x)`, with the clock inferred) reads a
+  continuous variable at the ticks; `Hold(x)` turns a discrete variable into
+  a piecewise constant continuous signal.
+
+```{r}
+xs <- Variable("xs", t)
+kk <- ShiftIndex(Clock(0.1))
+kk
+(kk - 1)(xs)
+shift2term(Shift(t, -2)(xs))
+TimeDomain(kk(xs))
+Clock(0.1, phase = 0.05)
+```
+
+## Pure discrete time systems
+
+When every equation is a difference equation, `mtkcompile()` produces a
+discrete time system that is solved as a `DiscreteProblem` with
+`FunctionMap()`. The Fibonacci recursion needs the two past values:
+
+```{r}
+fy <- Variable("fy", t)
+k <- ShiftIndex(t)
+fib <- mtkcompile(System(list(fy ~ (k - 1)(fy) + (k - 2)(fy)), t, name = "fib"))
+unknowns(fib)
+sol <- solve(DiscreteProblem(fib, list((k - 1)(fy) ~ 1, (k - 2)(fy) ~ 0), c(0, 9)),
+             FunctionMap())
+sol[fy]
+```
+
+The unknowns are the delayed values; `fy` itself is observed. A value
+given for `fy` instead of its past is taken as `fy` at the initial time,
+and the past is solved for.
+
+## A discrete controller on a continuous plant
+
+The SampledData tutorial of ModelingToolkit closes a loop around a first
+order plant with a discrete filter and a proportional controller, both on a
+clock with period 0.5. The controller samples the plant output, and the
+plant sees the held control signal.
+
+```{r}
+dt <- 0.5
+k <- ShiftIndex(Clock(dt))
+plant <- function(name) {
+  x <- Variable("x", t, default = 1); u <- Variable("u", t); y <- Variable("y", t)
+  System(list(D(x) ~ -x + u, y ~ x), t, name = name)
+}
+filt <- function(name) {
+  x <- Variable("x", t, default = 0); u <- Variable("u", t, default = 0)
+  y <- Variable("y", t, default = 0)
+  a <- 1 / exp(dt)
+  System(list(k(x) ~ a * (k - 1)(x) + (1 - a) * k(u), y ~ x), t, name = name)
+}
+controller <- function(kp, name) {
+  y <- Variable("y", t); r <- Variable("r", t, default = 0)
+  ud <- Variable("ud", t, default = 0); yd <- Variable("yd", t, default = 0)
+  kpp <- Parameter("kp", default = kp)
+  System(list(yd ~ Sample(y), ud ~ kpp * (r - yd)), t, name = name)
+}
+r <- Variable("r", t)
+f <- filt("f"); c1 <- controller(1, "c"); p1 <- plant("p")
+conns <- list(r ~ sin(t), f$u ~ r, f$y ~ c1$r, Hold(c1$ud) ~ p1$u, p1$y ~ c1$y)
+cl <- mtkcompile(System(conns, t, systems = list(f, c1, p1), name = "cl"))
+unknowns(cl)
+sol <- solve(ODEProblem(cl, list(), c(0, 5)), reltol = 1e-10, abstol = 1e-12)
+sol(seq(0.25, 2.25, by = dt), idxs = cl$c$ud)
+plot(sol)
+```
+
+Clock inference partitions the equations: the plant stays continuous and
+its state is the only unknown (printed as its alias `c₊y`, the controller
+input connected to it), while the filter and controller variables
+become discrete parameters updated by a periodic callback at the ticks.
+`sol(t, idxs = cl$c$ud)` is piecewise constant. Inconsistent clocks, such
+as a difference equation on a continuous variable or two different clocks
+in one partition, are rejected by `mtkcompile()`.
+
+A variable indexed with a zero shift takes the clock of the index, so
+`k(y) ~ -Sample(x)` samples `x` on that clock:
+
+```{r}
+xc <- Variable("xc", t); yc <- Variable("yc", t)
+k2 <- ShiftIndex(Clock(0.5))
+sm <- mtkcompile(System(list(D(xc) ~ -xc + Hold(yc), k2(yc) ~ -Sample(xc)), t, name = "sampled"))
+so <- solve(ODEProblem(sm, list(xc ~ 1, yc ~ 0), c(0, 1)), reltol = 1e-10, abstol = 1e-12)
+c(so(c(0.25, 0.75), idxs = yc), -1, 1 - 2 * exp(-0.5))
+```
+
+## Ticking with the solver: `SolverStepClock`
+
+`SolverStepClock()` ticks at the initial time and after every accepted
+step of the integrator, so a discrete variable on it counts steps. Each
+tick saves the rows before and after the update, so the distinct times are
+counted.
+
+```{r}
+xn <- Variable("xn", t, default = 1)
+nstep <- Variable("nstep", t, default = 0)
+ks <- ShiftIndex(SolverStepClock())
+stepper <- mtkcompile(System(list(D(xn) ~ -xn, ks(nstep) ~ (ks - 1)(nstep) + 1), t,
+                             name = "stepper"))
+sol <- solve(ODEProblem(stepper, list(), c(0, 1)), Tsit5())
+c(steps = length(unique(sol$t)) - 1, counter = sol$ps[stepper$nstep])
+```
+
+## State machines
+
+A state machine is a set of states, each a system of clocked equations,
+with `initial_state(s)` and `transition(from, to, cond)` equations between
+them. Inside states and conditions, `ticksInState()`, `timeInState()`,
+`entry()` and `activeState(s)` refer to the time spent in a state.
+ModelingToolkit 11 extracts state machines but cannot simulate them;
+modelcompR compiles each machine into a periodic callback with the
+semantics of Modelica's chapter 17. This is an extension. The machine
+below counts up for three ticks and down for two.
+
+```{r}
+k <- ShiftIndex(Clock(1))
+xm <- GlobalScope(Variable("xm", t, default = 0))
+up_s <- System(list(k(xm) ~ (k - 1)(xm) + 1), t, list(xm), list(), name = "up")
+down_s <- System(list(k(xm) ~ (k - 1)(xm) - 1), t, list(xm), list(), name = "down")
+machine <- System(list(initial_state(up_s),
+                       transition(up_s, down_s, ticksInState() >= 3, immediate = FALSE, reset = FALSE),
+                       transition(down_s, up_s, ticksInState() >= 2, immediate = FALSE, reset = FALSE)),
+                  t, systems = list(up_s, down_s), name = "sm")
+equations(machine)[[2]]
+z <- Variable("z", t, default = 0)
+mm <- mtkcompile(System(list(D(z) ~ Hold(xm)), t, systems = list(machine), name = "smodel"))
+sol <- solve(ODEProblem(mm, list(), c(0, 10)))
+unname(sol(seq(0.5, 9.5, by = 1), idxs = xm))
+```
+
+With `immediate = TRUE` (the default) a transition fires at the tick where
+its condition holds, before the equations of the source state run, and
+`reset = TRUE` restarts the target state from the start values of its
+variables. Hierarchical machines and `synchronize = TRUE` are not
+supported.
+
+# Initialization
+
+Before an integrator can take its first step, the initial values must be
+consistent: every algebraic equation must hold, derivative conditions must
+be met, and parameters that are defined implicitly must be solved for. For
+an ODE where every unknown has a value this is trivial; for a DAE it is a
+nonlinear problem in its own right. modelcompR builds that problem
+symbolically, as ModelingToolkit does.
+
+## Initial conditions, bindings and guesses
+
+Three kinds of values take part:
+
+* **initial conditions** fix a value at the initial time: the `default` of
+  a variable, or an entry of the operating point passed to `ODEProblem()`
+  (`x ~ 0.6`). They become equations of the initialization system.
+* **bindings** define a parameter as an expression of other quantities, for
+  example `bindings = list(r ~ Initial(z))`; a parameter bound to `NA` is
+  solved for.
+* **guesses** are only starting points of the nonlinear solver. They do not
+  constrain the result, but they choose the root when there are several.
+
+The unit circle DAE `x' = -x + y`, `0 = x^2 + y^2 - 1` makes the
+difference visible: fixing `x = 0.6` leaves two consistent values of `y`,
+and the guess chooses between them.
+
+```{r}
+cx <- Variable("cx", t); cy <- Variable("cy", t)
+circle <- mtkcompile(System(list(D(cx) ~ -cx + cy, 0 ~ cx^2 + cy^2 - 1), t, name = "circle"))
+p_up <- ODEProblem(circle, list(cx ~ 0.6), c(0, 1), guesses = list(cy ~ 1))
+p_dn <- ODEProblem(circle, list(cx ~ 0.6), c(0, 1), guesses = list(cy ~ -1))
+c(up = p_up[cy], down = p_dn[cy])
+p_up$initialization_data$retcode
+```
+
+Guesses can also be given on a variable, `Variable("y", t, guess = 1)`, or
+on a system, `System(..., guesses = list(...))`; `guesses(sys)` and
+`hasguess()` / `getguess()` inspect them.
+
+## Missing guesses
+
+When an unknown of the initialization system has neither a value nor a
+guess, `missing_guess_value` decides what happens. The default is a
+reproducible pseudo random start in `[0, 1)`;
+`MissingGuessValue$Constant(v)` starts from `v`, and
+`MissingGuessValue$Error()` stops with an error naming the variables.
+
+```{r}
+c(ODEProblem(circle, list(cx ~ 0.6), c(0, 1),
+             missing_guess_value = MissingGuessValue$Constant(0.5))[cy],
+  ODEProblem(circle, list(cx ~ 0.6), c(0, 1),
+             missing_guess_value = MissingGuessValue$Constant(-0.5))[cy])
+tryCatch(ODEProblem(circle, list(cx ~ 0.6), c(0, 1),
+                    missing_guess_value = MissingGuessValue$Error()),
+         error = function(e) conditionMessage(e))
+```
+
+## Derivatives and observed variables as conditions
+
+Initial conditions are not limited to unknowns. A Lotka Volterra model can
+be started at its steady state by setting both derivatives to zero, or
+constrained through an observed variable.
+
+```{r}
+xl <- Variable("xl", t); yl <- Variable("yl", t); zl <- Variable("zl", t)
+al <- Parameter("al", default = 1.5); be <- Parameter("be", default = 1)
+ga <- Parameter("ga", default = 3); de <- Parameter("de", default = 1)
+lv <- mtkcompile(System(list(D(xl) ~ al * xl - be * xl * yl,
+                             D(yl) ~ -ga * yl + de * xl * yl, zl ~ xl + yl), t, name = "lv"))
+steady <- ODEProblem(lv, list(D(xl) ~ 0, D(yl) ~ 0), c(0, 10), guesses = list(xl ~ 2.5, yl ~ 2))
+c(steady[xl], steady[yl])
+obs_ic <- ODEProblem(lv, list(D(xl) ~ 0, zl ~ 2), c(0, 10), guesses = list(xl ~ 1, yl ~ 1))
+c(obs_ic[xl], obs_ic[yl])
+```
+
+Initial conditions may also be expressions of parameters, such as
+`xl ~ 2 * al`.
+
+## Initialization equations
+
+Extra equations that hold only at the initial time are given as
+`initialization_eqs`, either to the problem or to the system.
+
+```{r}
+xe <- Variable("xe", t); ye <- Variable("ye", t)
+ie <- list(D(xe) ~ -xe * ye, D(ye) ~ xe - ye)
+s_ie <- mtkcompile(System(ie, t, name = "ie"))
+pr <- ODEProblem(s_ie, list(xe ~ 3), c(0, 1), guesses = list(ye ~ 1),
+                 initialization_eqs = list(xe^2 + ye^2 ~ 25))
+c(pr[xe], pr[ye])
+s_ie2 <- mtkcompile(System(ie, t, name = "ie2", initialization_eqs = list(xe + ye ~ 5)))
+pr2 <- ODEProblem(s_ie2, list(xe ~ 1), c(0, 1), guesses = list(ye ~ 1))
+c(pr2[xe], pr2[ye])
+```
+
+## Parameters solved by initialization
+
+A parameter with `default = NA` and an equation that determines it is an
+unknown of the initialization system. Here `total ~ x + y` defines
+`total` from the initial state:
+
+```{r}
+xp <- Variable("xp", t); yp <- Variable("yp", t)
+total <- Parameter("total", default = NA)
+ps <- mtkcompile(System(list(D(xp) ~ -xp, total ~ xp + yp), t, name = "paraminit"))
+pp <- ODEProblem(ps, list(xp ~ 1, yp ~ 2), c(0, 1))
+pp$ps[total]
+```
+
+To go the other way, solving for `xp` given `total`, the value of `xp`
+must be removed (with `list(xp, NULL)`), otherwise the conditions
+contradict each other:
+
+```{r}
+pp2 <- remake(pp, u0 = list(yp ~ 1, list(xp, NULL)), p = list(total ~ 4))
+c(pp2[xp], pp2$ps[total])
+```
+
+## `Initial(x)`
+
+`Initial(x)` is a parameter holding the initial value of `x`. Each
+condition `x ~ 0.6` becomes the equation `x ~ Initial(x)` of the
+initialization system, with the number stored in the parameter, so a new
+value does not require a new initialization system. A binding can also
+refer to it: below `r` is bound to the initial value of the algebraic
+variable `z`, which solves `z^3 + z = x`.
+
+```{r}
+xi <- Variable("xi", t); zi <- Variable("zi", t); r <- Parameter("r")
+ib <- mtkcompile(System(list(D(xi) ~ -r * xi, 0 ~ zi^3 + zi - xi), t, name = "ib",
+                        bindings = list(r ~ Initial(zi)), guesses = list(zi ~ 1)))
+parameters(ib)
+Filter(isinitial, parameters(ib, initial_parameters = TRUE))
+pi1 <- ODEProblem(ib, list(xi ~ 2), c(0, 1))
+c(z = pi1[zi], r = pi1$ps[r], Initial_z = pi1$ps[Initial(zi)])
+c(r_after_remake = remake(pi1, u0 = list(xi ~ 10))$ps[r])
+```
+
+Setting an `Initial` parameter of a problem in place runs initialization
+again:
+
+```{r}
+pi1$ps[Initial(xi)] <- 10
+c(pi1[xi], pi1[zi], pi1$ps[r])
+```
+
+## Over and underdetermined initialization
+
+The initialization system is square only when the conditions exactly
+determine the state. With fewer conditions it is underdetermined and
+solved in the least squares sense from the guesses; with more it is
+overdetermined and solved as a least squares problem, which succeeds when
+the extra conditions are consistent and fails otherwise. Both cases warn,
+and `fully_determined = TRUE` turns the warning into an error.
+
+```{r}
+under <- withCallingHandlers(
+  ODEProblem(circle, list(), c(0, 1), guesses = list(cx ~ 0.5, cy ~ 1)),
+  warning = function(w) { message("warning: ", conditionMessage(w)); invokeRestart("muffleWarning") })
+sum(under$u0^2)
+tryCatch(ODEProblem(circle, list(), c(0, 1), guesses = list(cx ~ 0.5, cy ~ 1),
+                    fully_determined = TRUE),
+         error = function(e) conditionMessage(e))
+```
+
+Values for every unknown that already satisfy the constraint are kept
+as they are; contradictory ones produce an
+`InitializationFailure`, whose `solve()` returns retcode
+`"InitialFailure"` at once.
+
+```{r}
+ok <- ODEProblem(circle, list(cx ~ 0.6, cy ~ 0.8), c(0, 1))
+unname(ok$u0)
+bad <- suppressWarnings(ODEProblem(circle, list(cx ~ 0.6, cy ~ 0.5), c(0, 1)))
+class(bad)[1]
+solve(bad)$retcode
+```
+
+`warn_initialize_determined = FALSE` silences the warnings, and
+`check_initialization = FALSE` skips initialization altogether, taking the
+values as given. `analyze_initialization_jacobian()` explains an
+underdetermined system through the rank of its Jacobian and lists the free
+unknowns.
+
+```{r}
+iu <- suppressWarnings(InitializationProblem(circle, 0, list(),
+                                             guesses = list(cx ~ 0.5, cy ~ 1)))
+res <- analyze_initialization_jacobian(iu, verbose = FALSE)
+c(rank = res$rank, nullity = res$nullity, redundancy = res$redundancy)
+```
+
+## The initialization system and problem
+
+`generate_initializesystem()` returns the symbolic initialization system,
+and `InitializationProblem()` the numeric problem that `ODEProblem()`
+solves internally. Its type follows ModelingToolkit: a `LinearProblem` for
+an affine system, an `SCCNonlinearProblem` (solved block by block) for a
+square nonlinear one, a `NonlinearProblem` with `use_scc = FALSE`, and a
+`NonlinearLeastSquaresProblem` when the system is not square.
+
+```{r}
+isys <- generate_initializesystem(circle, op = list(cx ~ 0.6), guesses = list(cy ~ 1))
+unknowns(isys)
+equations(isys)
+iprob <- InitializationProblem(circle, 0, list(cx ~ 0.6), guesses = list(cy ~ 1))
+class(iprob)[1]
+isol <- solve(iprob)
+c(isol[cx], isol[cy])
+class(p_up$initialization_data$initializeprob)[1]
+```
+
+`initialization_equations(sys)`, `get_initialization_eqs()`,
+`initial_conditions()` and `guesses()` inspect the pieces of a system, and
+`has_initialization_data()` tells whether a problem carries an
+initialization problem. An ODE whose unknowns all have values needs none:
+
+```{r}
+xo <- Variable("xo", t); ko <- Parameter("ko", default = 2)
+plain <- mtkcompile(System(list(D(xo) ~ -ko * xo), t, name = "plain"))
+is.null(ODEProblem(plain, list(xo ~ 1), c(0, 1))$initialization_data)
+```
+
+## Reinitialization after `remake`
+
+`remake()` runs initialization again with the new values. When only the
+numbers change, the compiled initialization system is reused.
+
+```{r}
+p2 <- remake(p_up, u0 = list(cx ~ 0.8))
+c(p2[cx], p2[cy])
+s2 <- remake(obs_ic, u0 = list(zl ~ 3))
+identical(s2$initialization_data$signature, obs_ic$initialization_data$signature)
+c(s2[xl], s2[yl])
+```
+
+A numeric `u0` is taken as conditions on the differential variables and
+as new starting values of the algebraic ones; `check_initialization = FALSE`
+keeps the values exactly as given.
+
+```{r}
+unname(remake(p_up, u0 = c(0, 0.5))$u0)
+unname(remake(p_up, u0 = c(0.1, 0.2), check_initialization = FALSE)$u0)
+```
+
+## The `initializealg` options of the integrators
+
+Independently of the symbolic initialization, the DAE integrators can make
+the initial values consistent themselves. `solve(prob, alg, initializealg =
+...)` accepts the algorithms of OrdinaryDiffEq:
+
+* `BrownFullBasicInit()` keeps the differential variables and solves the
+  algebraic equations for the algebraic ones;
+* `ShampineCollocationInit()` takes a small implicit Euler step to find
+  consistent values of all variables;
+* `CheckInit()` only checks the residual and fails with
+  `"InitialFailure"`;
+* `NoInit()` takes the values as they are;
+* `OverrideInit()` solves the problem's initialization problem, and
+  `DefaultInit()` uses `OverrideInit()` when there is one and `CheckInit()`
+  otherwise.
+
+Start the circle DAE from an inconsistent point without symbolic
+initialization and let the integrator repair it:
+
+```{r}
+raw <- ODEProblem(circle, list(cx ~ 0.6, cy ~ 0.5), c(0, 1), check_initialization = FALSE)
+fixed <- solve(raw, Rodas5P(), initializealg = BrownFullBasicInit())
+c(fixed$retcode, round(fixed[cy][1], 6))
+solve(raw, Rodas5P(), initializealg = CheckInit())$retcode
+```
+
+`CheckInit()` warns and returns `"InitialFailure"` because the constraint
+does not hold at the given point.
+
+The same algorithms apply to fully implicit `DAEProblem`s built from R
+functions:
+
+```{r}
+fi <- function(du, u, p, t) c(du[1] + u[1], u[2] - 2 * u[1])
+dprob <- DAEProblem(fi, c(0, 0), c(1, 5), c(0, 1), differential_vars = c(TRUE, FALSE))
+solve(dprob, DFBDF(), initializealg = BrownFullBasicInit())$u[[1]]
+```
+
+After an event that changes the state of a DAE, the solver makes the
+algebraic values consistent again in the same way; symbolic affects are
+consistent by construction, which is why the `reinitializealg` argument of
+the symbolic callbacks is kept only for compatibility.

@@ -1,0 +1,623 @@
+---
+title: "Sensitivity analysis"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Sensitivity analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+Sensitivity analysis asks how the solution of a model changes when its
+inputs change. For a differential equation \(u' = f(u, p, t)\) with initial
+value \(u_0\) and parameters \(p\), the local sensitivities are the
+derivatives \(\partial u(t) / \partial p\) and \(\partial u(t) / \partial
+u_0\); for a scalar cost \(G(u, p)\) of the solution they combine into the
+gradient \(dG/dp\). Gradients drive parameter estimation, optimal control,
+experimental design and uncertainty propagation.
+
+modelcompR ports the local sensitivity methods of
+[SciMLSensitivity.jl](https://github.com/SciML/SciMLSensitivity.jl). This
+article covers
+
+* forward sensitivities (`ODEForwardSensitivityProblem()`),
+* continuous adjoints (`adjoint_sensitivities()` with `InterpolatingAdjoint()`,
+  `BacksolveAdjoint()`, `QuadratureAdjoint()`, `GaussAdjoint()`, ...),
+* gradients of a loss through `solve()` (`solve_gradient()`), including
+  events,
+* parameter estimation with a gradient,
+* DAEs, steady states, nonlinear and optimization solutions,
+* stochastic differential equations,
+* second order sensitivities,
+* shadowing methods for chaotic systems.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+## A model to differentiate
+
+Most examples use the Lotka Volterra predator prey model, written
+symbolically. When a problem comes from a `System`, the sensitivity
+methods use the symbolic Jacobians \(\partial f / \partial u\) and
+\(\partial f / \partial p\) of the compiled model, so every vector
+Jacobian product is exact.
+
+```{r}
+t <- t_nounits
+D <- D_nounits
+variables("x(t)", "y(t)")
+parameters("r", "k", "m", "e")
+eqs <- list(D(x) ~ r * x - k * x * y,
+            D(y) ~ -m * y + e * x * y)
+lv <- mtkcompile(System(eqs, t, name = "lv"))
+prob <- ODEProblem(lv, list(x ~ 1, y ~ 1, r ~ 1.5, k ~ 1, m ~ 3, e ~ 1), c(0, 3))
+prob$u0
+prob$p
+```
+
+The order of the unknowns and parameters is chosen by the compiler, so the
+results below are always read by name.
+
+## Forward sensitivities
+
+The forward method differentiates the ODE with respect to the parameters
+and integrates the sensitivity matrix \(S = \partial u / \partial p\)
+alongside the state:
+\[
+S' = \frac{\partial f}{\partial u} S + \frac{\partial f}{\partial p}, \qquad
+S(0) = \frac{\partial u_0}{\partial p}.
+\]
+The augmented system has \(n (1 + n_p)\) equations, so the cost grows with
+the number of parameters. It is the method of choice for few parameters,
+or when the sensitivities of the whole trajectory are wanted.
+`ODEForwardSensitivityProblem()` mirrors the Julia constructor of the same
+name; it accepts an `ODEProblem`, a compiled `System` or a plain R
+function.
+
+```{r}
+fprob <- ODEForwardSensitivityProblem(prob)
+fsol <- solve(fprob, Tsit5(), reltol = 1e-8, abstol = 1e-8)
+```
+
+`extract_local_sensitivities()` splits the augmented solution into the
+state `u` and the sensitivities `du`, one entry per parameter. With an
+index it returns one saved time; with `t` it interpolates; with
+`asmatrix = TRUE` the sensitivities form one \(n \times n_p\) matrix.
+
+```{r}
+last <- extract_local_sensitivities(fsol, length(fsol$t))
+last$u
+last$du$r
+extract_local_sensitivities(fsol, t = 1.5, asmatrix = TRUE)
+```
+
+Without an index the function returns the whole trajectory: `u` is a
+matrix with one row per saved time, and each element of `du` is a matrix of
+the same shape.
+
+```{r}
+traj <- extract_local_sensitivities(fsol)
+dim(traj$u)
+matplot(fsol$t, cbind(traj$du$r, traj$du$m), type = "l", lty = c(1, 1, 2, 2),
+        col = c(1, 2, 1, 2), xlab = "t", ylab = "sensitivity")
+legend("bottomleft", c("dx/dr", "dy/dr", "dx/dm", "dy/dm"), lty = c(1, 1, 2, 2),
+       col = c(1, 2, 1, 2), bty = "n")
+```
+
+The sensitivities grow along the oscillation: a small change in the
+growth rate shifts the phase of the cycle, and the phase error accumulates.
+
+### Derivatives with respect to the initial values
+
+`ForwardSensitivity()` (the default) differentiates with respect to the
+parameters. `ForwardDiffSensitivity()`, Julia's dual number method, can
+also differentiate with respect to the initial values; the seed matrices
+`du0` and `dp` choose the directions. Each column of the seeds is one
+direction \((\delta u_0, \delta p)\). For \(u' = -p u\), \(u(0) = 1\),
+\(p = 2\), the derivatives of \(u(1) = e^{-2}\) are \(e^{-2}\) with respect
+to \(u_0\) and \(-e^{-2}\) with respect to \(p\):
+
+```{r}
+dprob <- ODEForwardSensitivityProblem(function(u, p, t) -p[1] * u, 1, c(0, 1), 2,
+                                      sensealg = ForwardDiffSensitivity(),
+                                      du0 = cbind(1, 0), dp = cbind(0, 1))
+dsol <- solve(dprob, Tsit5(), reltol = 1e-10, abstol = 1e-12)
+extract_local_sensitivities(dsol, t = 1, asmatrix = TRUE)$du
+c(exp(-2), -exp(-2))
+```
+
+`ODEForwardSensitivityFunction()` returns the right-hand side of the
+augmented system itself, for use with other tools.
+
+```{r}
+ODEForwardSensitivityFunction(prob)
+```
+
+## Adjoint sensitivities
+
+When there are many parameters and one scalar cost, the adjoint method is
+cheaper. For a cost
+\[
+G(p) = \int_{t_0}^{T} g(u, p, t)\, dt + \sum_i g_i(u(t_i))
+\]
+it solves the adjoint equation backward in time,
+\[
+\lambda' = -\left(\frac{\partial f}{\partial u}\right)^{\!T} \lambda
+- \left(\frac{\partial g}{\partial u}\right)^{\!T}, \qquad
+\frac{dG}{dp} = \lambda(t_0)^T \frac{\partial u_0}{\partial p}
++ \int_{t_0}^{T} \left(\lambda^T \frac{\partial f}{\partial p}
++ \frac{\partial g}{\partial p}\right) dt,
+\]
+with jumps \(\lambda \mathrel{+}= \partial g_i / \partial u\) at the
+discrete cost times. One backward solve of \(n\) equations (plus a
+quadrature of \(n_p\)) gives the whole gradient, whatever the number of
+parameters.
+
+`adjoint_sensitivities(sol, alg, ...)` takes a forward solution and
+returns `du0` and `dp`. A discrete cost is given by its gradient
+`dgdu_discrete(u, p, t, i)` at the times `t`; a continuous cost by `g(u, p,
+t)` (its gradients are then taken by finite differences) or by
+`dgdu_continuous` and `dgdp_continuous`. The forward solution must be
+dense, so it is solved without `saveat`.
+
+```{r}
+sol <- solve(prob, Tsit5(), reltol = 1e-10, abstol = 1e-10)
+ts <- seq(0.5, 3, by = 0.5)
+# G = sum_i x(t_i): the gradient of the cost at each time is the unit vector of x
+ix <- match("x(t)", names(prob$u0))
+ex <- replace(numeric(2), ix, 1)
+adj <- adjoint_sensitivities(sol, Tsit5(), t = ts, dgdu_discrete = function(u, p, t, i) ex,
+                             abstol = 1e-10, reltol = 1e-10)
+adj$du0
+adj$dp
+```
+
+### The adjoint methods
+
+The methods differ in how they obtain the forward state during the
+backward solve and how they integrate the parameter gradient:
+
+| Method | Forward state | Parameter gradient |
+|:--|:--|:--|
+| `InterpolatingAdjoint()` | interpolated from the dense forward solution (or re-solved between checkpoints) | integrated with \(\lambda\) |
+| `BacksolveAdjoint()` | integrated backward with \(\lambda\) (reset at the saved points with `checkpointing = TRUE`) | integrated with \(\lambda\) |
+| `QuadratureAdjoint()` | interpolated | adaptive Gauss Kronrod quadrature after the backward solve |
+| `GaussAdjoint()` | interpolated (or checkpointed) | Gauss Legendre rule on each backward step |
+| `GaussKronrodAdjoint()` | interpolated (or checkpointed) | Gauss Kronrod rule on each backward step |
+
+`BacksolveAdjoint()` needs the least memory but can be unstable when the
+backward integration of the state is ill conditioned. `GaussAdjoint()` is
+the default of `solve_gradient()` for larger problems, as in Julia. All
+methods give the same gradient to the solver tolerances:
+
+```{r}
+methods <- list(InterpolatingAdjoint = InterpolatingAdjoint(),
+                Interpolating_checkpointed = InterpolatingAdjoint(checkpointing = TRUE),
+                BacksolveAdjoint = BacksolveAdjoint(),
+                QuadratureAdjoint = QuadratureAdjoint(abstol = 1e-10, reltol = 1e-10),
+                GaussAdjoint = GaussAdjoint(),
+                GaussKronrodAdjoint = GaussKronrodAdjoint())
+grads <- t(vapply(methods, function(sa) {
+  r <- adjoint_sensitivities(sol, Tsit5(), t = ts, dgdu_discrete = function(u, p, t, i) ex,
+                             sensealg = sa, abstol = 1e-10, reltol = 1e-10)
+  c(r$du0, r$dp)
+}, numeric(6)))
+signif(grads, 8)
+```
+
+The forward sensitivities give the same numbers: \(dG/dp = \sum_i
+\partial x(t_i) / \partial p\).
+
+```{r}
+fs <- extract_local_sensitivities(fsol, t = ts, asmatrix = TRUE)
+Reduce(`+`, lapply(fs, function(s) s$du["x(t)", ]))
+```
+
+A continuous cost works the same way. Here \(G = \int_0^3 x(t)^2\, dt\):
+
+```{r}
+adjoint_sensitivities(sol, Tsit5(), g = function(u, p, t) u[ix]^2,
+                      sensealg = GaussAdjoint(), abstol = 1e-10, reltol = 1e-10)$dp
+```
+
+### The adjoint problem
+
+`ODEAdjointProblem()` builds the backward problem without solving it. It
+is an ordinary `ODEProblem` with a reversed time span; its `finish`
+element turns the backward solution into the gradients.
+
+```{r}
+ap <- ODEAdjointProblem(sol, GaussAdjoint(), Tsit5(), t = ts,
+                        dgdu_discrete = function(u, p, t, i) ex)
+ap$tspan
+asol <- solve(ap, Tsit5(), abstol = 1e-10, reltol = 1e-10)
+ap$finish(asol)$dp
+```
+
+### Vector Jacobian products
+
+In Julia, `autojacvec` selects the automatic differentiation backend that
+computes the products \(\lambda^T \partial f / \partial u\) and
+\(\lambda^T \partial f / \partial p\): `ZygoteVJP()`, `EnzymeVJP()`,
+`ReverseDiffVJP()`, `TrackerVJP()`, `MooncakeVJP()` or `ReactantVJP()`. R
+has no automatic differentiation, so in modelcompR
+
+* `autojacvec = NULL` or `TRUE` (and every backend object above) uses the
+  symbolic derivatives of the `System`, compiled to R code, or the
+  problem's `jac` when it was built from an R function;
+* `autojacvec = FALSE` uses central finite differences.
+
+The backend names are accepted so that code translated from Julia runs
+unchanged:
+
+```{r}
+ZygoteVJP()
+sa_list <- list(symbolic = GaussAdjoint(autojacvec = TRUE),
+                zygote = GaussAdjoint(autojacvec = ZygoteVJP()),
+                enzyme = InterpolatingAdjoint(autojacvec = EnzymeVJP()),
+                reversediff = InterpolatingAdjoint(autojacvec = ReverseDiffVJP(compile = TRUE)),
+                finite_differences = GaussAdjoint(autojacvec = FALSE))
+vapply(sa_list, function(sa) {
+  adjoint_sensitivities(sol, Tsit5(), t = ts, dgdu_discrete = function(u, p, t, i) ex,
+                        sensealg = sa, abstol = 1e-10, reltol = 1e-10)$dp[["r"]]
+}, 0)
+```
+
+The discretize then optimize methods `ZygoteAdjoint()`,
+`EnzymeAdjoint()`, `ReverseDiffAdjoint()`, `TrackerAdjoint()` and
+`MooncakeAdjoint()`, which differentiate through the solver in Julia, run
+the forward sensitivities of the discretized solve in R
+(`ForwardDiffSensitivity()`), and so give the derivative of the computed
+solution.
+
+```{r}
+ZygoteAdjoint()
+```
+
+## Gradients of a loss through solve
+
+`solve_gradient(loss, prob, alg, ...)` is the R counterpart of calling
+`Zygote.gradient` on a function that solves an ODE in Julia. `loss` is any
+R function of the solution that returns a number; the options in `...`
+go to `solve()` (`saveat`, tolerances, callbacks), and `sensealg` picks
+the method. The result holds the gradients `u0` and `p`, the loss `value`
+and the forward solution `sol`.
+
+The loss below compares the predator prey trajectory at saved times with
+a target. Only the saved values may enter the loss: the adjoint knows the
+cotangent of the loss at the `saveat` points.
+
+```{r}
+ts <- seq(0, 3, by = 0.25)
+loss <- function(sol) sum((sol[x] - 1)^2) + sum(sol[y])
+g_fwd <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-9, abstol = 1e-10,
+                        sensealg = ForwardDiffSensitivity())
+g_adj <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-9, abstol = 1e-10,
+                        sensealg = GaussAdjoint())
+g_fwd$value
+rbind(forward = c(g_fwd$u0, g_fwd$p), adjoint = c(g_adj$u0, g_adj$p))
+```
+
+A central finite difference check:
+
+```{r}
+F <- function(th) loss(solve(remake(prob, u0 = th[1:2], p = th[3:6]), Tsit5(),
+                             reltol = 1e-10, abstol = 1e-10, saveat = ts))
+th <- c(prob$u0, prob$p)
+fd <- vapply(seq_along(th), function(j) {
+  h <- replace(numeric(6), j, 1e-5)
+  (F(th + h) - F(th - h)) / 2e-5
+}, 0)
+max(abs(fd - c(g_adj$u0, g_adj$p)))
+```
+
+When `sensealg` is not given, `solve_gradient()` picks one from the
+problem: forward sensitivities for small ODEs, `GaussAdjoint()` for larger
+ones, `SteadyStateAdjoint()` for nonlinear and steady state problems.
+
+### Events
+
+Events are differentiated too, including the dependence of the event time
+on the parameters. A ball dropped from height \(x_0\) bounces at
+\(x = 0\) with restitution \(e\); the loss is the height at \(t = 0.8\),
+after the bounce.
+
+```{r}
+variables("h(t)", "v(t)")
+parameters("grav", "rest")
+ball <- mtkcompile(System(list(D(h) ~ v, D(v) ~ -grav), t, name = "ball",
+                          continuous_events = list(list(h ~ 0), list(v ~ -rest * Pre(v)))))
+bprob <- ODEProblem(ball, list(h ~ 1, v ~ 0, grav ~ 9.81, rest ~ 0.9), c(0, 0.8))
+height <- function(sol) tail(sol[h], 1)
+gb <- solve_gradient(height, bprob, Tsit5(), saveat = 0.8, reltol = 1e-10, abstol = 1e-12,
+                     sensealg = InterpolatingAdjoint())
+gb$value
+gb$p
+```
+
+The exact height after the bounce is
+\(-e\, v_\tau (T - \tau) - g (T - \tau)^2 / 2\) with \(\tau =
+\sqrt{2 x_0 / g}\) and \(v_\tau = -g \tau\), so
+\(\partial x(T) / \partial e = g \tau (T - \tau)\):
+
+```{r}
+tau <- sqrt(2 / 9.81)
+9.81 * tau * (0.8 - tau)
+```
+
+To use `adjoint_sensitivities()` directly on a problem with events, solve
+it with `solve(prob, alg, sensealg = ...)`, which records the events for
+the backward pass.
+
+## Parameter estimation with a gradient
+
+A gradient makes local optimizers converge in a few iterations. The
+logistic growth model \(N' = \rho N (1 - N / K)\) is fitted to noisy
+observations with `stats::optim()` and the bounded quasi Newton method L-BFGS-B; `solve_gradient()`
+supplies both the loss and its gradient. The parameters are optimized on
+the log scale to keep them positive.
+
+```{r}
+variables("N(t)")
+parameters("rho", "K")
+logistic <- mtkcompile(System(list(D(N) ~ rho * N * (1 - N / K)), t, name = "logistic"))
+lprob <- ODEProblem(logistic, list(N ~ 0.1, rho ~ 1.2, K ~ 2), c(0, 8))
+tobs <- seq(0, 8, by = 0.5)
+set.seed(1)
+truth <- solve(lprob, Tsit5(), saveat = tobs, reltol = 1e-10, abstol = 1e-10)[N]
+Nobs <- truth + rnorm(length(tobs), sd = 0.05)
+
+pnames <- names(lprob$p)
+sse <- function(sol) sum((sol[N] - Nobs)^2)
+cache <- new.env()
+objective <- function(logp) {
+  if (!identical(cache$logp, logp)) {   # optim asks for fn and gr at the same point
+    pr <- remake(lprob, p = setNames(exp(logp), pnames))
+    cache$res <- solve_gradient(sse, pr, Tsit5(), saveat = tobs, reltol = 1e-8, abstol = 1e-10)
+    cache$logp <- logp
+  }
+  cache$res
+}
+fn <- function(logp) objective(logp)$value
+gr <- function(logp) objective(logp)$p * exp(logp)   # chain rule for log parameters
+
+start <- log(c(rho = 0.5, K = 1))[pnames]
+fit <- optim(start, fn, gr, method = "L-BFGS-B", lower = log(0.05), upper = log(20))
+exp(fit$par)
+fit$counts
+```
+
+The bounds keep the line search away from growth rates so large that the
+ODE becomes extremely stiff; an unbounded BFGS search on the log scale can
+try \(\rho = e^{30}\) in its first step.
+
+The estimates are close to the true values \(\rho = 1.2\) and \(K = 2\).
+
+```{r}
+fitted <- solve(remake(lprob, p = setNames(exp(fit$par), pnames)), Tsit5())
+plot(tobs, Nobs, xlab = "t", ylab = "N", pch = 19)
+tt <- seq(0, 8, length.out = 200)
+lines(tt, vapply(tt, function(s) fitted(s)[[1]], 0), col = 2)
+```
+
+## Differential algebraic equations
+
+Semi-explicit DAEs compiled from a `System` become mass matrix ODEs with
+zero rows for the algebraic equations. The interpolating, quadrature and
+Gauss adjoints handle them, as do the forward methods; the algebraic
+initial values are recomputed from the constraint, so their gradient is
+zero.
+
+```{r}
+variables("w(t)", "z(t)")
+parameters("kd", "ad")
+dsys <- mtkcompile(System(list(D(w) ~ -kd * z, 0 ~ z^3 + z - ad * w), t, name = "dae"))
+daeprob <- ODEProblem(dsys, list(w ~ 1, kd ~ 0.7, ad ~ 0.5), c(0, 2), jac = TRUE,
+                      guesses = list(z ~ 0.5))
+dloss <- function(sol) sum(sol[w]^2) + 3 * sum(sol[z])
+dts <- seq(0, 2, by = 0.5)
+gd <- solve_gradient(dloss, daeprob, Rodas5P(), saveat = dts, reltol = 1e-9, abstol = 1e-10,
+                     sensealg = GaussAdjoint())
+gd$u0
+gd$p
+```
+
+Fully implicit DAEs \(F(u', u, p, t) = 0\) (a `DAEProblem`) have their own
+adjoint, `DAEAdjointProblem()`, used by `adjoint_sensitivities()`. The
+residual below couples \(u_1' = -p_1 u_1 + u_2\) with the algebraic equation
+\(u_2 = p_2 u_1\), so \(u_1' = -(p_1 - p_2) u_1\). With \(u_1(0) = 1\),
+\(p = (1, 0.5)\), the cost \(G = u_1(1) = e^{-(p_1 - p_2)}\) has gradient
+\((-1, 1)\, e^{-0.5}\) in \(p\):
+
+```{r}
+res <- function(du, u, p, t) c(du[1] + p[1] * u[1] - u[2], u[2] - p[2] * u[1])
+iprob <- DAEProblem(res, c(-0.5, 0), c(1, 0.5), c(0, 1), c(1, 0.5),
+                    differential_vars = c(TRUE, FALSE))
+isol <- solve(iprob, DFBDF(), abstol = 1e-10, reltol = 1e-10)
+ir <- adjoint_sensitivities(isol, DFBDF(), t = 1, dgdu_discrete = function(u, p, t, i) c(1, 0),
+                            abstol = 1e-10, reltol = 1e-10)
+ir$dp
+c(-1, 1) * exp(-0.5)
+```
+
+## Steady states and nonlinear solutions
+
+For a steady state \(f(u^*, p) = 0\), the implicit function theorem gives
+\(\partial u^* / \partial p = -(\partial f / \partial u)^{-1} \partial f /
+\partial p\) without differentiating the iterations of the solver. The
+adjoint form needs one linear solve with the transposed Jacobian;
+`SteadyStateAdjoint()` implements it.
+
+The steady state of \(x' = s - k x^2\) is \(x^* = \sqrt{s / k}\), so
+\(G = x^{*2} = s / k\) has \(\partial G / \partial k = -s / k^2 = -3/4\) and
+\(\partial G / \partial s = 1 / k = 1/2\) at \(k = 2\), \(s = 3\).
+
+```{r}
+variables("q(t)")
+parameters("kq", "sq")
+ss <- mtkcompile(System(list(D(q) ~ sq - kq * q^2), t, name = "ss"))
+ssprob <- SteadyStateProblem(ss, list(q ~ 1, kq ~ 2, sq ~ 3))
+sssol <- solve(ssprob, SSRootfind())
+adjoint_sensitivities(sssol, NULL, sensealg = SteadyStateAdjoint(), g = function(u, p) u[1]^2)$dp
+solve_gradient(function(sol) sol$u[[1]]^2, ssprob, SSRootfind())$p
+```
+
+Nonlinear problems work the same way. For the system \(u_1^2 = p_1\),
+\(u_2 = p_2 u_1\), the loss \(u_1 + u_2\) has gradient
+\((1 + p_2) / (2 \sqrt{p_1})\) in \(p_1\) and \(\sqrt{p_1}\) in \(p_2\):
+
+```{r}
+nprob <- NonlinearProblem(function(u, p) c(u[1]^2 - p[1], u[2] - p[2] * u[1]), c(1, 1),
+                          p = c(2, 3))
+solve_gradient(function(sol) sum(sol$u), nprob, NewtonRaphson())$p
+c(4 / (2 * sqrt(2)), sqrt(2))
+```
+
+The optimum of an `OptimizationProblem` is differentiated through its
+optimality conditions: `UnconstrainedOptimizationAdjoint()` without
+constraints, `OptimizationAdjoint()` (the KKT conditions) with them. The
+minimizer of \((x_1 - p_1)^2 + (x_2 - p_2 x_1)^2\) is \(x_1 = p_1\),
+\(x_2 = p_1 p_2\), so the loss \(x_1 + x_2\) has gradient \((1 + p_2, p_1)\):
+
+```{r}
+fq <- function(x, p) (x[1] - p[1])^2 + (x[2] - p[2] * x[1])^2
+oprob <- OptimizationProblem(fq, c(0, 0), c(1, 3))
+solve_gradient(function(sol) sum(sol$u), oprob, BFGS(), g_abstol = 1e-12)$p
+```
+
+## Stochastic differential equations
+
+For an SDE, `solve_gradient()` with a fixed step method, a `dt` and a
+`seed` differentiates the sampled path: the noise is held fixed and the
+result is the pathwise derivative. For geometric Brownian motion
+\(du = \mu u\, dt + \sigma u\, dW\) the path is
+\(u(T) = u_0 \exp((\mu - \sigma^2 / 2) T + \sigma W_T)\), so
+\(\partial u(T) / \partial \mu = T u(T)\).
+
+```{r}
+sprob <- SDEProblem(function(u, p, t) p[1] * u, function(u, p, t) p[2] * u, 1, c(0, 1),
+                    c(1.5, 0.3))
+send <- function(sol) tail(as.matrix(sol)[, 1], 1)
+gs <- solve_gradient(send, sprob, EM(), dt = 0.01, seed = 3)
+c(du0 = gs$u0, dp = gs$p)
+gs$value   # u(T), and T u(T) since T = 1
+```
+
+The derivative in \(u_0\) equals \(u(T) / u_0\) exactly, since the path is
+linear in \(u_0\). The derivative in \(\mu\) is close to, but not equal to,
+\(T u(T)\): the pathwise derivative is that of the discrete Euler Maruyama
+path \(u_N = u_0 \prod_k (1 + \mu\, \Delta t + \sigma\, \Delta W_k)\), which is
+\(u_N \sum_k \Delta t / (1 + \mu\, \Delta t + \sigma\, \Delta W_k)\).
+
+The adjoint methods `BacksolveAdjoint()` and `InterpolatingAdjoint()`
+also run on SDEs (`SDEAdjointProblem()`) and random ODEs
+(`RODEAdjointProblem()`). They need the noise path to be reproducible
+backward in time, which a `NoiseGrid` provides:
+
+```{r}
+tg <- seq(0, 1, by = 0.05)
+W <- 0.3 * sin(3.1 * tg) + 0.25 * sin(7.3 * tg)
+nprob2 <- SDEProblem(function(u, p, t) c(p[1] * u[1] - u[1] * u[2], -p[2] * u[2] + u[1] * u[2]),
+                     function(u, p, t) c(p[3] * u[1], p[3] * u[2]),
+                     c(1, 0.8), c(0, 1), c(1.2, 0.9, 0.3),
+                     noise = NoiseGrid(tg, cbind(W, -W)))
+ssol <- solve(nprob2, EulerHeun(), dt = 0.05)
+for (sa in list(BacksolveAdjoint(), InterpolatingAdjoint()))
+  print(adjoint_sensitivities(ssol, EulerHeun(), t = c(0.5, 1),
+                              dgdu_discrete = function(u, p, t, i) u, sensealg = sa)$dp)
+```
+
+With a Stratonovich method such as `EulerHeun()` the adjoint is solved with
+the same scheme; with an Ito method the drift is corrected first (see
+`StochasticTransformedFunction()`). With `noisemixing = TRUE` the full
+Jacobian of a diagonal noise term enters the adjoint.
+
+## Second order sensitivities
+
+`second_order_sensitivities(loss, prob, alg, ...)` returns the Hessian of
+a loss with respect to the parameters, and
+`second_order_sensitivity_product(loss, v, prob, alg, ...)` the product of
+the Hessian with a vector \(v\), the building block of Newton Krylov
+methods. Julia's `ForwardDiffOverAdjoint()` runs forward mode automatic
+differentiation over an adjoint gradient; modelcompR takes central
+differences of the adjoint gradient of `solve_gradient()`, so the solves
+should use tight tolerances.
+
+For \(u' = -p_1 p_2 u\), \(u(0) = 1\), the loss \(u(1) = e^{-p_1 p_2}\) has
+the Hessian
+\[
+e^{-p_1 p_2} \begin{pmatrix} p_2^2 & p_1 p_2 - 1 \\ p_1 p_2 - 1 & p_1^2 \end{pmatrix},
+\]
+which at \(p = (2, 0.5)\) is \(e^{-1} \operatorname{diag}(0.25, 4)\).
+
+```{r}
+eprob <- ODEProblem(function(u, p, t) -p[1] * p[2] * u, 1, c(0, 1), c(2, 0.5))
+eloss <- function(sol) sol$u[[length(sol$t)]]
+H <- second_order_sensitivities(eloss, eprob, Tsit5(), saveat = 1, reltol = 1e-12,
+                                abstol = 1e-12)
+round(H, 6)
+exp(-1) * diag(c(0.25, 4))
+second_order_sensitivity_product(eloss, c(1, 1), eprob, Tsit5(), saveat = 1,
+                                 reltol = 1e-12, abstol = 1e-12)
+```
+
+## Shadowing methods for chaotic systems
+
+In a chaotic system nearby trajectories separate exponentially, so the
+ordinary sensitivities of a long time average grow without bound and are
+useless. The average itself, for example the mean height \(\langle z
+\rangle\) of the Lorenz attractor, still depends smoothly on the
+parameters. Shadowing methods compute that derivative by finding a
+perturbed trajectory that stays close to the original one.
+
+* `ForwardLSS()` and `AdjointLSS()` (least squares shadowing) solve one
+  large least squares problem on the saved points of a solution; the
+  regularizer `TimeDilation()`, `CosWindowing()` or `Cos2Windowing()`
+  chooses how the time average is handled.
+* `NILSS()` and `NILSAS()` (non intrusive LSS and its adjoint) work in the
+  unstable subspace only, integrating a few tangent or adjoint solutions
+  over `nseg` segments of `nstep` saved points.
+
+The derivative of \(\langle z \rangle\) with respect to \(\rho\) is close
+to 1 (Lea, Allen and Haine, 2000).
+
+```{r}
+lorenz <- function(u, p, t) c(p[1] * (u[2] - u[1]), u[1] * (p[2] - u[3]) - u[2],
+                              u[1] * u[2] - p[3] * u[3])
+u_attr <- c(-12.808828477348253, -18.197181420445414, 25.88373061170027)
+lprob3 <- ODEProblem(lorenz, u_attr, c(0, 10), c(10, 28, 8 / 3))
+gz <- function(u, p, t) u[3]
+lsol <- solve(lprob3, Tsit5(), saveat = 0.02, reltol = 1e-8, abstol = 1e-8)
+lss_f <- shadow_forward(ForwardLSSProblem(lsol, ForwardLSS(g = gz)))
+lss_a <- shadow_adjoint(AdjointLSSProblem(lsol, AdjointLSS(g = gz)))
+rbind(ForwardLSS = lss_f, AdjointLSS = lss_a)
+```
+
+The second entry, the derivative in \(\rho\), is close to 1. NILSS integrates
+the tangent equations on short segments from the initial point:
+
+```{r}
+nilss <- shadow_forward(NILSSProblem(lprob3, NILSS(10, 51, g = gz, seed = 1)), Tsit5(),
+                        reltol = 1e-6, abstol = 1e-6)
+nilss
+```
+
+`NILSASProblem(sol, NILSAS(nseg, nstep, M, g = g), alg)` is the adjoint
+counterpart; it takes a dense solution and `M` homogeneous adjoint
+solutions (at least the number of positive Lyapunov exponents plus one).
+
+## Summary
+
+| Task | modelcompR | Julia |
+|:--|:--|:--|
+| forward sensitivities | `ODEForwardSensitivityProblem()`, `extract_local_sensitivities()` | the same |
+| adjoint of a cost | `adjoint_sensitivities()`, `ODEAdjointProblem()` | the same |
+| gradient of a loss of `solve()` | `solve_gradient(loss, prob, alg, ...)` | `Zygote.gradient` of a function calling `solve` |
+| DAE, SDE, RODE adjoints | `DAEAdjointProblem()`, `SDEAdjointProblem()`, `RODEAdjointProblem()` | the same |
+| steady states, nonlinear and optimization solutions | `SteadyStateAdjoint()`, `OptimizationAdjoint()` | the same |
+| Hessians | `second_order_sensitivities()`, `second_order_sensitivity_product()` | the same |
+| chaotic averages | `ForwardLSS()`, `AdjointLSS()`, `NILSS()`, `NILSAS()` with `shadow_forward()`, `shadow_adjoint()` | `shadow_forward`, `shadow_adjoint` |

@@ -1,0 +1,773 @@
+---
+title: "Problems, solutions and the ODE and DAE solvers"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Problems, solutions and the ODE and DAE solvers}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+```{r setup}
+suppressPackageStartupMessages(library(modelcompR))
+```
+
+This article covers the numerical half of the workflow: how a model becomes
+a problem, how `solve()` turns a problem into a solution, what the solution
+object holds, how to drive an integrator step by step, how to run ensembles
+of simulations, and which of the ported OrdinaryDiffEq.jl methods to pick
+for a given problem. The names follow SciMLBase.jl and OrdinaryDiffEq.jl,
+so Julia code translates almost line by line.
+
+## Problems from systems
+
+A problem bundles everything a solver needs: the right hand side function,
+the initial state `u0`, the parameter vector `p` and the time span. With
+ModelingToolkit the function is generated from a compiled `System`, and the
+values are given as a list of equations mapping variables to numbers, the
+`op` argument (the operating point).
+
+```{r}
+t <- t_nounits
+D <- D_nounits
+variables("x(t)", "y(t)")
+parameters("a = 1.5", "b = 1", "g = 3", "d = 1")
+lv <- mtkcompile(System(list(D(x) ~ a * x - b * x * y,
+                             D(y) ~ -g * y + d * x * y), t, name = "lv"))
+prob <- ODEProblem(lv, list(x ~ 1, y ~ 1), c(0, 10))
+prob
+```
+
+Parameters with a default (`a = 1.5` above) need not appear in `op`.
+The numeric fields are plain R vectors. Note that the order of the unknowns
+is chosen by structural simplification and need not be the order of
+declaration, so code should index by symbol rather than by position.
+
+```{r}
+prob$u0
+prob$p
+prob$tspan
+```
+
+### Symbolic indexing of problems
+
+Indexing a problem with a variable returns its initial value, and
+`prob$ps[...]` reads a parameter, as `prob[x]` and `prob.ps[a]` in
+ModelingToolkit. Any expression of the model can be evaluated at the
+initial point too.
+
+```{r}
+prob[x]
+prob$ps[a]
+prob[x * y + a]
+```
+
+Assigning through `prob$ps` changes a parameter and returns the updated
+problem. modelcompR does not export the SymbolicIndexingInterface getters
+and setters (`getu`, `setu`, `getp`, `setp`); the indexing operators above
+and `remake()` cover the same ground.
+
+```{r}
+prob$ps[a] <- 2
+prob$ps[a]
+```
+
+### remake
+
+`remake()` returns a modified copy and leaves the original alone. New
+values may be partial maps (only the given entries change) or full
+numeric vectors; the time span and solver keywords stored in the problem
+can be replaced as well.
+
+```{r}
+prob2 <- remake(prob, u0 = list(x ~ 2), p = list(g ~ 2.5), tspan = c(0, 5))
+c(prob2[x], prob2[y], prob2$ps[g])
+prob2$tspan
+c(prob[x], prob$ps[g])
+```
+
+## Problems from plain R functions
+
+Without a symbolic model, a problem is built from a function `f(u, p, t)`
+that returns the derivative, exactly as `ODEProblem(f, u0, tspan, p)` in
+SciMLBase. An unnamed fourth argument is the parameter vector.
+
+```{r}
+lotka <- function(u, p, t) c(p[1] * u[1] - p[2] * u[1] * u[2],
+                             -p[3] * u[2] + p[4] * u[1] * u[2])
+fprob <- ODEProblem(lotka, c(1, 1), c(0, 10), c(1.5, 1, 3, 1))
+fsol <- solve(fprob, Tsit5())
+fsol$u[[length(fsol$t)]]
+```
+
+Symbolic indexing needs a system, so for such problems the states are
+indexed by position: `fsol[1, ]` is the first state at every saved time.
+
+```{r}
+head(fsol[1, ])
+```
+
+A mass matrix `M u' = f(u, p, t)` is given with `mass_matrix`; a zero row
+makes the corresponding equation algebraic.
+
+```{r}
+mprob <- ODEProblem(function(u, p, t) c(-u[1] + u[2], u[1] + u[2] - 1),
+                    c(1, 0), c(0, 1), mass_matrix = diag(c(1, 0)))
+msol <- solve(mprob, Rodas5P())
+msol$u[[length(msol$t)]]
+```
+
+A fully implicit DAE `F(du, u, p, t) = 0` is a `DAEProblem`, which takes the
+residual function, initial derivatives `du0`, initial states `u0` and the
+time span, and optionally which components are differential.
+
+```{r}
+resid <- function(du, u, p, t) c(du[1] - u[2], u[2]^3 + u[2] + u[1]^3 + u[1])
+dprob <- DAEProblem(resid, c(-1, -1), c(1, -1), c(0, 2),
+                    differential_vars = c(TRUE, FALSE))
+dsol <- solve(dprob, DFBDF())
+dsol$u[[length(dsol$t)]]
+```
+
+`SteadyStateProblem()` asks for the state where the right hand side
+vanishes. It takes an ODE problem, a system or a function. Solving it
+without an algorithm uses a Newton type root finder, and `DynamicSS()`
+integrates to steady state instead.
+
+```{r}
+ss <- SteadyStateProblem(function(u, p, t) c(1 - u[1], u[1] - 2 * u[2]), u0 = c(0, 0))
+solve(ss)$u
+solve(ss, DynamicSS())$u
+```
+
+## solve() and its options
+
+`solve(prob, alg, ...)` integrates the problem with algorithm `alg`; when
+the algorithm is missing, `DefaultODEAlgorithm()` is used (see below). The
+common keywords are those of the DifferentialEquations.jl common solver
+options.
+
+* `saveat`: a step (save at every multiple) or a vector of times. Values are
+  then interpolated at those times and the solution is no longer dense.
+* `save_everystep = FALSE`: save only the start and the end.
+* `tstops`: times the integrator must step to exactly, such as known
+  discontinuities.
+* `dense`: keep the full interpolant (the default when saving every step).
+* `reltol`, `abstol`: the relative and absolute error tolerances of the
+  adaptive step size controller (defaults `1e-3` and `1e-6`).
+* `dt`: the initial step, or the fixed step when `adaptive = FALSE` or the
+  method is not adaptive.
+* `maxiters`: the maximum number of steps.
+* `callback`: event handling (see the events article), plus `dtmin`,
+  `dtmax`, `isoutofdomain`, `unstable_check` and the controller settings
+  documented in `?solve.ODEProblem`.
+
+```{r}
+sol <- solve(prob, Tsit5(), saveat = 1)
+sol$t
+sol <- solve(prob, Tsit5(), saveat = c(0, 2.5, 10))
+sol$t
+sol$dense
+length(solve(prob, Tsit5(), save_everystep = FALSE)$t)
+2.5 %in% solve(prob, Tsit5(), tstops = 2.5)$t
+length(solve(prob, RK4(), dt = 0.1, adaptive = FALSE)$t)
+```
+
+Tightening the tolerances costs more steps:
+
+```{r}
+sapply(c(1e-3, 1e-6, 1e-9), function(tol)
+  length(solve(prob, Tsit5(), reltol = tol, abstol = tol)$t))
+```
+
+When the step budget runs out, the solve stops early with the return code
+`MaxIters` and a warning, which we expect here:
+
+```{r}
+short <- suppressWarnings(solve(prob, Tsit5(), maxiters = 5))
+short$retcode
+```
+
+Unknown keywords are an error of class `CommonKwargError` rather than
+being silently ignored, which catches typos such as `relto`. The message
+lists every accepted keyword and ends with the offending one;
+`kwargshandle = "warn"` turns the error into a warning.
+
+```{r}
+msg <- tryCatch(solve(prob, Tsit5(), relto = 1e-8), CommonKwargError = function(e) conditionMessage(e))
+tail(strsplit(msg, "\n")[[1]], 1)
+```
+
+A callback is passed with `callback`. Here a `PresetTimeCallback` doubles
+the prey at `t = 5`; the events article treats callbacks in detail.
+
+```{r}
+xi <- match("x(t)", names(prob$u0))
+cb <- PresetTimeCallback(5, function(integ) integ$u[xi] <- 2 * integ$u[xi])
+csol <- solve(prob, Tsit5(), callback = cb)
+csol(c(4.999, 5.001), idxs = x)
+```
+
+## The solution object
+
+A solution stores the saved times `sol$t`, the saved states `sol$u` (a
+list with one state vector per time, as in Julia), the return code, the
+problem, the algorithm and the solver statistics.
+
+```{r}
+sol <- solve(prob, Tsit5())
+sol
+sol$retcode
+successful_retcode(sol$retcode)
+length(sol$t)
+sol$u[[2]]
+```
+
+`sol$stats` counts the work done: right hand side evaluations `nf`,
+Jacobians `njacs`, linear solves `nsolve`, factorizations `nw`, and
+accepted and rejected steps.
+
+```{r}
+unlist(sol$stats)
+```
+
+### Indexing
+
+`sol[x]` is the time series of a variable, and any symbolic expression of
+the model, including observed variables and parameters, can be indexed.
+A second index selects saved time points; a list of variables gives a
+matrix.
+
+```{r}
+head(sol[x])
+sol[x, 1:3]
+head(sol[a * x - b * x * y])
+head(sol[list(x, y)], 3)
+```
+
+### Interpolation
+
+Calling the solution as a function evaluates the dense interpolant, the
+equivalent of `sol(t)` in Julia. `idxs` selects variables or expressions,
+and `deriv` gives derivatives of the interpolant.
+
+```{r}
+sol(2.5)
+sol(c(1, 2, 3), idxs = x)
+sol(2.5, idxs = x, deriv = 1)
+```
+
+### Conversion and plotting
+
+`as.data.frame()` and `as.matrix()` give the saved values as a table, with
+one column per state (and per observed variable for system problems).
+`plot()` draws the dense solution; `idxs` selects variables, and a pair of
+variables gives a phase plot.
+
+```{r}
+head(as.data.frame(sol), 3)
+dim(as.matrix(sol))
+plot(sol)
+plot(sol, idxs = list(x, y))
+```
+
+## The integrator interface
+
+`init()` builds an integrator, the object `solve()` uses internally, and
+returns it without integrating; the integrator can then be advanced one
+step at a time and modified between steps. These are `init`, `step!`,
+`solve!`, `reinit!`, `set_u!` and friends in SciMLBase. In R the
+functions that modify the integrator are named without the bang:
+`step_integrator()`, `solve_integrator()`, `set_u()`, `set_t()`,
+`add_tstop()`, `add_saveat()`, `set_proposed_dt()`, `reinit()` and
+`terminate()`.
+
+```{r}
+decay <- ODEProblem(function(u, p, t) -p[1] * u, 1, c(0, 1), 2)
+integ <- init(decay, Tsit5())
+integ
+step_integrator(integ)
+c(integ$t, integ$u, integ$dt)
+```
+
+`step_integrator(integ, dt, stop_at_tdt = TRUE)` advances by exactly `dt`.
+Between steps the state can be changed with `set_u()`, a stop time added
+with `add_tstop()`, and `integ$interp(t)` evaluates the interpolant of the
+last step.
+
+```{r}
+step_integrator(integ, 0.25, stop_at_tdt = TRUE)
+integ$t
+integ$interp(integ$t - 0.01)
+set_u(integ, 2 * integ$u)
+add_tstop(integ, 0.8)
+rest <- solve_integrator(integ)
+rest$t
+```
+
+`reinit()` restarts from new initial values, and a loop over
+`step_integrator()` gives full control of the integration. `get_du()` is
+the current derivative and `terminate()` ends the solve.
+
+```{r}
+reinit(integ, u0 = 3)
+while (integ$t < 0.5) step_integrator(integ)
+c(integ$t, integ$u, get_du(integ))
+terminate(integ)
+solve_integrator(integ)$retcode
+```
+
+## Ensembles
+
+An `EnsembleProblem` solves the same problem many times with variations,
+as in DiffEqBase. `prob_func(prob, i, repeat_)` builds trajectory `i`,
+typically with `remake()`; `output_func(sol, i)` transforms each solution
+and returns a list of the output and a rerun flag; `reduction` combines
+batches. The trajectories run serially by default, and
+`EnsembleThreads()` or `EnsembleDistributed()` run them on parallel
+workers.
+
+```{r}
+ens <- EnsembleProblem(decay, prob_func = function(prob, i, repeat_) remake(prob, p = i / 2))
+sim <- solve(ens, Tsit5(), trajectories = 10, saveat = 0.1)
+length(sim)
+sim[[3]](1)
+```
+
+The ensemble analysis functions summarize the trajectories at a saved step
+(`timestep_*`) or at an arbitrary time through the interpolants
+(`timepoint_*`).
+
+```{r}
+timestep_mean(sim, 11)
+timepoint_meanvar(sim, 0.5)
+timepoint_quantile(sim, 0.5, 0.9)
+```
+
+`EnsembleSummary()` collects the mean, the variance and two quantiles over
+time, and has a plot method that draws the mean with the quantile band
+dashed. The axis range follows the mean, so `ylim` is set to show the whole
+band.
+
+```{r}
+summ <- EnsembleSummary(sim, quantiles = c(0.1, 0.9))
+names(summ)
+plot(summ, ylim = range(summ$qlow, summ$qhigh))
+```
+
+An `output_func` keeps only what is needed; here the final value of each
+trajectory, with random initial values drawn from a seeded stream.
+
+```{r}
+ens2 <- EnsembleProblem(decay,
+  prob_func = function(prob, i, repeat_) remake(prob, u0 = stats::runif(1)),
+  output_func = function(sol, i) list(sol$u[[length(sol$t)]], FALSE))
+unlist(solve(ens2, Tsit5(), trajectories = 5, seed = 1)$u)
+```
+
+## The solver catalog
+
+The algorithms are grouped as in OrdinaryDiffEq.jl. Each constructor
+returns an algorithm object whose options are its arguments. For the
+examples we use two test problems: a harmonic oscillator, nonstiff, and
+a semidiscretized heat equation $u_t = u_{xx}$ on 20 interior grid points,
+whose Laplacian has eigenvalues down to about $-4/\Delta x^2$, which makes
+it stiff. Its exact solution is a decaying sine with the smallest discrete
+eigenvalue as its rate.
+
+```{r}
+osc <- ODEProblem(function(u, p, t) c(u[2], -u[1]), c(1, 0), c(0, 2 * pi))
+err <- function(s) max(abs(s$u[[length(s$t)]] - c(1, 0)))
+
+N <- 20
+dx <- 1 / (N + 1)
+lap <- diag(-2, N)
+lap[cbind(1:(N - 1), 2:N)] <- 1
+lap[cbind(2:N, 1:(N - 1))] <- 1
+lap <- lap / dx^2
+xs <- seq_len(N) * dx
+lambda1 <- -4 / dx^2 * sin(pi * dx / 2)^2
+heat <- ODEProblem(function(u, p, t) as.vector(lap %*% u), sin(pi * xs), c(0, 0.5))
+heat_exact <- exp(lambda1 * 0.5) * sin(pi * xs)
+heat_err <- function(s) max(abs(s$u[[length(s$t)]] - heat_exact))
+
+compare <- function(prob, algs, errfun, ...) {
+  do.call(rbind, lapply(algs, function(alg) {
+    s <- solve(prob, alg, ...)
+    data.frame(alg = alg$name, retcode = s$retcode, steps = s$stats$naccept,
+               nf = s$stats$nf, error = signif(errfun(s), 3))
+  }))
+}
+```
+
+### Explicit Runge Kutta methods
+
+The explicit methods are the right choice for nonstiff problems.
+`Tsit5()` is the recommended default; `DP5()` is the classic
+Dormand Prince pair; `BS3()` is cheap at loose tolerances; `Vern7()` and
+`Vern9()` are efficient at tight tolerances. The low order methods
+`Euler()`, `Midpoint()`, `Heun()`, `Ralston()` and `RK4()` are mostly of
+didactic interest. `Euler()` always takes the fixed step `dt`; the others
+carry an error estimate and adapt the step unless `adaptive = FALSE`, which
+is used here to compare them at the same step.
+
+```{r}
+compare(osc, list(BS3(), Tsit5(), DP5(), Vern7(), Vern9()), err,
+        reltol = 1e-8, abstol = 1e-10)
+compare(osc, list(Euler(), Midpoint(), Heun(), Ralston(), RK4()), err,
+        dt = 0.01, adaptive = FALSE)
+```
+
+The two stage methods `Midpoint()`, `Heun()` and `Ralston()` give the same
+error: on a linear problem every explicit two stage method of order two has
+the same stability polynomial, so they produce identical steps.
+
+Strong stability preserving methods (`SSPRK22()`, `SSPRK33()`,
+`SSPRK432()` and others) keep the monotonicity properties of forward Euler
+under a step size restriction, which matters for hyperbolic PDEs. The
+low storage methods (`CarpenterKennedy2N54()`, `ORK256()`, the
+`CKLLSRK*`, `DGLDDRK*` and `NDBLSRK*` families) need only two or three
+registers per state.
+
+```{r}
+compare(osc, list(SSPRK22(), SSPRK33(), SSPRK432(), CarpenterKennedy2N54(), ORK256()), err,
+        dt = 0.01, adaptive = FALSE)
+```
+
+### Stiff solvers
+
+A problem is stiff when stability rather than accuracy limits the step of
+an explicit method. On the heat equation `Tsit5()` is held to small steps
+by stability long after the solution has become smooth, while the implicit
+methods take steps limited only by accuracy:
+
+```{r}
+compare(heat, list(Tsit5(), Rodas5P(), KenCarp4(), FBDF()), heat_err,
+        reltol = 1e-6, abstol = 1e-8)
+```
+
+The main families of implicit methods are:
+
+* **Rosenbrock** methods (`Rosenbrock23()`, `Rodas4()`, `Rodas5P()` and many
+  more) solve one linear system per stage instead of a nonlinear one.
+  `Rodas5P()` is a strong default for small and medium stiff systems, and
+  `Rosenbrock23()` at loose tolerances.
+* **SDIRK** methods (`ImplicitEuler()`, `Trapezoid()`, `TRBDF2()`,
+  `Kvaerno4()`, `KenCarp4()` and others) solve a nonlinear system per stage
+  with Newton's method; the `KenCarp*` methods are also IMEX methods.
+* **BDF** multistep methods (`FBDF()`, `QNDF()`, `ABDF2()` and
+  `NordsieckBDF()`) reuse past steps and scale best to large systems.
+* **Fully implicit Runge Kutta** methods, `RadauIIA3()`, `RadauIIA5()`,
+  `RadauIIA9()` and `AdaptiveRadau()`, have very high order and excel at
+  tight tolerances.
+* **Extrapolation** methods (`ImplicitEulerExtrapolation()`,
+  `ImplicitHairerWannerExtrapolation()`, and the explicit
+  `ExtrapolationMidpointDeuflhard()`) vary their order adaptively.
+
+```{r}
+compare(heat, list(Rosenbrock23(), TRBDF2(), QNDF(), RadauIIA5(),
+                   ImplicitEulerExtrapolation()), heat_err, reltol = 1e-6, abstol = 1e-8)
+```
+
+### Exponential integrators
+
+Exponential integrators treat the linear part of the problem exactly with
+matrix exponentials (computed by Krylov projection for the adaptive
+`Exprb32()` and `Exprb43()`, and in the fixed step `Exp4()` and
+`EXPRB53s3()`). These exponential Rosenbrock methods work with the full
+Jacobian, so a plain `ODEProblem` is enough. On a linear problem they are
+nearly exact.
+
+```{r}
+compare(heat, list(Exprb32(), Exprb43()), heat_err, reltol = 1e-6, abstol = 1e-8)
+compare(heat, list(Exp4(), EXPRB53s3()), heat_err, dt = 0.01)
+```
+
+The fixed step exponential Runge Kutta methods (`LawsonEuler()`,
+`NorsettEuler()`, `ETDRK4()`, `HochOst4()`) take a semilinear problem
+$u' = A u + f(u, p, t)$, given as a `SplitODEProblem` whose first part is a
+`MatrixOperator`. Here a constant source term is added to the heat
+equation, and the errors are measured against a tight `Rodas5P()`
+solution.
+
+```{r}
+src <- function(u, p, t) 0 * u + 1
+forced <- ODEProblem(function(u, p, t) as.vector(lap %*% u) + 1, sin(pi * xs), c(0, 0.5))
+ref <- solve(forced, Rodas5P(), reltol = 1e-10, abstol = 1e-12)
+ref <- ref$u[[length(ref$t)]]
+ref_err <- function(s) max(abs(s$u[[length(s$t)]] - ref))
+semi <- SplitODEProblem(MatrixOperator(lap), src, sin(pi * xs), c(0, 0.5))
+compare(semi, list(LawsonEuler(), NorsettEuler(), ETDRK4(), HochOst4()), ref_err, dt = 0.01)
+```
+
+The exponential time differencing methods (`NorsettEuler()`, `ETDRK4()`,
+`HochOst4()`) integrate a constant source exactly, so their error is at
+rounding level; the Lawson method, which exponentiates only the linear
+part, is first order here.
+
+### IMEX and multirate methods
+
+A `SplitODEProblem(f1, f2, u0, tspan)` represents $u' = f_1(u) + f_2(u)$
+where $f_1$ is stiff and $f_2$ is not. IMEX methods treat $f_1$
+implicitly and $f_2$ explicitly: the additive `KenCarp*` methods, the
+multistep `CNAB2()`, `CNLF2()` and `SBDF2()` to `SBDF4()`, and
+`IMEXEuler()`. The multistep methods need a fixed `dt`.
+
+```{r}
+split <- SplitODEProblem(function(u, p, t) as.vector(lap %*% u), src,
+                         sin(pi * xs), c(0, 0.5))
+compare(split, list(KenCarp4(), CNAB2(), SBDF2(), IMEXEuler()), ref_err, dt = 0.01)
+```
+
+`KenCarp4()` is adaptive (`dt` is only its first step); the others take the
+fixed step.
+
+Multirate methods such as `MREEF()` take several small steps of the fast
+part $f_1$ for each step of the slow part $f_2$; `nf` counts the
+evaluations of $f_1$ and `nf2` those of $f_2$.
+
+```{r}
+fast_slow <- SplitODEProblem(function(u, p, t) c(-10 * u[1] + u[2], -u[2]),
+                             function(u, p, t) c(0.1 * sin(t), 0.1 * u[1]),
+                             c(1, 1), c(0, 1))
+mr <- solve(fast_slow, MREEF(), dt = 0.1)
+unlist(mr$stats[c("nf", "nf2")])
+```
+
+### Stabilized explicit methods
+
+Runge Kutta Chebyshev methods, `RKC()`, `ROCK2()`, `ROCK4()`, `SERK2()` and
+`ESERK4()`, are explicit methods with stability regions stretched along the
+negative real axis. They suit large, moderately stiff problems with real
+eigenvalues, like diffusion, where no linear algebra is wanted; the number
+of stages adapts to a running estimate of the spectral radius.
+
+```{r}
+compare(heat, list(RKC(), ROCK4()), heat_err, reltol = 1e-6, abstol = 1e-8)
+```
+
+## Automatic stiffness detection and the default algorithm
+
+`AutoSwitch(nonstiff, stiff)` monitors a stiffness estimate and switches
+between two methods; `AutoTsit5(alg)` and `AutoVern7(alg)` (also
+`AutoVern6`, `AutoVern8`, `AutoVern9`) pair the named explicit method with a
+stiff one, as in OrdinaryDiffEq.jl.
+
+When no algorithm is given, `solve()` uses `DefaultODEAlgorithm()`, the
+OrdinaryDiffEqDefault choice: it starts with `Tsit5()` (`Vern7()` when
+`reltol < 1e-6`), and on stiffness switches to `Rosenbrock23()` (`Rodas5P()`
+when `reltol < 1e-6`) for up to 50 states and `FBDF()` above. With a non
+identity mass matrix it uses `Rodas5P()` or `FBDF()` throughout.
+`sol$alg_choice` records the method of each step (1 Tsit5, 2 Vern7,
+3 Rosenbrock23, 4 Rodas5P, 5 FBDF). For an `AutoSwitch()` algorithm it is
+1 for the nonstiff and 2 for the stiff method.
+
+```{r}
+table(solve(osc)$alg_choice)
+table(solve(heat)$alg_choice)
+table(solve(heat, AutoTsit5(Rodas5P()))$alg_choice)
+```
+
+The oscillator never leaves `Tsit5()`; on the heat equation the first
+steps are taken with `Tsit5()` while the transient is resolved, and the
+stiff method takes over once stability limits the step.
+
+## DAE solvers
+
+Differential algebraic equations arise naturally from acausal models. There
+are two ways to solve them. When `mtkcompile()` leaves algebraic equations,
+`ODEProblem()` builds a mass matrix problem, solved by the Rosenbrock
+methods, `RadauIIA5()`, the BDF methods and the default algorithm.
+
+```{r}
+dae <- mtkcompile(System(list(D(x) ~ y, 0 ~ y^3 + y + x^3 + x), t, name = "dae"))
+equations(dae)
+mm_prob <- ODEProblem(dae, list(x ~ 1, y ~ -1), c(0, 2))
+mm_prob$f$mass_matrix
+mm_sol <- solve(mm_prob, Rodas5P())
+c(tail(mm_sol[x], 1), exp(-2))
+```
+
+`DAEProblem()` builds the fully implicit form instead, solved by
+`DFBDF()` (variable order BDF, the analogue of SUNDIALS IDA) and
+`DImplicitEuler()`; initial derivatives are given as `D(x) ~ value`. The
+default algorithm for a `DAEProblem` is `DFBDF()`.
+
+```{r}
+imp_prob <- DAEProblem(dae, list(x ~ 1, y ~ -1, D(x) ~ -1), c(0, 2))
+sapply(list(DFBDF(), DImplicitEuler()), function(alg) {
+  s <- solve(imp_prob, alg, reltol = 1e-6, abstol = 1e-8)
+  c(steps = s$stats$naccept, x_end = tail(s[x], 1))
+})
+solve(imp_prob)$alg$name
+```
+
+## Solver options
+
+### Automatic differentiation
+
+Implicit methods need the Jacobian of the right hand side. By default it is
+computed by forward mode automatic differentiation (`AutoForwardDiff()`),
+which is exact. `AutoFiniteDiff()` uses finite differences (forward by
+default, `AutoFiniteDiff("central")` for central ones), which costs extra
+`f` evaluations. `AutoSparse(AutoForwardDiff())` detects the sparsity
+pattern and colors the columns so that fewer directional derivatives are
+needed; on this two state problem there is nothing to save, so its counts
+match forward mode, and it pays off for large banded or sparse Jacobians.
+System problems can also use the symbolic Jacobian with
+`ODEProblem(sys, ..., jac = TRUE)`.
+
+```{r}
+vdp <- ODEProblem(function(u, p, t) c(u[2], 10 * (1 - u[1]^2) * u[2] - u[1]), c(2, 0), c(0, 6))
+sapply(list(forward = AutoForwardDiff(), finite = AutoFiniteDiff(),
+            sparse = AutoSparse(AutoForwardDiff())), function(ad) {
+  s <- solve(vdp, Rodas5P(autodiff = ad), reltol = 1e-6, abstol = 1e-8)
+  c(nf = s$stats$nf, njacs = s$stats$njacs, u1 = s$u[[length(s$t)]][1])
+})
+```
+
+### Nonlinear solvers
+
+The SDIRK methods solve their stage equations with the solver given by
+`nlsolve`: `NLNewton()` (the default; `kappa` is the convergence
+tolerance relative to the error tolerance and `max_iter` the iteration
+limit), the fixed point iteration `NLFunctional()` and its Anderson
+accelerated form `NLAnderson()`. The fixed point iterations need no
+Jacobian, and so only converge on mildly stiff problems; Anderson
+acceleration combines the previous iterates and here needs fewer function
+evaluations than the plain iteration.
+
+```{r}
+mild <- ODEProblem(function(u, p, t) c(-20 * u[1] + u[2]^2, -u[2] + u[1]), c(1, 1), c(0, 1))
+nl <- list(newton = NLNewton(), tight = NLNewton(kappa = 1e-6),
+           functional = NLFunctional(), anderson = NLAnderson())
+sapply(nl, function(n) {
+  s <- solve(mild, TRBDF2(nlsolve = n))
+  unlist(s$stats[c("nf", "njacs", "nsolve", "naccept")])
+})
+```
+
+### Predictors
+
+The initial guess of each stage solve is set by the `predictor` argument,
+one of the values of `Predictor` (for instance `Predictor$Trivial`,
+`Predictor$Linear`, the default of most SDIRK methods, or
+`Predictor$MaxOrder`, which extrapolates the last step's interpolant). A
+function `predictor(uprev, p, t, dt)` given to `NLNewton()` replaces the
+guess at every stage.
+
+```{r}
+sapply(list(trivial = Predictor$Trivial, linear = Predictor$Linear,
+            maxorder = Predictor$MaxOrder), function(pr) {
+  s <- solve(mild, KenCarp4(predictor = pr))
+  s$stats$nf
+})
+```
+
+### Step limiters
+
+A step limiter is a function `limiter(u, integ, p, t)` that returns the
+state to keep after each accepted step, for instance a projection onto an
+invariant. It is a `solve()` keyword, and also an
+argument of the implicit and SSP constructors (`stage_limiter` for the
+SSP and Rosenbrock methods acts after every stage). Here the oscillator is
+projected onto the unit circle.
+
+```{r}
+proj <- function(u, integ, p, t) u / sqrt(sum(u^2))
+free <- solve(osc, Tsit5(), reltol = 1e-3, abstol = 1e-6)
+kept <- solve(osc, Tsit5(), reltol = 1e-3, abstol = 1e-6, step_limiter = proj)
+c(free = max(abs(rowSums(free[]^2) - 1)), limited = max(abs(rowSums(kept[]^2) - 1)))
+```
+
+The `StepsizeLimiter(dtFE)` callback is different: it caps the step size
+by a function `dtFE(u, p, t)`, such as a CFL condition, times a safety
+factor of 9/10.
+
+```{r}
+capped <- solve(osc, Tsit5(), callback = StepsizeLimiter(function(u, p, t) 0.05))
+max(diff(capped$t))
+```
+
+## Complex states
+
+States may be complex, as for the Schrödinger equation. The explicit
+methods work as they are. Implicit methods should be given
+`AutoFiniteDiff()`: the forward mode duals are real, so with the default
+`AutoForwardDiff()` the imaginary part of the Jacobian is discarded (with a
+warning "imaginary parts discarded in coercion").
+
+```{r}
+H <- function(t) -1i * matrix(c(t, 1, 1, -t), 2)
+lz <- ODEProblem(function(u, p, t) as.vector(H(t) %*% u), c(1 + 0i, 0), c(-1, 1))
+zsol <- solve(lz, Tsit5(), reltol = 1e-8, abstol = 1e-10)
+zsol(1)
+sum(Mod(zsol(1))^2)
+zimp <- solve(lz, Rosenbrock23(autodiff = AutoFiniteDiff()))
+sum(Mod(zimp(1))^2)
+```
+
+## A stiff benchmark: the Robertson problem
+
+The Robertson chemical kinetics problem is the classic stiff test: its rate
+constants span nine orders of magnitude and the solution evolves over
+$10^5$ time units. Comparing the statistics of several stiff solvers at the
+same tolerances shows the trade offs: Rosenbrock methods compute a new
+Jacobian on every step; BDF methods reuse it over many steps at the cost of
+more, smaller steps; `RadauIIA5()` takes few large steps.
+
+```{r}
+rober <- function(u, p, t) {
+  k1 <- p[1]; k2 <- p[2]; k3 <- p[3]
+  c(-k1 * u[1] + k3 * u[2] * u[3],
+    k1 * u[1] - k2 * u[2]^2 - k3 * u[2] * u[3],
+    k2 * u[2]^2)
+}
+rprob <- ODEProblem(rober, c(1, 0, 0), c(0, 1e5), c(0.04, 3e7, 1e4))
+rober_algs <- list(Rosenbrock23(), Rodas5P(), KenCarp4(), FBDF(), QNDF(), RadauIIA5())
+rober_tab <- do.call(rbind, lapply(rober_algs, function(alg) {
+  s <- solve(rprob, alg, reltol = 1e-6, abstol = 1e-8)
+  u <- s$u[[length(s$t)]]
+  data.frame(alg = alg$name, retcode = s$retcode, naccept = s$stats$naccept,
+             nreject = s$stats$nreject, nf = s$stats$nf, njacs = s$stats$njacs,
+             y3_end = signif(u[3], 6), mass = signif(sum(u), 10))
+}))
+rober_tab
+```
+
+All methods agree on the final state and conserve the total mass. The
+default algorithm detects the stiffness after a few `Tsit5()` steps and
+hands over to `Rosenbrock23()`:
+
+```{r}
+rdef <- solve(rprob)
+table(rdef$alg_choice)
+```
+
+```{r}
+rs <- solve(rprob, Rodas5P(), reltol = 1e-6, abstol = 1e-8)
+ts <- 10^seq(-5, 5, length.out = 200)
+Y <- rs(ts)
+matplot(ts, Y * rep(c(1, 1e4, 1), each = length(ts)), type = "l", log = "x", lty = 1,
+        xlab = "t", ylab = "concentration (y2 scaled by 1e4)")
+legend("right", legend = c("y1", "1e4 y2", "y3"), col = 1:3, lty = 1, bty = "n")
+```
+
+## Julia equivalents
+
+| Julia (SciML) | modelcompR |
+|---|---|
+| `ODEProblem(sys, op, tspan)` | `ODEProblem(sys, op, tspan)` |
+| `prob[x]`, `prob.ps[a]` | `prob[x]`, `prob$ps[a]` |
+| `prob.ps[a] = 2` | `prob$ps[a] <- 2` |
+| `remake(prob; u0, p, tspan)` | `remake(prob, u0 = , p = , tspan = )` |
+| `sol[x]`, `sol(t; idxs = x)` | `sol[x]`, `sol(t, idxs = x)` |
+| `sol.t`, `sol.u`, `sol.stats`, `sol.retcode` | `sol$t`, `sol$u`, `sol$stats`, `sol$retcode` |
+| `init`, `step!`, `solve!` | `init()`, `step_integrator()`, `solve_integrator()` |
+| `reinit!`, `set_u!`, `add_tstop!`, `terminate!` | `reinit()`, `set_u()`, `add_tstop()`, `terminate()` |
+| `EnsembleProblem`, `EnsembleSummary` | `EnsembleProblem()`, `EnsembleSummary()` |
+| `Rodas5P(autodiff = AutoFiniteDiff())` | `Rodas5P(autodiff = AutoFiniteDiff())` |
+| `KenCarp4(nlsolve = NLAnderson())` | `KenCarp4(nlsolve = NLAnderson())` |

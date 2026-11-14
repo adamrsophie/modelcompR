@@ -1,0 +1,512 @@
+---
+title: "Linearization, analysis points and control analysis"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Linearization, analysis points and control analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6, fig.height = 4)
+```
+
+Most tools of control engineering work on linear models. A nonlinear model
+\[
+x' = f(x, u, p, t), \qquad y = h(x, u, p, t)
+\]
+with inputs \(u\) and outputs \(y\) is approximated near an operating
+point \((x_0, u_0)\) by the linear state space model
+\[
+\delta x' = A\, \delta x + B\, \delta u, \qquad \delta y = C\, \delta x + D\, \delta u,
+\]
+with the Jacobians \(A = \partial f / \partial x\), \(B = \partial f /
+\partial u\), \(C = \partial h / \partial x\) and \(D = \partial h /
+\partial u\). modelcompR computes these matrices from the symbolic model,
+as ModelingToolkit's `linearize` does, and supports the analysis points
+of ModelingToolkit for the sensitivity functions of feedback loops. This
+article covers
+
+* `linearize()` with named inputs and outputs and operating points,
+* symbolic linearization, linearization functions and problems,
+* differential algebraic models,
+* using the state space matrices in base R: poles, frequency responses
+  and step responses,
+* analysis points, sensitivity functions and loop transfer functions of a
+  feedback loop built from components,
+* opening loops, and generating control functions.
+
+```{r setup, message = FALSE}
+suppressPackageStartupMessages(library(modelcompR))
+t <- t_nounits
+D <- D_nounits
+```
+
+## Linearizing a model
+
+A damped pendulum driven by a torque \(\tau\) has the angle \(\theta\) as
+its measured output. Inputs and outputs are marked with the `input` and
+`output` metadata of their variables, like `[input = true]` in Julia.
+
+```{r}
+theta <- Variable("theta", t)
+omega <- Variable("omega", t)
+tau <- Variable("tau", t, input = TRUE)
+angle <- Variable("angle", t, output = TRUE)
+g <- Parameter("g", default = 9.81)
+len <- Parameter("len", default = 1)
+b <- Parameter("b", default = 0.5)
+pend <- System(list(D(theta) ~ omega,
+                    D(omega) ~ -g / len * sin(theta) - b * omega + tau,
+                    angle ~ theta), t, name = "pend")
+```
+
+`linearize(sys, inputs, outputs, op = ...)` takes the unsimplified model.
+It compiles the model with the inputs kept as external signals, solves for
+a consistent operating point and evaluates the Jacobians there. The result
+holds the four matrices, the names of the `states` (the order of the
+unknowns of the simplified system), the simplified system `sys` and the
+operating point used, `extras`.
+
+```{r}
+down <- linearize(pend, list(tau), list(angle), op = list(theta ~ 0, omega ~ 0, tau ~ 0))
+down$states
+down[c("A", "B", "C", "D")]
+```
+
+The operating point is a list of equations `variable ~ value`; parameters
+not given take their defaults, and `p` gives further parameter values.
+Linearizing at the upright position gives an unstable model: one
+eigenvalue of \(A\) is positive.
+
+```{r}
+up <- linearize(pend, list(tau), list(angle), op = list(theta ~ pi, omega ~ 0, tau ~ 0))
+up$A
+eigen(down$A)$values
+eigen(up$A)$values
+```
+
+A different damping is passed with `p`:
+
+```{r}
+linearize(pend, list(tau), list(angle), op = list(theta ~ 0, omega ~ 0, tau ~ 0),
+          p = list(b ~ 2))$A
+```
+
+### Symbolic linearization
+
+`linearize_symbolic()` returns the same matrices as symbolic expressions,
+along with the Jacobian blocks it is built from. It shows how the
+linearization depends on the operating point and the parameters.
+
+```{r}
+sym <- linearize_symbolic(pend, list(tau), list(angle))
+sym$A
+sym$B
+```
+
+## Operating points and repeated linearization
+
+Each call of `linearize()` compiles the model. When the same model is
+linearized at many operating points, the compiled form can be reused.
+
+### Linearization functions
+
+`linearization_function(sys, inputs, outputs, op)` (ModelingToolkit's
+`linearization_function`) compiles once and returns `lin_fun`, a function
+of the numeric state, parameters and time that returns the Jacobian
+blocks, and the simplified system `sys`. `linearize(ssys, lin_fun, op =
+...)` then linearizes without compiling again.
+
+```{r}
+lf <- linearization_function(pend, list(tau), list(angle),
+                             op = list(theta ~ 0, omega ~ 0, tau ~ 0))
+lf$lin_fun
+linearize(lf$sys, lf$lin_fun, op = list(theta ~ 1))$A
+```
+
+The blocks follow the semi-explicit form \(x' = f(x, z, u)\), \(0 = g(x,
+z, u)\), \(y = h(x, z, u)\), where \(z\) are algebraic unknowns:
+
+```{r}
+unknowns(lf$sys)
+parameters(lf$sys)
+blocks <- lf$lin_fun(c(0.5, 0), c(1, 9.81, 0.5, 0), 0)
+names(blocks)
+blocks$f_x
+blocks$f_u
+```
+
+The numeric vectors are ordered as `unknowns(lf$sys)` and
+`parameters(lf$sys)`; the input \(\tau\) has become the last parameter of
+the compiled system.
+
+### Linearization problems
+
+`LinearizationProblem()` wraps a linearization function with a mutable
+operating point. Values are set with `prob[x] <- value`, and `solve()`
+linearizes at the current point; this mirrors `LinearizationProblem` and
+`setu`/`setp` in Julia.
+
+```{r}
+lp <- LinearizationProblem(pend, list(tau), list(angle),
+                           op = list(theta ~ 0, omega ~ 0, tau ~ 0))
+lp
+angles <- seq(0, pi, length.out = 5)
+vapply(angles, function(a) {
+  lp[theta] <- a
+  solve(lp)$A[2, 1]
+}, 0)
+```
+
+The entry \(A_{21} = -(g / \ell) \cos\theta\) changes sign at
+\(\theta = \pi / 2\), where gravity stops pulling the pendulum back.
+
+### Operating points along a trajectory
+
+`LinearizationOpPoint(sol, t)` takes the operating point from a
+simulation. With several times, `linearize()` returns one linearization
+per time, which is how gain scheduled controllers are designed.
+
+```{r}
+sim <- ODEProblem(mtkcompile(pend, inputs = list(tau)),
+                  list(theta ~ 2, omega ~ 0, tau ~ 0), c(0, 5))
+psol <- solve(sim, Tsit5())
+along <- linearize(pend, list(tau), list(angle), op = LinearizationOpPoint(psol, c(0, 2.5, 5)))
+vapply(along, function(l) l$A[2, 1], 0)
+-9.81 * cos(psol(c(0, 2.5, 5))[, 1])
+```
+
+## Algebraic unknowns
+
+For a model with algebraic equations, the state of ModelingToolkit's
+linearization contains all unknowns of the simplified system,
+\((x, z)\), and
+\(A = \begin{pmatrix} f_x & f_z \\ G f_x & G f_z \end{pmatrix}\) with
+\(G = -g_z^{-1} g_x\). With `eliminate_algebraic = TRUE` the algebraic
+unknowns are eliminated through the implicit function theorem,
+\(z = -g_z^{-1}(g_x x + g_u u)\), which gives the minimal state. In the
+example below \(z\) cannot be solved for symbolically, so it stays an
+unknown after compilation.
+
+```{r}
+w <- Variable("w", t)
+z <- Variable("z", t, guess = 1)
+v_in <- Variable("v_in", t, input = TRUE)
+dae <- System(list(D(w) ~ -w + z + v_in, 0 ~ z^3 + z - w), t, name = "dae")
+full <- linearize(dae, list(v_in), list(w), op = list(w ~ 2, v_in ~ 0))
+full$states
+full$A
+reduced <- linearize(dae, list(v_in), list(w), op = list(w ~ 2, v_in ~ 0),
+                     eliminate_algebraic = TRUE)
+reduced$A
+```
+
+At \(w = 2\) the constraint gives \(z = 1\), and \(dz/dw = 1 / (3 z^2 + 1)
+= 1/4\), so the reduced model has \(A = -1 + 1/4 = -3/4\).
+
+## Using the state space matrices
+
+The matrices are plain R matrices, so base R covers the usual analyses.
+
+### Poles and stability
+
+The eigenvalues of \(A\) are the poles of the linear model. The hanging
+pendulum has a lightly damped pair with natural frequency
+\(\sqrt{g / \ell}\) and damping ratio \(b / (2 \sqrt{g / \ell})\):
+
+```{r}
+ev <- eigen(down$A)$values
+c(natural_frequency = Mod(ev[1]), damping_ratio = -Re(ev[1]) / Mod(ev[1]))
+c(sqrt(9.81), 0.5 / (2 * sqrt(9.81)))
+```
+
+### Frequency response
+
+The transfer function \(G(s) = C (sI - A)^{-1} B + D\) is evaluated at
+\(s = i \omega\) with `solve()`:
+
+```{r}
+freqresp <- function(lin, w) {
+  vapply(w, function(wi) {
+    as.complex(lin$C %*% solve(1i * wi * diag(nrow(lin$A)) - lin$A, lin$B) + lin$D)
+  }, 0i)
+}
+wgrid <- 10^seq(-1, 2, length.out = 300)
+G <- freqresp(down, wgrid)
+plot(wgrid, 20 * log10(Mod(G)), log = "x", type = "l", xlab = "frequency (rad/s)",
+     ylab = "magnitude (dB)", main = "Pendulum torque to angle")
+abline(v = sqrt(9.81), lty = 3)
+```
+
+The resonance peak sits at the natural frequency.
+
+### Step response
+
+For a stable \(A\), the response to a unit step in the input from the
+operating point is \(\delta x(t) = A^{-1}(e^{At} - I) B\). The matrix
+exponential follows from the eigendecomposition \(A = V \Lambda V^{-1}\)
+when \(A\) is diagonalizable:
+
+```{r}
+expm_eigen <- function(A, s) {
+  e <- eigen(A)
+  Re(e$vectors %*% diag(exp(e$values * s), nrow(A)) %*% solve(e$vectors))
+}
+step_response <- function(lin, times) {
+  vapply(times, function(s) {
+    x <- solve(lin$A, (expm_eigen(lin$A, s) - diag(nrow(lin$A))) %*% lin$B)
+    as.numeric(lin$C %*% x + lin$D)
+  }, 0)
+}
+tt <- seq(0, 10, length.out = 200)
+plot(tt, step_response(down, tt), type = "l", xlab = "t", ylab = "angle",
+     main = "Unit torque step")
+abline(h = -down$C %*% solve(down$A, down$B), lty = 3)
+```
+
+The response settles at the static gain \(-C A^{-1} B = \ell / g\).
+
+### Changing coordinates
+
+`similarity_transform(lin, T)` changes the state coordinates with
+\(x = T x_2\), and `reorder_unknowns(lin, old, new)` permutes the states.
+The poles do not change:
+
+```{r}
+Tm <- matrix(c(1, 1, 0, 1), 2)
+tr <- similarity_transform(down, Tm)
+tr$A
+eigen(tr$A)$values
+reorder_unknowns(down, down$states, rev(down$states))$A
+```
+
+## A feedback loop from components
+
+Control systems are usually assembled from blocks connected through
+signal connectors, as in the ModelingToolkitStandardLibrary. The blocks
+below are defined with `connector()` and `mtkmodel()`, the counterparts of
+`@connector` and `@mtkmodel`: a first order plant \(P(s) = k / (T s + 1)\),
+a PI controller \(C(s) = k_p + k_i / s\), and an error block \(e = r - y\)
+with the reference \(r\) as a parameter.
+
+```{r}
+RealInput <- connector("RealInput", variables = list(list("u(t)", input = TRUE)))
+RealOutput <- connector("RealOutput", variables = list(list("u(t)", output = TRUE)))
+SISO <- mtkmodel("SISO", variables = list("u(t)", "y(t)"),
+  components = list(input = quote(RealInput()), output = quote(RealOutput())),
+  equations = quote(list(u ~ input$u, y ~ output$u)))
+FirstOrder <- mtkmodel("FirstOrder", extend = list(siso = quote(SISO())),
+  parameters = list("T = 1", "k = 1"), variables = list("x(t) = 0"),
+  equations = quote(list(D(x) ~ (k * u - x) / T, y ~ x)))
+PI <- mtkmodel("PI", extend = list(siso = quote(SISO())),
+  parameters = list("kp = 1", "ki = 1"), variables = list("xi(t) = 0"),
+  equations = quote(list(D(xi) ~ u, y ~ kp * u + ki * xi)))
+ErrorBlock <- mtkmodel("ErrorBlock", parameters = list("r = 0"),
+  components = list(input = quote(RealInput()), output = quote(RealOutput())),
+  equations = quote(list(output$u ~ r - input$u)))
+```
+
+### Analysis points
+
+An analysis point is a named connection: `connect(out, "name", in)`
+creates an `AnalysisPoint` that behaves like an ordinary connection in
+simulation, and marks the signal for linear analysis. It is referred to as
+`sys$name` on the unsimplified model. Here every connection of the loop is
+an analysis point: `y` (the measurement), `e` (the error) and `u` (the
+control signal).
+
+```{r}
+P <- FirstOrder(name = "P", k = 2, T = 0.5)
+C <- PI(name = "C", kp = 1, ki = 2)
+E <- ErrorBlock(name = "E")
+loop <- System(list(connect(P$output, "y", E$input),
+                    connect(E$output, "e", C$input),
+                    connect(C$output, "u", P$input)),
+               t, systems = list(P, C, E), name = "loop")
+loop$u
+```
+
+The PI zero at \(-k_i / k_p = -2\) cancels the plant pole at \(-1 / T =
+-2\), so the loop transfer function is \(P C = 4 / s\) and the closed loop
+from reference to output is \(4 / (s + 4)\). A simulation of a unit
+reference step confirms it:
+
+```{r}
+cl_sys <- mtkcompile(loop)
+cl_prob <- ODEProblem(cl_sys, list(E$r ~ 1), c(0, 2))
+cl_sol <- solve(cl_prob, Tsit5(), reltol = 1e-8, abstol = 1e-8, saveat = 0.5)
+rbind(simulated = cl_sol[P$y], exact = 1 - exp(-4 * cl_sol$t))
+```
+
+### Sensitivity functions
+
+The classical loop functions at a point of the loop are
+
+* the sensitivity function \(S = 1 / (1 + PC)\), the transfer from a
+  disturbance added at the point to the signal there,
+* the complementary sensitivity function \(T = PC / (1 + PC) = 1 - S\),
+* the loop transfer function \(L\), the response around the opened loop.
+
+`get_sensitivity(sys, ap)`, `get_comp_sensitivity(sys, ap)` and
+`get_looptransfer(sys, ap)` linearize them at the analysis point `ap`, as
+in ModelingToolkit; they return the same structure as `linearize()`.
+
+```{r}
+S <- get_sensitivity(loop, loop$u, verbose = FALSE)
+Tc <- get_comp_sensitivity(loop, loop$u, verbose = FALSE)
+L <- get_looptransfer(loop, loop$u, verbose = FALSE)
+S[c("A", "B", "C", "D")]
+```
+
+The state space realizations keep the cancelled plant pole, so the
+eigenvalues of `S$A` are \(-4\) and \(-2\); the transfer functions
+themselves are \(S = s / (s + 4)\), \(T = 4 / (s + 4)\) and, with the
+negative feedback sign that ModelingToolkit includes, \(L = -4 / s\).
+Evaluating them on the imaginary axis checks this and the identity
+\(S + T = 1\):
+
+```{r}
+s_test <- c(0.5, 2, 10)
+rbind(S = freqresp(S, s_test), S_exact = 1i * s_test / (1i * s_test + 4),
+      T = freqresp(Tc, s_test), L = freqresp(L, s_test), L_exact = -4 / (1i * s_test))
+max(Mod(freqresp(S, wgrid) + freqresp(Tc, wgrid) - 1))
+```
+
+The peak of \(|S|\) is a standard robustness measure: its inverse is the
+distance from the Nyquist curve to the critical point. For this loop
+\(|S|\) rises monotonically toward 1 at high frequency and never exceeds
+it, the best possible value.
+
+```{r}
+Sw <- freqresp(S, wgrid)
+Tw <- freqresp(Tc, wgrid)
+plot(wgrid, 20 * log10(Mod(Sw)), log = "x", type = "l", ylim = c(-40, 5),
+     xlab = "frequency (rad/s)", ylab = "magnitude (dB)")
+lines(wgrid, 20 * log10(Mod(Tw)), lty = 2)
+legend("bottomright", c("S", "T"), lty = 1:2, bty = "n")
+max(Mod(Sw))
+```
+
+Several analysis points at once give a multivariable function:
+
+```{r}
+get_sensitivity(loop, list(loop$u, loop$y), verbose = FALSE)$D
+```
+
+`get_sensitivity_function()`, `get_comp_sensitivity_function()` and
+`get_looptransfer_function()` return the linearization function and the
+simplified system instead, for repeated linearization:
+
+```{r}
+Sf <- get_sensitivity_function(loop, loop$u, verbose = FALSE)
+Sf$lin_fun
+```
+
+### Linearizing between analysis points
+
+Analysis points can be used as the inputs and outputs of `linearize()`.
+An input point adds a perturbation to its signal, an output point reads
+the signal. From the error point to the measurement point the transfer is
+the complementary sensitivity, which is also the reference to output
+response:
+
+```{r}
+ry <- linearize(loop, loop$e, loop$y, verbose = FALSE)
+ry[c("A", "B", "C", "D")]
+step_response(ry, c(0.25, 0.5, 1))
+1 - exp(-4 * c(0.25, 0.5, 1))
+```
+
+### Opening loops
+
+`loop_openings` breaks connections before linearizing. Opening the loop at
+the measurement and linearizing from the control signal to the
+measurement gives the plant alone, \(P(s) = 4 / (s + 2)\), together with
+the controller state that no longer affects the output:
+
+```{r}
+plant <- linearize(loop, loop$u, loop$y, loop_openings = list(loop$y), verbose = FALSE)
+plant[c("A", "B", "C", "D")]
+freqresp(plant, 1)
+4 / (1i + 2)
+```
+
+`open_loop(sys, ap)` performs the same transformation on the model and
+returns it, together with `du`, the new input that now drives the
+destinations of the point, and `u`, the variable that drove it:
+
+```{r}
+ol <- open_loop(loop, loop$y)
+ol$du
+ol$u
+ol_lin <- linearize(ol$sys, ol$du, list(ol$u), verbose = FALSE)
+freqresp(ol_lin, 1)
+```
+
+The transfer from the measurement input of the error block back to the
+plant output is \(-PC = -4 / s\), the loop transfer function at \(y\).
+
+`linearization_ap_transform()` exposes the transformation that
+`linearize()` applies to analysis point inputs and outputs, adding the
+perturbation variables:
+
+```{r}
+tr_ap <- linearization_ap_transform(loop, loop$u, list(), list())
+tr_ap$inputs
+```
+
+### Hierarchical models
+
+Analysis points of subsystems are reached through the hierarchy, and their
+names are namespaced like any other variable:
+
+```{r}
+plant_room <- System(list(), t, systems = list(loop), name = "room")
+room_ap <- plant_room$loop$u
+room_ap
+get_sensitivity(plant_room, room_ap, verbose = FALSE)$D
+```
+
+A string name of the point, relative to the model, works as well:
+`get_sensitivity(plant_room, "loop₊u")`.
+
+## Control functions
+
+`generate_control_function(sys, inputs)` compiles a model with the given
+inputs and returns the function \(f(x, u, p, t)\) of \(x' = f(x, u, p,
+t)\), the unknowns `dvs` and parameters `ps` that order its arguments,
+and the compiled input output system `io_sys`. It is the starting point
+for model predictive control and state estimation, where the dynamics are
+evaluated directly.
+
+```{r}
+cf <- generate_control_function(pend, list(tau))
+cf$dvs
+cf$ps
+pvals <- unname(c(len = 1, g = 9.81, b = 0.5)[vapply(cf$ps, format, "")])
+cf$f(c(0.1, 0), 0.2, pvals, 0)
+```
+
+`calculate_control_jacobian()` gives the symbolic Jacobian of the dynamics
+with respect to the inputs, and `unbound_inputs()` lists inputs that no
+equation drives:
+
+```{r}
+calculate_control_jacobian(cf$io_sys)
+unbound_inputs(pend)
+```
+
+## Summary
+
+| Task | modelcompR | ModelingToolkit |
+|:--|:--|:--|
+| linearize at an operating point | `linearize(sys, inputs, outputs, op = )` | `linearize` |
+| symbolic matrices | `linearize_symbolic()` | `linearize_symbolic` |
+| reuse the compiled model | `linearization_function()`, `LinearizationProblem()` | the same |
+| operating points from a simulation | `LinearizationOpPoint()` | the same |
+| analysis points | `connect(out, "name", in)`, `AnalysisPoint()` | `connect(out, :name, in)` |
+| loop functions | `get_sensitivity()`, `get_comp_sensitivity()`, `get_looptransfer()` | the same |
+| open a loop | `loop_openings = `, `open_loop()` | the same |
+| coordinates | `similarity_transform()`, `reorder_unknowns()` | the same |
+| dynamics for control | `generate_control_function()` | the same |

@@ -391,3 +391,28 @@ reference:
   - test_convergence
   - with_autodiff_variants
   - wp_area
+
+articles:
+- title: Building models
+  navbar: Building models
+  contents:
+  - modeling
+  - compilation
+  - events-initialization
+- title: Simulation
+  navbar: Simulation
+  contents:
+  - solving
+  - stochastic
+  - delay-bvp-discrete
+- title: Solving, fitting and analysis
+  navbar: Solving, fitting and analysis
+  contents:
+  - nonlinear
+  - optimization
+  - sensitivity
+  - linearization
+- title: Tooling
+  navbar: Tooling
+  contents:
+  - devtools
