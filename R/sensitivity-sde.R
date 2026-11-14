@@ -56,6 +56,17 @@
 # differentiates, its Jacobians, and the noise: G(u, p, t) (a vector for
 # diagonal and scalar noise, a matrix otherwise) with the Jacobians of
 # vec(G) by u and p. For an RODE the functions take the noise value W.
+# The SDE without its (nonsingular, constant) mass matrix: the solvers
+# read M du = f dt + M g dW, so the drift becomes M^-1 f.
+.sens_sde_unmass <- function(prob, Mi) {
+  f <- prob$f$f
+  q <- prob
+  q$f$f <- function(u, p, t) as.numeric(Mi %*% as.numeric(f(u, p, t)))
+  q$f$mass_matrix <- NULL
+  q$f$jac <- NULL
+  q
+}
+
 .sens_sde_fns <- function(prob, transform, corfunc_analytical, diffusion_jac, diffusion_paramjac) {
   rode <- inherits(prob, "RODEProblem")
   n <- length(prob$u0)
@@ -162,7 +173,8 @@
 #' its gradient), and [InterpolatingAdjoint()] samples a discrete cost with
 #' the forward state at its time (Julia: the state of the last drift
 #' evaluation, one step later for [EM()] and [RandomEM()]). Events of the
-#' forward solve and mass matrices are not supported.
+#' forward solve are supported for discrete callbacks; a nonsingular constant
+#' mass matrix is removed by `M^-1` (singular ones are not supported).
 #'
 #' @inheritParams adjoint_sensitivities
 #' @param sol The solution of an `SDEProblem` or an `RODEProblem`.
@@ -246,8 +258,12 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
     env$sens_events$events
   } else list()
   M <- prob$f$mass_matrix
-  if (is.matrix(M) && !.is_identity_mass(M))
-    stop("mass matrices are not supported by the adjoints of ", kind, "s", call. = FALSE)
+  if (is.matrix(M) && !.is_identity_mass(M)) {
+    # a nonsingular mass matrix multiplies the drift: M du = f dt + M g dW
+    if (kind == "RODEProblem" || abs(det(M)) < 1e-12 * max(1, max(abs(M)))^nrow(M))
+      stop("singular mass matrices are not supported by the adjoints of ", kind, "s", call. = FALSE)
+    prob <- .sens_sde_unmass(prob, solve(M))
+  }
   if (is.null(env$W) || !length(env$W$t))
     stop("the adjoint needs the noise path of the forward solution", call. = FALSE)
   backsolve <- method == "BacksolveAdjoint"
@@ -373,7 +389,9 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   noise <- NoiseGrid(s - rev(wt), W[rev(seq_along(wt)), , drop = FALSE])
   tstops <- sort(unique(s - ftimes[inside(ftimes)]))
   fdt <- abs(diff(ftimes))
-  dt <- if (length(fdt)) fdt[fdt > 0][1L] else abs(tend - t0)
+  # with fixed steps no longer than the longest forward step, the tstops
+  # make the backward solve take exactly the forward steps
+  dt <- if (any(fdt > 0)) max(fdt) else abs(tend - t0)
   if (rode) {
     aprob <- RODEProblem(RODEFunction(drift), z0, c(t0, tend), p, noise = noise, callback = CallbackSet(cb_rev))
   } else {

@@ -346,7 +346,8 @@ generate_diffusion_function <- function(sys, ...) {
 #' matrix with one column per Wiener process) for general noise, or
 #' `noise = "scalar"` for one Wiener process shared by all equations.
 #' `SDEFunction(f, g, mass_matrix = M)` gives a mass matrix (singular for
-#' algebraic equations), solved with the implicit methods
+#' algebraic equations; it multiplies the drift, `M du = f dt + M g dW`),
+#' solved with the implicit methods
 #' ([ImplicitEM()], [ImplicitRKMil()], ...).
 #'
 #' @param sys A compiled `System`, or the drift function `f(u, p, t)`.

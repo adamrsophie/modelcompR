@@ -485,7 +485,11 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
           matrix(0, nq, nw))
   }
   z0 <- c(as.numeric(prob$u0), as.numeric(S0), if (nq) as.numeric(Q0))
-  aprob <- SDEProblem(drift, diffusion, z0, prob$tspan, prob$p,
+  # a mass matrix multiplies the drift of u and of each sensitivity column
+  M <- prob$f$mass_matrix
+  Maug <- if (is.matrix(M) && !.is_identity_mass(M))
+    .sens_blockdiag(c(list(M), rep(list(M), m), if (nq) list(diag(1, nq))))
+  aprob <- SDEProblem(SDEFunction(drift, diffusion, mass_matrix = Maug), z0, prob$tspan, prob$p,
                       noise_rate_prototype = matrix(0, n + n * m + nq, nw))
   aprob$kwargs <- prob$kwargs
   if (has_cb) {

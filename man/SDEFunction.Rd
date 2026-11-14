@@ -36,7 +36,8 @@ a system. Diagonal noise is the default; give \code{noise_rate_prototype} (a
 matrix with one column per Wiener process) for general noise, or
 \code{noise = "scalar"} for one Wiener process shared by all equations.
 \code{SDEFunction(f, g, mass_matrix = M)} gives a mass matrix (singular for
-algebraic equations), solved with the implicit methods
+algebraic equations; it multiplies the drift, \verb{M du = f dt + M g dW}),
+solved with the implicit methods
 (\code{\link[=ImplicitEM]{ImplicitEM()}}, \code{\link[=ImplicitRKMil]{ImplicitRKMil()}}, ...).
 }
 \examples{

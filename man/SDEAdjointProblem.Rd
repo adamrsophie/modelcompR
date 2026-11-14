@@ -102,7 +102,8 @@ continuous cost enters the drift only (Julia's diffusion also subtracts
 its gradient), and \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}} samples a discrete cost with
 the forward state at its time (Julia: the state of the last drift
 evaluation, one step later for \code{\link[=EM]{EM()}} and \code{\link[=RandomEM]{RandomEM()}}). Events of the
-forward solve and mass matrices are not supported.
+forward solve are supported for discrete callbacks; a nonsingular constant
+mass matrix is removed by \code{M^-1} (singular ones are not supported).
 }
 \examples{
 f <- function(u, p, t) p[1] * u

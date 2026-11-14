@@ -173,7 +173,7 @@ test_that("SDEAdjointProblem builds the reversed time problem and rejects the un
   ap <- SDEAdjointProblem(sol, BacksolveAdjoint(), t = c(0.5, 1), dgdu_discrete = sde_dg)
   expect_s3_class(ap, "SDEProblem")
   expect_s3_class(ap$alg, "EulerHeun")
-  expect_identical(ap$dt, 0.05)
+  expect_equal(ap$dt, 0.05)
   expect_equal(ap$time_map(0.25), 0.75)
   expect_true(inherits(ap$f$f, SensitivityFunction))
   # z = (lambda, grad, y), the cost at T already applied
@@ -220,4 +220,29 @@ test_that("pathwise SDE sensitivities differentiate discrete events", {
   }
   expect_error(solve_gradient(loss, pc, EM(), dt = 0.01, saveat = ts, seed = 3, sensealg = InterpolatingAdjoint()),
                "not differentiable")
+})
+
+test_that("a nonsingular mass matrix multiplies the drift in the SDE sensitivities", {
+  # the solvers read M du = f dt + M g dW: the sensitivities use M^-1 f
+  M <- matrix(c(2, 0.5, 0, 1), 2)
+  f <- function(u, p, t) c(-p[1] * u[1] + u[2], -p[2] * u[2])
+  g <- function(u, p, t) c(0.3 * u[1], p[3] + 0.1 * u[2])
+  mk <- function(u0, p) SDEProblem(SDEFunction(f, g, mass_matrix = M), u0, c(0, 1), p, seed = 7)
+  ts <- seq(0, 1, by = 0.25)
+  loss <- function(sol) sum(as.matrix(sol)^2)
+  dt <- 1 / 256
+  F <- function(th) loss(solve(mk(th[1:2], th[3:5]), ImplicitEM(), dt = dt, adaptive = FALSE, saveat = ts))
+  th <- c(1, 0.5, 0.7, 0.4, 0.2)
+  ref <- vapply(seq_along(th), function(j) {
+    a <- th; b <- th
+    a[j] <- a[j] + 1e-6; b[j] <- b[j] - 1e-6
+    (F(a) - F(b)) / 2e-6
+  }, 0)
+  prob <- mk(c(1, 0.5), c(0.7, 0.4, 0.2))
+  fw <- solve_gradient(loss, prob, ImplicitEM(), dt = dt, adaptive = FALSE, saveat = ts,
+                       sensealg = ForwardDiffSensitivity())
+  expect_equal(unname(c(fw$u0, fw$p)), ref, tolerance = 1e-7)
+  ga <- solve_gradient(loss, prob, ImplicitEM(), dt = dt, adaptive = FALSE, saveat = ts,
+                       sensealg = InterpolatingAdjoint())
+  expect_lt(max(abs(c(ga$u0, ga$p) - ref)) / max(abs(ref)), 0.01)
 })

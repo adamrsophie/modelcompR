@@ -84,8 +84,6 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   fns <- .sens_fns(prob, sensealg)
   cbs <- .as_callback_set(prob$kwargs$callback)
   has_cb <- length(cbs$continuous) + length(cbs$discrete) > 0L
-  if (has_cb && !is.null(fns$mass))
-    stop("events in mass matrix problems are not supported by the sensitivity methods", call. = FALSE)
   nq <- if (has_cb) np * m else 0L
   iu <- seq_len(n)
   rhs <- ODEForwardSensitivityFunction(prob, sensealg, Q0, tracked = has_cb)
@@ -146,7 +144,8 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
       tx <- attr(D, "tau_x")
       rec$events[[length(rec$events) + 1L]] <- list(
         t = ev$t, dtau = if (is.null(tx)) numeric(m) else as.numeric(crossprod(tx, X)),
-        fm = fns$f(ev$u, ev$p, ev$t), fp = fns$f(ev$u_right, .sens_pvec(ev$p, ev$p_right), ev$t))
+        fm = attr(D, "fm") %||% fns$f(ev$u, ev$p, ev$t),
+        fp = attr(D, "fp") %||% fns$f(ev$u_right, .sens_pvec(ev$p, ev$p_right), ev$t))
       X <- D %*% X
       rec$events[[length(rec$events)]]$Q_right <- X[n + seq_len(np), , drop = FALSE]
       integ$u <- c(ev$u_right, as.numeric(X[iu, , drop = FALSE]), as.numeric(X[n + seq_len(np), , drop = FALSE]))
@@ -203,16 +202,46 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
 .sens_event_jacobian <- function(ev, fns, prob) {
   n <- length(ev$u); np <- length(ev$p)
   pn <- ev$p
+  ms <- if (!is.null(fns$mass)) .sens_mass_structure(fns$mass, n)
+  # in a semi-explicit DAE the solver solves the algebraic equations again
+  # after the affect, keeping the differential variables: that solve is part
+  # of the event map
+  consistent <- function(u, q, t) {
+    if (is.null(ms) || !ms$dae) return(u)
+    for (it in 1:60) {
+      g <- as.numeric(fns$f(u, q, t))[ms$alg_eq]
+      if (max(abs(g)) <= 1e-14 * max(1, max(abs(u)))) break
+      Jz <- as.matrix(fns$jac(u, q, t))[ms$alg_eq, ms$alg, drop = FALSE]
+      u[ms$alg] <- u[ms$alg] - solve(Jz, g)
+    }
+    u
+  }
   reset <- function(x, t) {
     q <- pn
     q[] <- x[n + seq_len(np)]
     e <- .sens_fake_integ(x[seq_len(n)], q, t)
     e$prob <- prob
     do.call(ev$affect, c(list(e), ev$args))
-    c(as.numeric(e$u), as.numeric(e$p))
+    c(consistent(as.numeric(e$u), e$p, t), as.numeric(e$p))
+  }
+  # du/dt: M^-1 f, and for a semi-explicit DAE the algebraic part from the
+  # derivative of the constraints
+  udot <- function(u, q, t) {
+    fv <- as.numeric(fns$f(u, q, t))
+    if (is.null(ms)) return(fv)
+    if (!ms$dae) return(as.numeric(solve(fns$mass, fv)))
+    ud <- numeric(n)
+    ud[ms$diff] <- solve(ms$Mdd, fv[ms$diff_eq])
+    J <- as.matrix(fns$jac(u, q, t))
+    gt <- as.numeric(.sens_fd_jac(function(s) as.numeric(fns$f(u, q, s))[ms$alg_eq], t))
+    ud[ms$alg] <- -solve(J[ms$alg_eq, ms$alg, drop = FALSE],
+                         J[ms$alg_eq, ms$diff, drop = FALSE] %*% ud[ms$diff] + gt)
+    ud
   }
   x <- c(ev$u, as.numeric(ev$p))
   Rx <- .sens_fd_jac(function(z) reset(z, ev$t), x)
+  # the state after the event, consistent for a DAE
+  attr(Rx, "u_plus") <- reset(x, ev$t)[seq_len(n)]
   if (!isTRUE(ev$continuous)) return(Rx)
   Rt <- as.numeric(.sens_fd_jac(function(s) reset(x, s), ev$t))
   cfun <- function(xx, t) {
@@ -224,10 +253,10 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   }
   cx <- .sens_fd_grad(function(z) cfun(z, ev$t), x)
   ct <- .sens_fd_grad(function(s) cfun(x, s), ev$t)
-  fm <- fns$f(ev$u, ev$p, ev$t)
+  fm <- udot(ev$u, ev$p, ev$t)
   pr <- pn
   pr[] <- as.numeric(ev$p_right)
-  fp <- fns$f(as.numeric(ev$u_right), pr, ev$t)
+  fp <- udot(reset(x, ev$t)[seq_len(n)], pr, ev$t)
   denom <- ct + sum(cx[seq_len(n)] * fm)
   if (!is.finite(denom) || abs(denom) < 1e-12)
     stop("the event at t = ", format(ev$t), " is grazing (the condition does not cross zero ",
@@ -236,6 +265,9 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   b <- Rx %*% c(fm, numeric(np)) + Rt - c(fp, numeric(np))
   D <- Rx + b %*% t(tau_x)
   attr(D, "tau_x") <- tau_x
+  attr(D, "fm") <- fm
+  attr(D, "fp") <- fp
+  attr(D, "u_plus") <- attr(Rx, "u_plus")
   D
 }
 

@@ -119,7 +119,8 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
       RODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous, dgdp_continuous, g,
                          callback = callback, no_start = no_start)
     dots$corfunc_analytical <- dots$diffusion_jac <- dots$diffusion_paramjac <- NULL
-    dots$dt <- dots$dt %||% ap$dt
+    dots$dt <- max(dots$dt %||% 0, ap$dt)
+    dots$adaptive <- FALSE
     dots$tstops <- sort(unique(c(ap$tstops, if (!is.null(dots$tstops)) ap$time_map(dots$tstops))))
     if (sde) {
       dots$abstol <- abstol
@@ -161,8 +162,6 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   n <- fns$n; np <- fns$np
   ms <- .sens_mass_structure(fns$mass, n)
   events <- .sens_events_of(sol)
-  if (length(events) && !is.null(fns$mass))
-    stop("events in mass matrix problems are not supported by the sensitivity methods", call. = FALSE)
   # QuadratureAdjoint integrates the parameter gradient after the backward
   # solve, but an event whose parameter change depends on the state feeds
   # that gradient back into lambda. The same integral is then accumulated
@@ -252,9 +251,16 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
 
   # one discrete cost sample: the jump of lambda (with the semi-explicit DAE
   # correction of ReverseLossCallback) and of the parameter gradient
-  sample_jump <- function(z, p, tt, i, y, moving = NULL) {
-    gu <- if (!is.null(dgdu_discrete)) as.numeric(dgdu_discrete(y, p, tt, i)) else numeric(n)
-    gp <- if (!is.null(dgdp_discrete) && np) as.numeric(dgdp_discrete(y, p, tt, i)) else numeric(np)
+  sample_cost <- function(p, tt, i, y)
+    list(gu = if (!is.null(dgdu_discrete)) as.numeric(dgdu_discrete(y, p, tt, i)) else numeric(n),
+         gp = if (!is.null(dgdp_discrete) && np) as.numeric(dgdp_discrete(y, p, tt, i)) else numeric(np))
+  sample_jump <- function(z, p, tt, i, y) {
+    g <- sample_cost(p, tt, i, y)
+    add_cot(z, g$gu, g$gp, y, p, tt)
+  }
+  # add a cotangent (gu on the state, gp on the parameters) to the adjoint
+  # state, whose state part is lambda with M' lambda = gu
+  add_cot <- function(z, gu, gp, y, p, tt) {
     if (ms$dae) {
       J <- fns$jac(y, p, tt)
       ha <- J[ms$alg_eq, ms$alg, drop = FALSE]
@@ -307,21 +313,22 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     last_ev <- events[[eidx[length(eidx)]]]
     lr <- numeric(n)
     for (k in rev(right)) {
-      y <- if (backsolve) z[iy] else as.numeric(last_ev$u_right)
-      zb <- z[il]
-      z <- sample_jump(z, p, tt, cost$i[k], y)
-      if (!cost$fixed[k]) lr <- lr + z[il] - zb
+      y <- if (backsolve) z[iy] else attr(Ds[[length(Ds)]], "u_plus") %||% as.numeric(last_ev$u_right)
+      gk <- sample_cost(p, tt, cost$i[k], y)
+      z <- add_cot(z, gk$gu, gk$gp, y, p, tt)
+      if (!cost$fixed[k]) lr <- lr + gk$gu
     }
     for (j in rev(seq_along(eidx))) {
       ev <- events[[eidx[j]]]
       D <- Ds[[j]]
       tx <- attr(D, "tau_x")
-      w <- as.numeric(crossprod(D, c(z[il], get_mu(z), if (quad && !np) numeric())))
+      # the cotangent of the state after the event: M' lambda
+      cu <- if (is.null(fns$mass)) z[il] else as.numeric(crossprod(fns$mass, z[il]))
+      w <- as.numeric(crossprod(D, c(cu, get_mu(z), if (quad && !np) numeric())))
       if (!is.null(tx)) {
         # samples saved at the event time move with it (Lu_right of
         # callback_tracking.jl), and a running cost jumps there
-        fp <- fns$f(as.numeric(ev$u_right), .sens_pvec(p, ev$p_right), tt)
-        w <- w + tx * sum(fp * lr)
+        w <- w + tx * sum(attr(D, "fp") * lr)
         # the cost through the times of the samples that move with the event
         if (!is.null(dgdt_discrete) && j == length(eidx)) {
           dtv <- dgdt_discrete(tt)
@@ -337,7 +344,6 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
         acc$records[[length(acc$records) + 1L]] <-
           list(seg = acc$seg, A = t(D[n + seq_len(np), n + seq_len(np), drop = FALSE]), add = w[n + seq_len(np)])
       }
-      z[il] <- w[il]
       if (np) {
         if (!quad) z[imu] <- w[n + seq_len(np)] else if (method != "QuadratureAdjoint") acc$mu <- w[n + seq_len(np)]
       }
@@ -345,16 +351,19 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
       p <- .sens_pvec(p, ev$p)
       acc$seg <- acc$seg - 1L
       if (!is.null(tr)) tr$seg <- acc$seg
+      # back to lambda, through the constraints for a DAE (the algebraic
+      # values before the event follow the differential ones)
+      z[il] <- 0
+      z <- add_cot(z, w[il], numeric(np), as.numeric(ev$u), p, tt)
     }
     tx1 <- attr(Ds[[1L]], "tau_x")
     for (k in rev(left)) {
       y <- if (backsolve) z[iy] else events[[eidx[1L]]]$u
-      zb <- z[il]
-      z <- sample_jump(z, p, tt, cost$i[k], y)
+      gk <- sample_cost(p, tt, cost$i[k], y)
+      z <- add_cot(z, gk$gu, gk$gp, y, p, tt)
       if (!is.null(tx1)) {
-        s <- sum(fns$f(y, p, tt) * (z[il] - zb))
-        z[il] <- z[il] + tx1[il] * s
-        if (np) z <- add_mu(z, tx1[n + seq_len(np)] * s)
+        s <- sum(attr(Ds[[1L]], "fm") * gk$gu)
+        z <- add_cot(z, tx1[il] * s, if (np) tx1[n + seq_len(np)] * s else numeric(), y, p, tt)
       }
     }
     list(z = z, p = p)

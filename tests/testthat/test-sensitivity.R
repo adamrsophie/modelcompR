@@ -455,3 +455,40 @@ test_that("losses of the saved times are differentiated where the times move wit
     expect_equal(unname(c(g$u0, g$p)), ref, tolerance = 1e-6, label = sa$name)
   }
 })
+
+test_that("events in mass matrix problems: semi-explicit DAEs and nonsingular M", {
+  # x' = -k x + y, 0 = y + y^3 - a x: the algebraic y is solved again after
+  # each event, which is part of the event map
+  f <- function(u, p, t) c(-p[1] * u[1] + u[2], u[2] + u[2]^3 - p[2] * u[1])
+  yc <- function(x, a) uniroot(function(y) y + y^3 - a * x, c(-5, 5), tol = 1e-14)$root
+  y0 <- yc(1, 0.5)
+  ts <- seq(0, 1.5, by = 0.25)
+  loss <- function(sol) sum(as.matrix(sol)^2)
+  cbs <- list(PresetTimeCallback(0.6, function(integ) integ$u[1] <- integ$u[1] * integ$p[3] + 0.2 * integ$u[2]),
+              ContinuousCallback(function(u, t, integ) u[1] - 0.7, function(integ) integ$u[1] <- integ$u[1] + integ$p[3]))
+  for (cb in cbs) {
+    prob <- ODEProblem(ODEFunction(f, mass_matrix = diag(c(1, 0))), c(1, y0), c(0, 1.5), c(0.7, 0.5, 1.3), callback = cb)
+    ref <- sensitivity_fd(function(th)
+      loss(solve(remake(prob, u0 = c(th[1], yc(th[1], th[3])), p = th[2:4]), Rodas5P(),
+                 reltol = 1e-12, abstol = 1e-12, saveat = ts)), c(1, 0.7, 0.5, 1.3))
+    dy <- 1 / (1 + 3 * y0^2)
+    for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint())) {
+      g <- solve_gradient(loss, prob, Rodas5P(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+      got <- c(g$u0[1] + g$u0[2] * 0.5 * dy, g$p[1], g$p[2] + g$u0[2] * dy, g$p[3])
+      expect_equal(unname(got), ref, tolerance = 1e-5, label = sa$name)
+    }
+  }
+  # a nonsingular mass matrix with a bounce
+  M <- matrix(c(2, 0.5, 0, 1), 2)
+  fb <- function(u, p, t) M %*% c(u[2], -p[1])
+  cb <- ContinuousCallback(function(u, t, integ) u[1], function(integ) integ$u[2] <- -integ$p[2] * integ$u[2])
+  prob <- ODEProblem(ODEFunction(function(u, p, t) as.numeric(fb(u, p, t)), mass_matrix = M),
+                     c(1, 0), c(0, 0.8), c(9.81, 0.9), callback = cb)
+  ts <- seq(0, 0.8, by = 0.2)
+  ref <- sensitivity_fd(function(th) loss(solve(remake(prob, u0 = th[1:2], p = th[3:4]), Rodas5P(),
+                                               reltol = 1e-12, abstol = 1e-12, saveat = ts)), c(1, 0, 9.81, 0.9))
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), BacksolveAdjoint())) {
+    g <- solve_gradient(loss, prob, Rodas5P(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), ref, tolerance = 1e-5, label = sa$name)
+  }
+})
