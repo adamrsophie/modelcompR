@@ -57,6 +57,16 @@ or an ODE solution; with \code{batch = TRUE} it takes a matrix with one
 parameter set per column and returns one value (or one column) per set.
 }
 \details{
+The samples of the range forms are randomized quasi Monte Carlo (Owen
+scrambled Sobol points), except for \code{EASI()}, whose bias correction
+assumes independent uniform samples and which draws those. \code{Sobol()} evaluates \code{nboot} independent scrambled
+designs of dimension \verb{2 d}, whose first and last \code{d} rows are the \code{A} and
+\code{B} matrices, so the estimators are applied to independent pairs of
+points, repeated runs are independent replicates, and the intervals with
+\code{nboot > 1} come from independent replicates. GlobalSensitivity.jl uses
+the unscrambled sequence; pass matrices from \code{\link[=generate_design_matrices]{generate_design_matrices()}}
+with \code{NoRand()} to \code{gsa(f, Sobol(), A, B)} for its deterministic design.
+
 Other forms, as in GlobalSensitivity.jl:
 \itemize{
 \item \code{gsa(f, Sobol(), A, B)} with design matrices \code{A} and \code{B} (one set per
@@ -70,7 +80,8 @@ on samples \code{X} (d x n) and outputs \code{Y};
 \examples{
 ishi <- function(x) sin(x[1]) + 7 * sin(x[2])^2 + 0.1 * x[3]^4 * sin(x[1])
 rg <- rep(list(c(-pi, pi)), 3)
-res <- suppressWarnings(gsa(ishi, Sobol(), rg, samples = 1000))
+set.seed(1)
+res <- gsa(ishi, Sobol(), rg, samples = 1000)
 res$S1
 set.seed(1)
 gsa(ishi, eFAST(), rg, samples = 500)$S1

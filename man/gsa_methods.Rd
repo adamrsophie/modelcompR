@@ -102,20 +102,24 @@ Method objects for \code{\link[=gsa]{gsa()}}, ports of the methods of GlobalSens
 \item \code{Sobol()}: variance based first, second and total order indices, with the
 Monte Carlo estimators of Jansen (1999, default), Homma and Saltelli
 (1996), Sobol (2007) and Janon (2014) for the total effects, and
-bootstrap confidence intervals over \code{nboot} blocks.
+confidence intervals over \code{nboot} independent replicates.
 \item \code{Morris()}: elementary effects along one at a time trajectories on a grid
 of \code{p_steps} levels; the \code{num_trajectory} trajectories of largest spread
 among \code{total_num_trajectory} candidates are kept.
 \item \code{RegressionGSA()}: Pearson correlations, standardized regression and
 partial correlation coefficients, and their rank versions.
 \item \code{DGSM()}: derivative based global sensitivity measures from forward mode
-gradients (and Hessians when \code{crossed}).
+gradients (and Hessians when \code{crossed}): the means of the derivative,
+its absolute value and its square, and for uniform inputs the measures
+\code{tao} and \code{sigma} of Kucherenko and Iooss (2016), whose ratios to the
+output variance bound the total Sobol index (\code{NA} for other laws).
 \item \code{eFAST()}: the extended Fourier amplitude sensitivity test.
 \item \code{DeltaMoment()}: the moment independent delta measure of Borgonovo, with
 kernel density estimates and a bootstrap bias correction.
 \item \code{EASI()}: first order indices from spectral analysis of sorted samples.
 \item \code{FractionalFactorial()}: main effects of a resolution IV two level design.
-\item \code{RBDFAST()}: random balance designs Fourier amplitude sensitivity test.
+\item \code{RBDFAST()}: random balance designs Fourier amplitude sensitivity test,
+with the bias correction of Tissot and Prieur (2012).
 \item \code{Shapley()}: Shapley effects for dependent inputs, exact over all
 permutations (\code{n_perms = -1}) or over random permutations.
 \item \code{RSA()}: regional sensitivity analysis (Kolmogorov Smirnov distances

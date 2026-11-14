@@ -34,7 +34,17 @@ by its \code{R} field, or by \code{R} when given; with \code{NoRand()} the matri
 consecutive blocks of dimensions of one \code{num_mats * d} dimensional
 sequence, which are not independent (QuasiMonteCarlo warns). A random
 sampler draws every matrix anew. \code{DesignMatrix()} is the iterator form:
-\verb{$next()} returns the next matrix.
+\verb{$next_matrix()} returns the next matrix.
+}
+\details{
+The randomized matrices scramble the same \code{n} base points, so each one is a
+valid randomized QMC point set and the estimates from different matrices
+are independent replicates, but the matrices are dependent column by
+column (the i-th points of two matrices are strongly correlated). They
+suit replicated error estimation, not designs that need independent pairs
+of points such as the \code{A} and \code{B} matrices of Sobol indices; for those,
+randomize one \verb{2 d} dimensional point set and split its rows, as \code{\link[=gsa]{gsa()}}
+does.
 }
 \examples{
 set.seed(1)

@@ -22,20 +22,24 @@
 #' * `Sobol()`: variance based first, second and total order indices, with the
 #'   Monte Carlo estimators of Jansen (1999, default), Homma and Saltelli
 #'   (1996), Sobol (2007) and Janon (2014) for the total effects, and
-#'   bootstrap confidence intervals over `nboot` blocks.
+#'   confidence intervals over `nboot` independent replicates.
 #' * `Morris()`: elementary effects along one at a time trajectories on a grid
 #'   of `p_steps` levels; the `num_trajectory` trajectories of largest spread
 #'   among `total_num_trajectory` candidates are kept.
 #' * `RegressionGSA()`: Pearson correlations, standardized regression and
 #'   partial correlation coefficients, and their rank versions.
 #' * `DGSM()`: derivative based global sensitivity measures from forward mode
-#'   gradients (and Hessians when `crossed`).
+#'   gradients (and Hessians when `crossed`): the means of the derivative,
+#'   its absolute value and its square, and for uniform inputs the measures
+#'   `tao` and `sigma` of Kucherenko and Iooss (2016), whose ratios to the
+#'   output variance bound the total Sobol index (`NA` for other laws).
 #' * `eFAST()`: the extended Fourier amplitude sensitivity test.
 #' * `DeltaMoment()`: the moment independent delta measure of Borgonovo, with
 #'   kernel density estimates and a bootstrap bias correction.
 #' * `EASI()`: first order indices from spectral analysis of sorted samples.
 #' * `FractionalFactorial()`: main effects of a resolution IV two level design.
-#' * `RBDFAST()`: random balance designs Fourier amplitude sensitivity test.
+#' * `RBDFAST()`: random balance designs Fourier amplitude sensitivity test,
+#'   with the bias correction of Tissot and Prieur (2012).
 #' * `Shapley()`: Shapley effects for dependent inputs, exact over all
 #'   permutations (`n_perms = -1`) or over random permutations.
 #' * `RSA()`: regional sensitivity analysis (Kolmogorov Smirnov distances
@@ -132,6 +136,16 @@ MutualInformation <- function(n_bootstraps = 1000L, conf_level = 0.95)
 #' or an ODE solution; with `batch = TRUE` it takes a matrix with one
 #' parameter set per column and returns one value (or one column) per set.
 #'
+#' The samples of the range forms are randomized quasi Monte Carlo (Owen
+#' scrambled Sobol points), except for `EASI()`, whose bias correction
+#' assumes independent uniform samples and which draws those. `Sobol()` evaluates `nboot` independent scrambled
+#' designs of dimension `2 d`, whose first and last `d` rows are the `A` and
+#' `B` matrices, so the estimators are applied to independent pairs of
+#' points, repeated runs are independent replicates, and the intervals with
+#' `nboot > 1` come from independent replicates. GlobalSensitivity.jl uses
+#' the unscrambled sequence; pass matrices from [generate_design_matrices()]
+#' with `NoRand()` to `gsa(f, Sobol(), A, B)` for its deterministic design.
+#'
 #' Other forms, as in GlobalSensitivity.jl:
 #' * `gsa(f, Sobol(), A, B)` with design matrices `A` and `B` (one set per
 #'   column), for example from [generate_design_matrices()];
@@ -160,7 +174,8 @@ MutualInformation <- function(n_bootstraps = 1000L, conf_level = 0.95)
 #' @examples
 #' ishi <- function(x) sin(x[1]) + 7 * sin(x[2])^2 + 0.1 * x[3]^4 * sin(x[1])
 #' rg <- rep(list(c(-pi, pi)), 3)
-#' res <- suppressWarnings(gsa(ishi, Sobol(), rg, samples = 1000))
+#' set.seed(1)
+#' res <- gsa(ishi, Sobol(), rg, samples = 1000)
 #' res$S1
 #' set.seed(1)
 #' gsa(ishi, eFAST(), rg, samples = 500)$S1
@@ -182,15 +197,18 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
       if (is.matrix(p_range)) return(.gsa_sobol_AB(f, method, p_range, B, batch, Ei_estimator))
       .gsa_need(samples)
       r <- .gsa_bounds(p_range)
-      AB <- generate_design_matrices(samples, r$lb, r$ub, SobolSample(), 2L * method$nboot)
-      nb <- method$nboot
-      .gsa_sobol_AB(f, method, do.call(cbind, AB[seq_len(nb)]), do.call(cbind, AB[nb + seq_len(nb)]), batch, Ei_estimator)
+      # nboot independent scrambled Sobol designs of dimension 2 d, split
+      # into A and B (see .gsa_rqmc)
+      d <- length(r$lb)
+      U <- lapply(seq_len(method$nboot), function(b) .gsa_rqmc(samples, c(r$lb, r$lb), c(r$ub, r$ub), rng))
+      .gsa_sobol_AB(f, method, do.call(cbind, lapply(U, function(u) u[seq_len(d), , drop = FALSE])),
+                    do.call(cbind, lapply(U, function(u) u[d + seq_len(d), , drop = FALSE])), batch, Ei_estimator)
     },
     Morris = .gsa_morris(f, method, p_range, batch, rng),
     RegressionGSA = {
       .gsa_need(samples)
       r <- .gsa_bounds(p_range)
-      X <- qmc_sample(samples, r$lb, r$ub, SobolSample())
+      X <- .gsa_rqmc(samples, r$lb, r$ub, rng)
       ev <- .gsa_eval(f, X, batch)
       Y <- if (ev$multi) ev$Y else matrix(ev$Y, 1L)
       .gsa_regression(X, Y, method)
@@ -200,7 +218,7 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     DeltaMoment = {
       .gsa_need(samples)
       r <- .gsa_bounds(p_range)
-      X <- qmc_sample(samples, r$lb, r$ub, SobolSample())
+      X <- .gsa_rqmc(samples, r$lb, r$ub, rng)
       ev <- .gsa_eval(f, X, batch)
       if (ev$multi) stop("DeltaMoment sensitivity only supports scalar output functions", call. = FALSE)
       .gsa_delta(X, ev$Y, method, rng)
@@ -208,7 +226,10 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     EASI = {
       .gsa_need(samples)
       r <- .gsa_bounds(p_range)
-      X <- qmc_sample(samples, r$lb, r$ub, SobolSample())
+      # independent uniform samples: the S1_Corr correction assumes the
+      # spectrum of the residual noise is flat, which low discrepancy
+      # points break (it then overcorrects)
+      X <- r$lb + (r$ub - r$lb) * matrix(.qmc_unif(rng, length(r$lb) * samples), length(r$lb))
       ev <- .gsa_eval(f, X, batch)
       .gsa_easi(X, ev$Y, method)
     },
@@ -218,6 +239,22 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     RSA = { .gsa_need(samples); .gsa_rsa(f, method, p_range, samples, batch) },
     MutualInformation = { .gsa_need(samples); .gsa_mi(f, method, p_range, samples, batch, rng) },
     stop("unknown GSA method", call. = FALSE))
+}
+
+# A randomized quasi Monte Carlo sample: Owen scrambled Sobol points, each
+# uniform on the box, so the Monte Carlo estimators keep their expectations
+# and repeated runs give independent replicates. GlobalSensitivity.jl uses
+# the unscrambled sequence here (deterministic, with the n points that
+# follow its skip) and, for Sobol, the first and last d dimensions of a
+# 2 d nboot dimensional sequence; the scrambled design is the change of the
+# port (see PORTING.md). The deterministic design stays available through
+# gsa(f, Sobol(), A, B) with generate_design_matrices().
+.gsa_rqmc <- function(n, lb, ub, rng) {
+  # Owen scrambling works on 2^m points; every scrambled point is uniform on
+  # its own, so the first n of the next power of 2 keep that property
+  N <- 2^ceiling(log2(max(n, 2)))
+  U <- randomize(qmc_sample(N, length(lb), SobolSample()), OwenScramble(2L, rng = rng))
+  lb + (ub - lb) * U[, seq_len(n), drop = FALSE]
 }
 
 .gsa_need <- function(samples) if (is.null(samples)) stop("`samples` is required", call. = FALSE)
@@ -496,14 +533,22 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   dfdx <- do.call(rbind, lapply(XX, function(x) .gsa_grad(f, x)))
   dfdx <- matrix(dfdx, samples, k)
   a <- colMeans(dfdx); asq <- colMeans(dfdx^2); absa <- colMeans(abs(dfdx))
-  tao <- sigma <- numeric(k)
+  # tau_i = E[(df/du_i)^2 (1 - 3 u_i + 3 u_i^2) / 6] and
+  # sigma_i = E[(df/du_i)^2 u_i (1 - u_i) / 2] of Kucherenko and Iooss (2016,
+  # eq. 32 and UB2) for an input uniform on [0, 1]; a uniform input on
+  # [lo, hi] is rescaled to u = (x - lo) / (hi - lo), and the measures are NA
+  # for other laws, where these bounds do not hold. GlobalSensitivity.jl
+  # weights tau with 1 - 3 x + x^2 and uses the raw inputs (see PORTING.md).
+  X <- matrix(unlist(XX), samples, k, byrow = TRUE)
+  tao <- sigma <- rep(NA_real_, k)
   for (i in seq_len(k)) {
-    for (j in seq_len(samples)) tao[i] <- tao[i] + (dfdx[j, i]^2) * (1 - 3 * XX[[j]][i] + XX[[j]][i]^2) / 6
-    tao[i] <- tao[i] / samples
-  }
-  for (i in seq_len(k)) {
-    for (j in seq_len(samples)) sigma[i] <- sigma[i] + 0.5 * XX[[j]][i] * (1 - XX[[j]][i]) * dfdx[j, i]^2
-    sigma[i] <- sigma[i] / samples
+    D <- distr[[i]]
+    if (!identical(D$family, "unif")) next
+    lo <- .dist_q(D, 0); hi <- .dist_q(D, 1)
+    u <- (X[, i] - lo) / (hi - lo)
+    g2 <- (dfdx[, i] * (hi - lo))^2
+    tao[i] <- mean(g2 * (1 - 3 * u + 3 * u^2) / 6)
+    sigma[i] <- mean(g2 * u * (1 - u) / 2)
   }
   res <- list(a = a, absa = absa, asq = asq, sigma = sigma, tao = tao, crossed = NULL, abscrossed = NULL, crossedsq = NULL)
   if (method$crossed) {
@@ -583,7 +628,12 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   x <- vapply(s, function(si) 0.5 + asin(sin(si)) / pi, numeric(samples))
   x <- matrix(x, samples)
   Y <- if (batch) as.numeric(f(t(x))) else vapply(seq_len(samples), function(j) as.numeric(f(x[j, ])), 0)
-  .gsa_rbdfast_analysis(Y, s, method$num_harmonics)
+  S <- .gsa_rbdfast_analysis(Y, s, method$num_harmonics)
+  # bias correction of Tissot and Prieur (2012), lambda = 2 M / N: the
+  # spectrum of the noise adds about lambda (1 - S) to each index
+  # (GlobalSensitivity.jl returns S uncorrected; see PORTING.md)
+  lam <- 2 * method$num_harmonics / samples
+  S - lam / (1 - lam) * (1 - S)
 }
 
 .gsa_rbdfast_analysis <- function(Y, s, H) {
@@ -967,7 +1017,7 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 
 .gsa_mi <- function(f, method, p_range, samples, batch, rng) {
   r <- .gsa_bounds(p_range)
-  X <- qmc_sample(samples, r$lb, r$ub, SobolSample())
+  X <- .gsa_rqmc(samples, r$lb, r$ub, rng)
   .gsa_mi_analysis(X, as.numeric(.gsa_eval(f, X, batch)$Y), method, rng)
 }
 

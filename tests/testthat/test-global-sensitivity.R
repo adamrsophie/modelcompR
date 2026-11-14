@@ -110,9 +110,43 @@ test_that("the random GSA methods recover known sensitivities", {
   expect_true(mi$S[2] > mi$S[3])
   dm <- gsa(ishi_gsa, DeltaMoment(nboot = 10), rg, samples = 600)
   expect_true(dm$deltas[2] > dm$deltas[3])
-  bat <- suppressWarnings(gsa(function(X) apply(X, 2, ishi_gsa), Sobol(), rg, samples = 512, batch = TRUE))
-  ser <- suppressWarnings(gsa(ishi_gsa, Sobol(), rg, samples = 512))
+  set.seed(5)
+  bat <- gsa(function(X) apply(X, 2, ishi_gsa), Sobol(), rg, samples = 512, batch = TRUE)
+  set.seed(5)
+  ser <- gsa(ishi_gsa, Sobol(), rg, samples = 512)
   expect_equal(bat$S1, ser$S1)
+})
+
+test_that("the estimators are unbiased on known indices", {
+  set.seed(3)
+  bat <- function(X) sin(X[1, ]) + 7 * sin(X[2, ])^2 + 0.1 * X[3, ]^4 * sin(X[1, ])
+  rg <- rep(list(c(-pi, pi)), 3)
+  # independent scrambled replicates: their mean is within a few standard
+  # errors of the analytic indices
+  R <- replicate(40, {
+    r <- gsa(bat, Sobol(order = 0:2), rg, samples = 256, batch = TRUE)
+    c(r$S1, r$ST, r$S2[1, 3])
+  })
+  z <- (rowMeans(R) - c(0.3139, 0.4424, 0, 0.5576, 0.4424, 0.2437, 0.2437)) / (apply(R, 1, stats::sd) / sqrt(40))
+  expect_true(all(abs(z) < 4))
+  r <- gsa(bat, Sobol(nboot = 10), rg, samples = 256, batch = TRUE)
+  expect_true(all(abs(r$ST - c(0.5576, 0.4424, 0.2437)) < 4 * r$ST_Conf_Int / 1.96 + 0.01))
+  # RBD-FAST with the Tissot and Prieur correction: a null input near 0
+  lin <- function(x) x[1] + 2 * x[2] + 0 * x[3]
+  B <- replicate(30, gsa(lin, RBDFAST(), num_params = 3, samples = 200))
+  expect_equal(rowMeans(B), c(0.2, 0.8, 0), tolerance = 0.02)
+  E <- replicate(30, gsa(function(x) x[1] + 2 * x[2], EASI(), rep(list(c(0, 1)), 3), samples = 1000)$S1_Corr)
+  expect_equal(rowMeans(E), c(0.2, 0.8, 0), tolerance = 0.02)
+  # DGSM tau and sigma on uniform inputs: equal to the total variance part
+  # for linear terms, an upper bound otherwise, NA for other laws
+  f <- function(x) x[1] + 2 * x[2]^2 + x[3]
+  d <- list(univariate_distribution("unif", 0, 1), univariate_distribution("unif", 0, 1),
+            univariate_distribution("unif", -1, 3))
+  dg <- gsa(f, DGSM(), d, samples = 4000)
+  expect_equal(dg$tao[c(1, 3)], c(1, 16) / 12, tolerance = 0.03)
+  expect_equal(dg$sigma[c(1, 3)], c(1, 16) / 12, tolerance = 0.03)
+  expect_gt(dg$sigma[2], 4 * (1 / 5 - 1 / 9))
+  expect_true(is.na(gsa(f, DGSM(), list(univariate_distribution("norm"), d[[2]], d[[3]]), samples = 20)$tao[1]))
 })
 
 test_that("randomized QMC keeps points in the unit cube", {

@@ -624,23 +624,25 @@ order indices 0.314, 0.442 and 0 and total indices 0.558, 0.442 and 0.244.
 ishigami <- function(x) sin(x[1]) + 7 * sin(x[2])^2 + 0.1 * x[3]^4 * sin(x[1])
 ranges <- rep(list(c(-pi, pi)), 3)
 set.seed(1)
-res <- suppressWarnings(gsa(ishigami, Sobol(order = c(0, 1, 2)), ranges, samples = 4000))
+res <- gsa(ishigami, Sobol(order = c(0, 1, 2)), ranges, samples = 4096)
 round(res$S1, 3)
 round(res$ST, 3)
 round(res$S2, 3)
 ```
 
-`Sobol()` draws its two design matrices from the first and last `d`
-dimensions of one Sobol sequence, as Julia does; the warning recalls that
-these matrices are deterministic. Pass your own matrices with
-`gsa(f, Sobol(), A, B)`, and choose the total effect estimator with
-`Ei_estimator` (`"Jansen1999"`, `"Homma1996"`, `"Sobol2007"` or
-`"Janon2014"`). `nboot > 1` splits the columns into blocks and adds bootstrap
-confidence intervals. For randomized QMC, scramble a sequence of dimension
-`2 d` and split it. (The randomized `generate_design_matrices()` of
-QuasiMonteCarlo.jl, ported as is, scrambles one `d` dimensional sequence for
-every matrix, so `A` and `B` share their base points and are strongly
-correlated; Sobol estimates from such a pair are biased.)
+`Sobol()` draws an Owen scrambled Sobol design of dimension `2 d` and splits
+its rows into the matrices `A` and `B`, so every estimator sees independent
+pairs of uniform points and repeated runs are independent replicates. With
+`nboot > 1` it draws `nboot` such designs and reports the mean with a
+confidence interval from the replicates. Choose the total effect estimator
+with `Ei_estimator` (`"Jansen1999"`, `"Homma1996"`, `"Sobol2007"` or
+`"Janon2014"`), and pass your own matrices with `gsa(f, Sobol(), A, B)`;
+the chunk below builds the same kind of design by hand. GlobalSensitivity.jl
+uses the unscrambled sequence instead, which `generate_design_matrices()`
+with `NoRand()` reproduces. (The randomized `generate_design_matrices()`
+scrambles one `d` dimensional point set for every matrix, so its `A` and `B`
+share their base points and are strongly correlated; use it for replicated
+error estimates, not as a Sobol pair.)
 
 ```{r gsa-design}
 set.seed(4)
@@ -666,12 +668,12 @@ round(gsa(ishigami, DeltaMoment(nboot = 20), ranges, samples = 500)$deltas, 3)
 | Method | Measures |
 |:--|:--|
 | `Sobol()` | variance based first, second and total order indices |
-| `eFAST()`, `RBDFAST()` | first (and total) order indices from Fourier analysis |
+| `eFAST()`, `RBDFAST()` | first (and total) order indices from Fourier analysis; RBD-FAST with the Tissot and Prieur bias correction |
 | `Morris()` | elementary effects: means, absolute means, variances |
 | `RegressionGSA()` | Pearson, standardized regression and partial correlation coefficients, rank versions |
-| `DGSM()` | derivative based measures from forward mode gradients |
+| `DGSM()` | derivative based measures from forward mode gradients; `tao` and `sigma` bound the total index for uniform inputs |
 | `DeltaMoment()` | moment independent delta measure from kernel densities |
-| `EASI()` | first order indices from the spectrum of sorted samples |
+| `EASI()` | first order indices from the spectrum of sorted samples, with a bias corrected `S1_Corr` |
 | `FractionalFactorial()` | main effects of a two level design |
 | `Shapley()` | Shapley effects, also for dependent inputs |
 | `RSA()` | regional sensitivity from accepted and rejected samples |
@@ -700,7 +702,7 @@ final_prey <- function(p) {
   sol$u[[2]][1]
 }
 set.seed(3)
-round(suppressWarnings(gsa(final_prey, Sobol(), rep(list(c(1, 3)), 4), samples = 256))$S1, 3)
+round(gsa(final_prey, Sobol(), rep(list(c(1, 3)), 4), samples = 256)$S1, 3)
 ```
 
 The quasi Monte Carlo samplers of QuasiMonteCarlo.jl are available directly:

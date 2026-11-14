@@ -489,7 +489,16 @@ randomize <- function(x, R) {
 #' consecutive blocks of dimensions of one `num_mats * d` dimensional
 #' sequence, which are not independent (QuasiMonteCarlo warns). A random
 #' sampler draws every matrix anew. `DesignMatrix()` is the iterator form:
-#' `$next()` returns the next matrix.
+#' `$next_matrix()` returns the next matrix.
+#'
+#' The randomized matrices scramble the same `n` base points, so each one is a
+#' valid randomized QMC point set and the estimates from different matrices
+#' are independent replicates, but the matrices are dependent column by
+#' column (the i-th points of two matrices are strongly correlated). They
+#' suit replicated error estimation, not designs that need independent pairs
+#' of points such as the `A` and `B` matrices of Sobol indices; for those,
+#' randomize one `2 d` dimensional point set and split its rows, as [gsa()]
+#' does.
 #'
 #' @param n Number of points per matrix.
 #' @param d Dimension, or the lower bounds when `ub` is given.
