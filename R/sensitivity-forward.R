@@ -86,8 +86,6 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   has_cb <- length(cbs$continuous) + length(cbs$discrete) > 0L
   if (has_cb && !is.null(fns$mass))
     stop("events in mass matrix problems are not supported by the sensitivity methods", call. = FALSE)
-  if (has_cb && prob$tspan[2L] < prob$tspan[1L])
-    stop("events with a decreasing time span are not supported by the sensitivity methods", call. = FALSE)
   nq <- if (has_cb) np * m else 0L
   iu <- seq_len(n)
   rhs <- ODEForwardSensitivityFunction(prob, sensealg, Q0, tracked = has_cb)
@@ -150,6 +148,7 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
         t = ev$t, dtau = if (is.null(tx)) numeric(m) else as.numeric(crossprod(tx, X)),
         fm = fns$f(ev$u, ev$p, ev$t), fp = fns$f(ev$u_right, .sens_pvec(ev$p, ev$p_right), ev$t))
       X <- D %*% X
+      rec$events[[length(rec$events)]]$Q_right <- X[n + seq_len(np), , drop = FALSE]
       integ$u <- c(ev$u_right, as.numeric(X[iu, , drop = FALSE]), as.numeric(X[n + seq_len(np), , drop = FALSE]))
       integ$p[] <- as.numeric(fake$p)
       if (isTRUE(fake$terminate)) integ$terminate <- TRUE

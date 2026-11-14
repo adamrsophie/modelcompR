@@ -22,6 +22,7 @@ adjoint_sensitivities(
   sensealg = NULL,
   dgdu = NULL,
   dgdp = NULL,
+  dgdt_discrete = NULL,
   ...
 )
 
@@ -39,7 +40,8 @@ ODEAdjointProblem(
   callback = NULL,
   no_start = FALSE,
   abstol = 1e-06,
-  reltol = 0.001
+  reltol = 0.001,
+  dgdt_discrete = NULL
 )
 }
 \arguments{
@@ -73,6 +75,11 @@ the gradients of the continuous cost.}
 
 \item{dgdu, dgdp}{For steady state and nonlinear solutions: functions
 \verb{(u, p)} returning the gradients of the cost \code{g(u, p)} (or give \code{g}).}
+
+\item{dgdt_discrete}{For ODEs with continuous events: a function \code{(t)}
+giving the derivative of the cost with respect to the time of the
+samples saved at the event time \code{t}, which move with the event (the
+cotangent of \code{sol$t}), or \code{NULL}.}
 
 \item{...}{Options for the backward \code{\link[=solve]{solve()}}.}
 }

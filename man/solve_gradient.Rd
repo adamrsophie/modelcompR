@@ -36,7 +36,11 @@ differentiated, as the \code{sensealg} keyword of Julia's \code{solve}.
 \details{
 The loss receives the solution and may use its saved values (\code{sol$u},
 \code{sol[x]}, \code{sol[expr]}, \code{as.matrix(sol)}) and parameters (\code{sol$ps[k]});
-give the times it needs as \code{saveat}. It must not interpolate (\code{sol(t)}).
+give the times it needs as \code{saveat}. It may also interpolate values
+\code{sol(t)}: the solve is repeated with those times saved (added to \code{saveat},
+or as stops without \code{saveat}), hidden from the saved values the loss
+reads, so they are differentiated like the others; the returned \code{sol}
+includes them.
 Its derivatives with respect to the saved values and the parameters are
 taken by central differences, then pulled back by
 \itemize{

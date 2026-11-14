@@ -137,8 +137,11 @@ test_that("events that change parameters and terminate are differentiated", {
     gr <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
     expect_equal(unname(c(gr$u0, gr$p)), ref, tolerance = 1e-6, label = sa$name)
   }
-  expect_error(solve_gradient(loss, prob, Tsit5(), saveat = ts, sensealg = QuadratureAdjoint()),
-               "depend on the state")
+  # the parameter change depends on the state: QuadratureAdjoint accumulates
+  # its integral during the backward solve
+  gq <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-12,
+                       sensealg = QuadratureAdjoint(abstol = 1e-10, reltol = 1e-10))
+  expect_equal(unname(c(gq$u0, gq$p)), ref, tolerance = 1e-6)
   # an event that terminates: the last saved point moves with the event time
   cbt <- ContinuousCallback(function(u, t, integ) u[1], function(integ) terminate(integ))
   probt <- ODEProblem(function(u, p, t) c(u[2], -p[1]), c(1, 0), c(0, 2), 9.81, callback = cbt)
@@ -221,9 +224,32 @@ test_that("solve() callbacks, terminating running costs, unsaved end states and 
     gd <- solve_gradient(last, pd, Tsit5(), saveat = c(1, 0), reltol = 1e-10, abstol = 1e-12, sensealg = sa)
     expect_equal(unname(c(gd$u0, gd$p)), c(exp(2), 1.5 * exp(2)), tolerance = 1e-6, label = sa$name)
   }
-  pdev <- ODEProblem(function(u, p, t) -p[1] * u, 1.5, c(1, 0), 2,
-                     callback = PresetTimeCallback(0.5, function(integ) integ$u <- integ$u + 1))
-  expect_error(solve_gradient(last, pdev, Tsit5(), sensealg = InterpolatingAdjoint()), "decreasing")
+})
+
+test_that("decreasing time spans with events, checkpointing and QuadratureAdjoint", {
+  f <- function(u, p, t) c(-p[1] * u[1] + u[2], -p[2] * u[2])
+  cbd <- CallbackSet(PresetTimeCallback(0.65, function(integ) integ$u[1] <- integ$u[1] * integ$p[3] + integ$u[2]),
+                     PresetTimeCallback(0.3, function(integ) integ$p[1] <- integ$p[1] + 0.5 * integ$u[1]))
+  fired <- 0
+  cbc <- ContinuousCallback(function(u, t, integ) u[1] - 0.5, function(integ) {
+    fired <<- fired + 1
+    integ$u[2] <- 0.5 * integ$u[2] + 0.1 * integ$p[3]
+  })
+  ts <- seq(1, 0, by = -0.25)
+  loss <- function(sol) sum(as.matrix(sol)^2)
+  for (cb in list(cbd, cbc)) {
+    prob <- ODEProblem(f, c(1, 0.5), c(1, 0), c(-1.2, -0.8, 0.6), callback = cb)
+    F <- function(th) loss(solve(remake(prob, u0 = th[1:2], p = th[3:5]), Tsit5(), reltol = 1e-12,
+                                 abstol = 1e-12, saveat = ts))
+    ref <- sensitivity_fd(F, c(1, 0.5, -1.2, -0.8, 0.6))
+    for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), BacksolveAdjoint(), GaussAdjoint(),
+                    QuadratureAdjoint(abstol = 1e-10, reltol = 1e-10), InterpolatingAdjoint(checkpointing = TRUE),
+                    GaussAdjoint(checkpointing = TRUE))) {
+      gr <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+      expect_equal(unname(c(gr$u0, gr$p)), ref, tolerance = 1e-7, label = sa$name)
+    }
+  }
+  expect_gt(fired, 0)
 })
 
 test_that("mass matrix DAE gradients agree with finite differences", {
@@ -350,8 +376,16 @@ test_that("shadowing methods give the sensitivity of the Lorenz attractor averag
 
 test_that("the loss may not interpolate, and the adjoint needs a dense forward solution", {
   prob <- ODEProblem(function(u, p, t) -p[1] * u, 1, c(0, 1), 2)
-  expect_error(solve_gradient(function(sol) sol(0.5), prob, Tsit5(), saveat = 0.5, sensealg = GaussAdjoint()),
-               "saveat")
+  # an interpolating loss: u(0.3) = exp(-0.6), d/dp = -0.3 exp(-0.6), d/du0 = exp(-0.6)
+  for (sa in list(GaussAdjoint(), ForwardDiffSensitivity(), BacksolveAdjoint())) {
+    gi <- solve_gradient(function(sol) sol(0.3) + sum(as.matrix(sol)), prob, Tsit5(), saveat = 0.5,
+                         reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+    expect_equal(unname(c(gi$u0, gi$p)), c(exp(-0.6) + 1 + exp(-1) + exp(-2),
+                                           -0.3 * exp(-0.6) - 0.5 * exp(-1) - exp(-2)), tolerance = 1e-7,
+                 label = sa$name)
+    expect_identical(length(gi$sol$t), 4L)
+  }
+  expect_error(solve_gradient(function(sol) sol(0.3, deriv = 1), prob, Tsit5(), saveat = 0.5), "derivatives")
   sol <- solve(prob, Tsit5(), saveat = 0.5)
   expect_error(adjoint_sensitivities(sol, Tsit5(), t = 1, dgdu_discrete = function(u, p, t, i) 1), "dense")
   r <- adjoint_sensitivities(sol, Tsit5(), t = 1, dgdu_discrete = function(u, p, t, i) 1,
@@ -375,4 +409,49 @@ test_that("fixed step adjoints apply each cost once where step times round near 
   solve(prob, RK4(), dt = 2.5e-4, adaptive = FALSE, tstops = seq(0, 1, by = 2.5e-4),
         callback = PresetTimeCallback(c(0.1, 0.5), function(integ) cnt <<- cnt + 1))
   expect_identical(cnt, 2)
+})
+
+test_that("a loss may read the parameters in force before an event changed them", {
+  t <- t_nounits; D <- D_nounits
+  x <- Variable("prex_x", t); k <- Parameter("prex_k"); c0 <- Parameter("prex_c")
+  sys <- mtkcompile(System(list(D(x) ~ -k * x + c0), t, name = "prex",
+                           discrete_events = list(SymbolicDiscreteCallback(0.5, list(k ~ Pre(k) + Pre(x)),
+                                                                           discrete_parameters = list(k)))))
+  prob <- ODEProblem(sys, list(x ~ 1, k ~ 0.7, c0 ~ 0.3), c(0, 1))
+  ts <- seq(0, 1, by = 0.25)
+  # k * x reads k = 0.7 before t = 0.5 and k = 0.7 + x(0.5) after
+  loss <- function(sol) sum(sol[k * x]) + sum(sol[x]^2)
+  F <- function(th) {
+    q <- prob$p
+    q[] <- th[-1]
+    loss(solve(remake(prob, u0 = th[1], p = q), Tsit5(), reltol = 1e-12, abstol = 1e-12, saveat = ts))
+  }
+  ref <- sensitivity_fd(F, as.numeric(c(prob$u0, prob$p)))
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint(),
+                  QuadratureAdjoint(abstol = 1e-10, reltol = 1e-10))) {
+    gr <- solve_gradient(loss, prob, Tsit5(), saveat = ts, reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+    expect_equal(unname(c(gr$u0, gr$p)), ref, tolerance = 1e-7, label = sa$name)
+  }
+})
+
+test_that("losses of the saved times are differentiated where the times move with events", {
+  # terminated at u = 1 from u0 with u' = p: tau = (1 - u0) / p
+  probt <- ODEProblem(function(u, p, t) p[1], 0.2, c(0, 5), 2,
+                      callback = ContinuousCallback(function(u, t, integ) u[1] - 1, function(integ) terminate(integ)))
+  lt <- function(sol) tail(sol$t, 1)
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint(), BacksolveAdjoint())) {
+    g <- solve_gradient(lt, probt, Tsit5(), reltol = 1e-10, abstol = 1e-12, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), c(-0.5, -0.2), tolerance = 1e-8, label = sa$name)
+  }
+  # a bounce saved at its (moving) time, with a loss of the times
+  probb <- ODEProblem(function(u, p, t) c(u[2], -p[1]), c(1, 0), c(0, 0.8), c(9.81, 0.9),
+                      callback = ContinuousCallback(function(u, t, integ) u[1],
+                                                    function(integ) integ$u[2] <- -integ$p[2] * integ$u[2]))
+  lb <- function(sol) sum(sol$t^2 * as.matrix(sol)[, 1]) + sum(sol$t)
+  ref <- sensitivity_fd(function(th) lb(solve(remake(probb, u0 = th[1:2], p = th[3:4]), RK4(), dt = 0.05)),
+                        c(1, 0, 9.81, 0.9))
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), BacksolveAdjoint())) {
+    g <- solve_gradient(lb, probb, RK4(), dt = 0.05, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), ref, tolerance = 1e-6, label = sa$name)
+  }
 })

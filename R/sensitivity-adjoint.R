@@ -66,6 +66,10 @@
 #'   `sol$t`).
 #' @param callback Further callbacks for the backward solve.
 #' @param no_start Leave out the discrete cost at the initial time.
+#' @param dgdt_discrete For ODEs with continuous events: a function `(t)`
+#'   giving the derivative of the cost with respect to the time of the
+#'   samples saved at the event time `t`, which move with the event (the
+#'   cotangent of `sol$t`), or `NULL`.
 #' @param sensealg An adjoint method, [InterpolatingAdjoint()] by default
 #'   (or the `sensealg` the solution was computed with).
 #' @param dgdu,dgdp For steady state and nonlinear solutions: functions
@@ -83,7 +87,8 @@
 adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NULL, dgdp_discrete = NULL,
                                   dgdu_continuous = NULL, dgdp_continuous = NULL, g = NULL,
                                   abstol = 1e-6, reltol = 1e-3, checkpoints = NULL, callback = NULL,
-                                  no_start = FALSE, sensealg = NULL, dgdu = NULL, dgdp = NULL, ...) {
+                                  no_start = FALSE, sensealg = NULL, dgdu = NULL, dgdp = NULL,
+                                  dgdt_discrete = NULL, ...) {
   env <- .sol_env(sol)
   prob <- env$prob
   sensealg <- sensealg %||% if (.is_sensealg(env$sensealg, "AdjointSensitivityAlgorithm")) env$sensealg
@@ -128,7 +133,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
     stop("sensealg must be an adjoint method such as InterpolatingAdjoint()", call. = FALSE)
   ap <- ODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                           dgdp_continuous, g, checkpoints = checkpoints, callback = callback,
-                          no_start = no_start, abstol = abstol, reltol = reltol)
+                          no_start = no_start, abstol = abstol, reltol = reltol, dgdt_discrete = dgdt_discrete)
   adj <- solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...)
   ap$finish(adj)
 }
@@ -138,7 +143,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
 ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL, t = NULL,
                               dgdu_discrete = NULL, dgdp_discrete = NULL, dgdu_continuous = NULL,
                               dgdp_continuous = NULL, g = NULL, checkpoints = NULL, callback = NULL,
-                              no_start = FALSE, abstol = 1e-6, reltol = 1e-3) {
+                              no_start = FALSE, abstol = 1e-6, reltol = 1e-3, dgdt_discrete = NULL) {
   env <- .sol_env(sol)
   prob <- env$prob
   if (is.null(dgdu_discrete) && is.null(dgdp_discrete) && is.null(dgdu_continuous) && is.null(g) &&
@@ -158,9 +163,16 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   events <- .sens_events_of(sol)
   if (length(events) && !is.null(fns$mass))
     stop("events in mass matrix problems are not supported by the sensitivity methods", call. = FALSE)
-  if (prob$tspan[2L] < prob$tspan[1L] && (length(events) || ckpt || method == "QuadratureAdjoint"))
-    stop("a decreasing time span is supported without events, checkpointing and QuadratureAdjoint",
-         call. = FALSE)
+  # QuadratureAdjoint integrates the parameter gradient after the backward
+  # solve, but an event whose parameter change depends on the state feeds
+  # that gradient back into lambda. The same integral is then accumulated
+  # step by step during the backward solve, as GaussAdjoint does.
+  if (method == "QuadratureAdjoint" && np && length(events) &&
+      any(vapply(events, function(ev) {
+        D <- .sens_event_jacobian(ev, fns, prob)
+        any(abs(D[n + seq_len(np), seq_len(n)]) > 1e-10)
+      }, TRUE)))
+    method <- "GaussAdjoint"
   if (length(events) && is.null(g) && (!is.null(dgdu_continuous) || !is.null(dgdp_continuous)))
     stop("a continuous cost with events needs `g`: the cost jumps at the event times", call. = FALSE)
   ev_t <- vapply(events, `[[`, 0, "t")
@@ -175,7 +187,7 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   tr <- if (backsolve) NULL else if (ckpt) {
     # the event times are checkpoints too, started from the state after the
     # event and solved with the parameters in force in their segment
-    cps <- sort(unique(c(checkpoints %||% env$t, ev_t)))
+    cps <- sort(unique(c(checkpoints %||% env$t, ev_t)), decreasing = dir < 0)
     if (abs(cps[1L] - t0) > tol(t0)) cps <- c(t0, cps)
     if (abs(cps[length(cps)] - tend) > tol(tend)) cps <- c(cps, tend)
     states <- lapply(cps, function(tc) {
@@ -310,6 +322,11 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
         # callback_tracking.jl), and a running cost jumps there
         fp <- fns$f(as.numeric(ev$u_right), .sens_pvec(p, ev$p_right), tt)
         w <- w + tx * sum(fp * lr)
+        # the cost through the times of the samples that move with the event
+        if (!is.null(dgdt_discrete) && j == length(eidx)) {
+          dtv <- dgdt_discrete(tt)
+          if (!is.null(dtv)) w <- w + tx * sum(dtv)
+        }
         lr <- numeric(n)
         # (after a terminating event nothing is integrated)
         if (cont && !is.null(g))
@@ -317,9 +334,6 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
                            if (isTRUE(ev$terminate)) 0 else g(as.numeric(ev$u_right), .sens_pvec(p, ev$p_right), tt))
       }
       if (np && method == "QuadratureAdjoint") {
-        if (any(abs(D[n + seq_len(np), il]) > 1e-10))
-          stop("QuadratureAdjoint does not support events whose parameter changes depend on the state; ",
-               "use InterpolatingAdjoint() or GaussAdjoint()", call. = FALSE)
         acc$records[[length(acc$records) + 1L]] <-
           list(seg = acc$seg, A = t(D[n + seq_len(np), n + seq_len(np), drop = FALSE]), add = w[n + seq_len(np)])
       }
@@ -441,12 +455,13 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   recs <- acc$records
   for (s in nseg:0) {
     a <- bounds[s + 1L]; b <- bounds[s + 2L]
-    cuts <- sort(unique(c(a, cost$t[cost$t > a & cost$t < b], b)))
+    # the signed integral from a to b, also for a decreasing time span
+    cuts <- sort(unique(c(a, cost$t[cost$t > min(a, b) & cost$t < max(a, b)], b)), decreasing = b < a)
     tr$seg <- s
     ps <- .sens_pvec(pfinal, pseg[[s + 1L]])
     lam_at <- function(x) .interp_states(aenv, x)[1L, il]
     for (k in seq_len(length(cuts) - 1L)) {
-      if (cuts[k + 1L] > cuts[k])
+      if (cuts[k + 1L] != cuts[k])
         mu <- mu + .sens_quadgk(function(x) mu_integrand(lam_at(x), ps, x), cuts[k], cuts[k + 1L],
                                 abstol, reltol)
     }

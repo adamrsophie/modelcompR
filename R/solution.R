@@ -204,10 +204,22 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   deriv <- as.integer(deriv)
   if (length(deriv) != 1L || is.na(deriv) || deriv < 0L) stop("deriv must be 0, 1, 2, ...", call. = FALSE)
   # the copies solve_gradient() differentiates a loss on (R/sensitivity-interface.R)
-  if (isTRUE(env$sens_frozen))
-    stop("the loss of solve_gradient() may use the saved values (sol$u, sol[x], as.matrix(sol)) but not ",
-         "interpolation sol(t); give the times it needs as `saveat`", call. = FALSE)
-  U <- .interp_states(env, tq, deriv)
+  if (isTRUE(env$sens_frozen)) {
+    # sol(t) reads the samples solve_gradient() saved at the times the loss
+    # interpolates, so they are differentiated like the other saved values;
+    # an unknown time asks solve_gradient() to save it and solve again
+    tab <- env$sens_interp
+    k <- if (is.null(tab)) NA_integer_ else
+      vapply(tq, function(x) { i <- which(abs(tab$t - x) <= 1e-12 * max(1, abs(x))); if (length(i)) i[1L] else NA_integer_ }, 0L)
+    if (anyNA(k)) {
+      cond <- structure(class = c("sens_needs_times", "error", "condition"),
+                        list(message = "the loss interpolates the solution", call = NULL, times = tq))
+      stop(cond)
+    }
+    if (deriv > 0L)
+      stop("the loss of solve_gradient() may interpolate values sol(t) but not derivatives", call. = FALSE)
+    U <- tab$U[k, , drop = FALSE]
+  } else U <- .interp_states(env, tq, deriv)
   if (deriv > 0L && !is.null(idxs)) {
     # error_if_observed_derivative of SciMLBase
     ids <- if (is.list(idxs) && !is_sym(idxs)) idxs else list(idxs)

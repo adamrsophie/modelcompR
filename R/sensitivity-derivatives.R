@@ -141,7 +141,12 @@
 .sens_trajectory <- function(sol, event_t = numeric(), checkpoint = NULL) {
   env <- .sol_env(sol)
   tr <- new.env(parent = emptyenv())
-  tr$event_t <- sort(event_t)
+  # sgn = -1 for a decreasing time span: segments and intervals are counted
+  # in the direction of integration
+  tsp <- env$prob$tspan
+  sgn <- if (!is.null(tsp) && tsp[2L] < tsp[1L]) -1 else 1
+  tr$event_t <- sgn * sort(sgn * event_t)
+  seg_index <- function(x) findInterval(sgn * x, sgn * tr$event_t)
   tr$seg <- length(event_t)
   if (is.null(checkpoint)) {
     steps <- env$steps
@@ -149,9 +154,7 @@
       stop("the adjoint needs a dense forward solution: solve without `saveat`, with `dense = TRUE`, ",
            "or with `sensealg = ...`, or use a checkpointing sensitivity algorithm", call. = FALSE)
     starts <- vapply(steps, `[[`, 0, "t0")
-    by_seg <- split(seq_along(steps), factor(findInterval(starts, tr$event_t), levels = 0:length(event_t)))
-    # a solution over a decreasing time span has decreasing step starts
-    sgn <- if (length(starts) > 1L && starts[length(starts)] < starts[1L]) -1 else 1
+    by_seg <- split(seq_along(steps), factor(seg_index(starts), levels = 0:length(event_t)))
     tr$at <- function(t) {
       idx <- by_seg[[tr$seg + 1L]]
       if (!length(idx)) idx <- seq_along(steps)
@@ -165,12 +168,12 @@
   # (the intervals of the current segment between events only)
   ck <- checkpoint
   nint <- length(ck$times) - 1L
-  seg_of <- findInterval(ck$times[seq_len(nint)], tr$event_t)
+  seg_of <- seg_index(ck$times[seq_len(nint)])
   tr$cache <- NULL
   tr$at <- function(t) {
     ks <- which(seg_of == tr$seg)
     if (!length(ks)) ks <- seq_len(nint)
-    k <- ks[max(1L, min(length(ks), findInterval(t, ck$times[ks])))]
+    k <- ks[max(1L, min(length(ks), findInterval(sgn * t, sgn * ck$times[ks])))]
     if (is.null(tr$cache) || tr$cache$k != k) {
       pr <- ck$prob
       pr$u0 <- ck$states[[k]]
@@ -183,7 +186,7 @@
       tr$cache$starts <- vapply(tr$cache$steps, `[[`, 0, "t0")
     }
     st <- tr$cache
-    i <- max(1L, min(length(st$steps), findInterval(t, st$starts)))
+    i <- max(1L, min(length(st$steps), findInterval(sgn * t, sgn * st$starts)))
     .step_value(st$steps[[i]], t)
   }
   tr

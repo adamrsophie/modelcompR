@@ -421,6 +421,7 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   sol <- do.call(solve, c(list(prob, alg), dots))
   env <- .sol_env(sol)
   ct <- .sens_loss_cotangent(loss, sol)
+  .sens_no_hist(ct)
   full <- dots[setdiff(names(dots), c("saveat", "save_everystep", "save_start", "save_end", "save_idxs", "dense"))]
   if (!is.null(rec)) rec$events <- list()
   fsol <- if (length(full) == length(dots) && is.null(rec)) sol else do.call(solve, c(list(prob, alg), full))
