@@ -174,12 +174,12 @@ symF_with_mocks <- function(code) {
   # them through the global environment the namespace falls back to
   added <- character(0)
   inns <- names(mocks)[vapply(names(mocks), exists, NA, envir = ns, inherits = FALSE)]
-  if (length(inns)) do.call(testthat::local_mocked_bindings, c(mocks[inns], list(.env = ns)))
+  if (length(inns)) do.call(testthat::local_mocked_bindings, c(mocks[inns], list(.package = "modelcompR", .env = environment())))
   for (nm in setdiff(names(mocks), inns)) {
     assign(nm, mocks[[nm]], envir = globalenv())
     added <- c(added, nm)
   }
-  on.exit(rm(list = added, envir = globalenv()))
+  on.exit(rm(list = added, envir = globalenv()), add = TRUE)
   code
 }
 symF_branch <- function(d, bt, col, val) {
