@@ -540,9 +540,11 @@
 #' * `tearing_alg`: `"carpanzano"` (default) or `"modia"`.
 #' * `allow_symbolic`, `allow_parameter`, `conservative`: which coefficients
 #'   an equation may be divided by when it is solved for a variable: ones
-#'   containing unknowns (default `FALSE`), ones containing parameters
-#'   (default `TRUE`), or only 1 and -1 (default `FALSE`). A parameter whose
-#'   default value is zero is never divided by.
+#'   containing unknowns (default `FALSE`) and ones containing parameters
+#'   (default `TRUE`); with `conservative = TRUE` (default `FALSE`) a
+#'   numeric coefficient must be 1 or -1, while symbolic coefficients still
+#'   follow the first two options. A parameter whose default value is zero
+#'   is never divided by.
 #' * `maxiters`: iteration limit of the Pantelides algorithm.
 #' * `inline_linear_sccs`: solve each block of algebraic equations that is
 #'   linear in its variables inside the generated right-hand side (default
@@ -673,7 +675,8 @@ NULL
 #'   contains other unknowns.
 #' @param allow_parameter Allow solving for a variable whose coefficient
 #'   contains parameters.
-#' @param conservative Only solve for variables with coefficient 1 or -1.
+#' @param conservative Only divide by the numeric coefficients 1 and -1;
+#'   symbolic coefficients follow `allow_symbolic` and `allow_parameter`.
 #' @param var_eq_matching The matching returned by the Pantelides pass.
 #' @param ... Options passed on: `maxiters` for the Pantelides algorithm.
 #' @return A `System`; `find_solvables()` returns the state invisibly.

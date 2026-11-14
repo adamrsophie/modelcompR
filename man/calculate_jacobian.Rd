@@ -39,7 +39,9 @@ generate_custom_function(sys, expr, ...)
 \arguments{
 \item{sys}{A complete \code{System}.}
 
-\item{sparse}{Return a sparsity aware matrix function.}
+\item{sparse}{For \code{generate_jacobian()}, return a function that builds a
+\code{Matrix::sparseMatrix} of the structural nonzeros. Symbolic matrices
+are always stored dense, so \code{calculate_jacobian()} ignores it.}
 
 \item{simplify}{Simplify each entry.}
 

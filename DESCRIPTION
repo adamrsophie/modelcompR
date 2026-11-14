@@ -19,7 +19,7 @@ Encoding: UTF-8
 Language: en-US
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 4.3.0),
+    R (>= 4.4.0),
     symcompR (>= 0.1.0)
 Imports:
     graphics,

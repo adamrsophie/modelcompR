@@ -98,6 +98,13 @@ print.SteadyStateAlgorithm <- function(x, ...) print.NonlinearAlgorithm(x, ...)
 #'   Options of the Julia signature; Jacobians come from the problem or from
 #'   finite differences.
 #' @param damping_initial Initial damping of Levenberg Marquardt.
+#' @param alpha_geodesic,disable_geodesic,finite_diff_step_geodesic Geodesic
+#'   acceleration of `LevenbergMarquardt()`: the correction is kept when
+#'   `2 |a| <= alpha_geodesic |v|`; `disable_geodesic = TRUE` turns it off.
+#' @param damping_increase_factor,damping_decrease_factor Factors applied to
+#'   the damping after a rejected and an accepted step.
+#' @param b_uphill Exponent of the uphill acceptance test.
+#' @param min_damping_D Smallest entry of the diagonal damping matrix.
 #' @param max_resets Largest number of Jacobian resets of the quasi Newton
 #'   methods before giving up.
 #' @param reset_tolerance Tolerance of the reset test of `Broyden()`;
@@ -172,7 +179,14 @@ SimpleTrustRegion <- function(nlsolve_update_rule = FALSE, max_trust_radius = NU
 }
 #' @rdname nonlinear_algorithms
 #' @export
-LevenbergMarquardt <- function(damping_initial = 1e-3) .nl_alg("LevenbergMarquardt", damping_initial = damping_initial)
+LevenbergMarquardt <- function(linsolve = NULL, damping_initial = 1, alpha_geodesic = 0.75, disable_geodesic = FALSE,
+                               damping_increase_factor = 2, damping_decrease_factor = 3,
+                               finite_diff_step_geodesic = 0.1, b_uphill = 1, min_damping_D = 1e-8, autodiff = NULL,
+                               vjp_autodiff = NULL, jvp_autodiff = NULL, jacobian_reuse = NULL)
+  .nl_alg("LevenbergMarquardt", damping_initial = damping_initial, alpha_geodesic = alpha_geodesic,
+          disable_geodesic = disable_geodesic, damping_increase_factor = damping_increase_factor,
+          damping_decrease_factor = damping_decrease_factor, finite_diff_step_geodesic = finite_diff_step_geodesic,
+          b_uphill = b_uphill, min_damping_D = min_damping_D)
 #' @rdname nonlinear_algorithms
 #' @export
 GaussNewton <- function(linesearch = NULL) .nl_alg("GaussNewton", linesearch = linesearch)
@@ -264,6 +278,10 @@ FastShortcutNLLSPolyalg <- function() {
     if (!is.matrix(Jx)) Jx <- matrix(Jx, nrow = length(fx))
     return(Jx)
   }
+  # AutoForwardDiff, the NonlinearSolve default: dual numbers
+  # (R/forwarddiff.R), or forward differences when F cannot run on duals
+  jr <- .ad_try_jacobian(F, x)
+  if (!is.null(jr)) return(jr$jacobian)
   .fd_jacobian(F, x, fx)
 }
 
@@ -322,19 +340,20 @@ FastShortcutNLLSPolyalg <- function() {
 .nl_l2 <- function(v) sqrt(sum(abs(v)^2))
 
 .nl_newton <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, linesearch = FALSE,
-                       post = NULL, ls = FALSE) {
+                       post = NULL, ls = FALSE, tr = NULL) {
   x <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
-  f0norm <- max(abs(fx), 0)
-  best <- list(x = x, fx = fx, n = .nl_l2(fx))
-  stalled <- 0L
+  # AbsNormSafeBestTerminationMode, as the quasi Newton kernel
+  st <- new.env(parent = emptyenv())
+  st$best_obj <- if (ls) sqrt(sum(abs(fx)^2)) else max(abs(fx)); st$best_x <- x; st$best_f <- fx
+  st$n <- 0L; st$objs <- numeric(100L); st$steps <- numeric(32L)
+  # no check before the first step: at a root Newton takes a zero step and
+  # reports one step, as solve! of NonlinearSolveBase
   for (it in seq_len(maxiters)) {
-    if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", it - 1L))
     Jx <- .nl_jacobian(F, J, x, fx)
-    if (!all(is.finite(Jx))) return(.nl_result(best$x, best$fx, "Unstable", it))
+    if (!all(is.finite(Jx))) return(.nl_result(st$best_x, st$best_f, "Unstable", it))
     g <- .as_num(crossprod(Conj(Jx), fx))
-    if (ls && .nl_stationary(g, fx, x, lb, ub)) return(.nl_result(x, fx, "Success", it - 1L))
     dx <- .nl_free_step(Jx, -fx, .nl_free(x, g, lb, ub))
     nf <- .nl_l2(fx)
     lam <- 1
@@ -347,23 +366,17 @@ FastShortcutNLLSPolyalg <- function() {
       lam <- lam / 2
       if (lam < 1e-10) break
     }
-    if (!all(is.finite(fn))) return(.nl_result(best$x, best$fx, "Unstable", it))
-    step <- max(abs(xn - x))
+    if (!all(is.finite(fn))) return(.nl_result(st$best_x, st$best_f, "Unstable", it))
+    .trace_update(tr, it, xn, fn, xn - x)
+    xprev <- x
     x <- xn; fx <- fn
-    nn <- .nl_l2(fx)
-    if (nn < best$n) {
-      stalled <- if (nn > best$n * (1 - 1e-12)) stalled + 1L else 0L
-      best <- list(x = x, fx = fx, n = nn)
-    } else stalled <- stalled + 1L
-    if (step <= 4 * .Machine$double.eps * max(1, max(abs(x)))) {
-      if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", it))
-      return(.nl_result(best$x, best$fx, .nl_stall_code(best$fx, f0norm, abstol, ls, F, J, best$x, lb, ub), it))
-    }
-    if (stalled > 32L)
-      return(.nl_result(best$x, best$fx, .nl_stall_code(best$fx, f0norm, abstol, ls, F, J, best$x, lb, ub), it))
+    code <- .nl_safe_best(st, fx, x, xprev, abstol, ls)
+    # the safe best mode returns its best iterate, on success too: a step that
+    # does not strictly lower the residual is rolled back
+    # (update_from_termination_cache!)
+    if (!is.null(code)) return(.nl_result(st$best_x, st$best_f, code, it))
   }
-  if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", maxiters))
-  .nl_result(best$x, best$fx, "MaxIters", maxiters)
+  .nl_result(st$best_x, st$best_f, "MaxIters", maxiters)
 }
 
 # The dogleg step for the model 0.5 |f + J d|^2 inside radius Delta.
@@ -401,7 +414,7 @@ FastShortcutNLLSPolyalg <- function() {
 }
 
 .nl_trust_region <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, scheme = "Simple",
-                             max_radius = NULL, initial_radius = NULL, post = NULL, ls = FALSE) {
+                             max_radius = NULL, initial_radius = NULL, post = NULL, ls = FALSE, tr = NULL) {
   max_shrink <- 32L
   xo <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(xo)
@@ -416,6 +429,9 @@ FastShortcutNLLSPolyalg <- function() {
   fk <- sum(fx^2) / 2
   g <- .as_num(crossprod(Jx, fx))
   shrink <- 0L
+  st <- new.env(parent = emptyenv())
+  st$best_obj <- if (ls) sqrt(sum(abs(fx)^2)) else max(abs(fx)); st$best_x <- xo; st$best_f <- fx
+  st$n <- 0L; st$objs <- numeric(100L); st$steps <- numeric(32L)
   for (it in seq_len(maxiters)) {
     if (ls && .nl_stationary(g, fx, xo, lb, ub)) return(.nl_result(xo, fx, "Success", it - 1L))
     free <- .nl_free(xo, g, lb, ub)
@@ -475,6 +491,8 @@ FastShortcutNLLSPolyalg <- function() {
       }
     }
     Delta <- min(Delta, Dmax)
+    .trace_update(tr, it, if (accepted) x else xo, if (accepted) fnew else fx, delta, accepted)
+    xprev <- xo
     if (accepted) {
       xo <- x; fx <- fnew
       if (.nl_converged(fx, abstol)) return(.nl_result(xo, fx, "Success", it))
@@ -482,6 +500,9 @@ FastShortcutNLLSPolyalg <- function() {
       fk <- fk1
       g <- .as_num(crossprod(Jx, fx))
     }
+    # AbsNormSafeBestTerminationMode on the iterate after the step
+    code <- .nl_safe_best(st, fx, xo, xprev, abstol, ls)
+    if (!is.null(code)) return(.nl_result(st$best_x, st$best_f, code, it))
     if (shrink > max_shrink) {
       code <- .nl_stall_code(fx, f0norm, abstol, ls, F, J, xo, lb, ub)
       if (code == "Stalled") code <- "ShrinkThresholdExceeded"
@@ -517,7 +538,8 @@ FastShortcutNLLSPolyalg <- function() {
 # with the maximum norm, patience 100 steps, multiplier 3, min_max_factor
 # 1.3 and 32 stalled steps); returns NULL to continue or a return code.
 .nl_safe_best <- function(state, fx, x, xprev, abstol, ls = FALSE) {
-  obj <- max(abs(fx), 0)
+  # default_termination_mode: the maximum norm, the 2-norm for least squares
+  obj <- if (ls) sqrt(sum(abs(fx)^2)) else max(abs(fx), 0)
   if (!is.finite(obj)) return("Unstable")
   if (obj < state$best_obj) {
     state$best_obj <- obj
@@ -536,22 +558,38 @@ FastShortcutNLLSPolyalg <- function() {
   NULL
 }
 
+# The product of a BroydenLowRankJacobian (or of its transpose) with x.
+.nl_lr_mul <- function(M, x, trans = FALSE) {
+  if (M$idx == 0L) return(M$alpha * x)
+  k <- seq_len(min(M$idx, ncol(M$U)))
+  U <- M$U[, k, drop = FALSE]; V <- M$V[, k, drop = FALSE]
+  if (trans) .as_num(V %*% crossprod(U, x)) + M$alpha * x else .as_num(U %*% crossprod(V, x)) + M$alpha * x
+}
+
 # Broyden and Klement: QuasiNewtonAlgorithm with NewtonDescent, no
 # globalization unless a line search is given, and the reset rules
 # NoChangeInStateReset (Broyden) and IllConditionedJacobianReset (Klement).
-.nl_quasi_newton <- function(F, J, x0, abstol, maxiters, alg, lb = NULL, ub = NULL, post = NULL, ls = FALSE) {
+.nl_quasi_newton <- function(F, J, x0, abstol, maxiters, alg, lb = NULL, ub = NULL, post = NULL, ls = FALSE,
+                             tr = NULL) {
   x <- .nl_project(.as_num(x0), lb, ub)
   n <- length(x)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
-  if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", 0L))
-  broyden <- inherits(alg, "Broyden")
+  # no check before the first step, as solve! of NonlinearSolveBase
+  # LimitedMemoryBroyden: good Broyden on the low rank inverse alpha I + U V'
+  # of BroydenLowRankInitialization (a circular buffer of `threshold` pairs)
+  lowrank <- inherits(alg, "LimitedMemoryBroyden")
+  broyden <- inherits(alg, "Broyden") || lowrank
+  if (lowrank) alg$update_rule <- "good_broyden"
   diag_rule <- broyden && alg$update_rule == "diagonal"
   # the Jacobian (Klement) or its inverse (Broyden): a vector when diagonal
   mf <- length(fx)
   if (mf != n && (!broyden || diag_rule || alg$init_jacobian == "true_jacobian_diagonal"))
     stop(alg$name, "() with a diagonal Jacobian needs as many residuals as unknowns", call. = FALSE)
+  thr <- min(alg$threshold %||% 10L, maxiters)
   init <- function(x, fx) {
+    if (lowrank)
+      return(list(alpha = 1 / .nl_qn_alpha(alg$alpha, x, fx), U = matrix(0, mf, thr), V = matrix(0, n, thr), idx = 0L))
     if (alg$init_jacobian == "identity") {
       a <- .nl_qn_alpha(alg$alpha, x, fx)
       # the inverse of alpha I, n x length(fx) for a rectangular residual
@@ -567,7 +605,7 @@ FastShortcutNLLSPolyalg <- function() {
   tol <- alg$reset_tolerance %||% .Machine$double.eps^(3 / 4)
   cond_max <- 1 / sqrt(.Machine$double.eps)
   st <- new.env(parent = emptyenv())
-  st$best_obj <- max(abs(fx)); st$best_x <- x; st$best_f <- fx
+  st$best_obj <- if (ls) sqrt(sum(abs(fx)^2)) else max(abs(fx)); st$best_x <- x; st$best_f <- fx
   st$n <- 0L; st$objs <- numeric(100L); st$steps <- numeric(32L)
   fprev_rule <- fx                 # the update rule's previous residual
   fprev_reset <- fx                # the reset rule's previous residual
@@ -577,10 +615,9 @@ FastShortcutNLLSPolyalg <- function() {
   du <- numeric(n)
   linesearch <- identical(alg$linesearch, "BackTracking")
   # SafeBest termination returns the best iterate, except at a root
-  finish <- function(code, it) {
-    if (code == "Success") return(.nl_result(x, fx, code, it))
-    .nl_result(st$best_x, st$best_f, code, it)
-  }
+  # the safe best mode reports its best iterate whatever the return code
+  # (update_from_termination_cache! of _run_cache_to_completion!)
+  finish <- function(code, it) .nl_result(st$best_x, st$best_f, code, it)
   for (it in seq_len(maxiters)) {
     if (it > 1L) {
       reinit <- force
@@ -602,7 +639,7 @@ FastShortcutNLLSPolyalg <- function() {
           reinit <- if (full) {
             k <- tryCatch(kappa(M, exact = TRUE), error = function(e) Inf)
             !is.finite(k) || k >= cond_max
-          } else any(M == 0)
+          } else any(M == 0, na.rm = TRUE)   # iszero(NaN) is false in Julia
         }
       }
       force <- FALSE
@@ -614,12 +651,12 @@ FastShortcutNLLSPolyalg <- function() {
       } else since_reset <- since_reset + 1L
     }
     # NewtonDescent: the step from the inverse, or a solve with the Jacobian
-    du <- if (broyden) {
+    du <- if (lowrank) -.nl_lr_mul(M, fx) else if (broyden) {
       if (full) -.as_num(M %*% fx) else -M * fx
     } else if (full) {
       tryCatch(-.as_num(solve(M, fx)), error = function(e) NULL)
     } else -fx / M
-    if (is.null(du) || !all(is.finite(du))) {
+    if (is.null(du) || (full && !all(is.finite(du)))) {
       # the linear solve failed: retry with a fresh Jacobian
       if (since_reset == 0L) return(finish("InternalLinearSolveFailed", it))
       force <- TRUE
@@ -644,13 +681,23 @@ FastShortcutNLLSPolyalg <- function() {
       }
     }
     xprev <- x
-    du <- xn - x
+    # the update rule and the reset rule take the descent direction itself,
+    # unscaled by the line search, as QuasiNewtonCache's step!
+    .trace_update(tr, it, xn, fn, lam * du)
     x <- xn; fx <- fn
     code <- .nl_safe_best(st, fx, x, xprev, abstol, ls)
     if (!is.null(code)) return(finish(code, it))
     # the Jacobian update with the step actually taken
     dfu <- fx - fprev_rule
-    if (broyden && full) {
+    if (lowrank) {
+      Jdfu <- .nl_lr_mul(M, dfu)
+      rmul <- .nl_lr_mul(M, du, trans = TRUE)
+      denom <- sum(du * Jdfu)
+      slot <- M$idx %% thr + 1L
+      M$U[, slot] <- (du - Jdfu) / (if (denom == 0) 1e-5 else denom)
+      M$V[, slot] <- rmul
+      M$idx <- M$idx + 1L
+    } else if (broyden && full) {
       Jdfu <- .as_num(M %*% dfu)
       if (alg$update_rule == "good_broyden") {
         rmul <- .as_num(crossprod(M, du))
@@ -676,57 +723,72 @@ FastShortcutNLLSPolyalg <- function() {
     }
     fprev_rule <- fx
   }
-  finish(if (.nl_converged(fx, abstol)) "Success" else "MaxIters", maxiters)
+  finish("MaxIters", maxiters)
 }
 
-# Levenberg Marquardt with Nielsen's damping update and column scaling.
-.nl_levenberg_marquardt <- function(F, J, x0, abstol, maxiters, lb = NULL, ub = NULL, lambda0 = 1e-3,
-                                    post = NULL, ls = TRUE) {
+# LevenbergMarquardt of NonlinearSolveFirstOrder: GeneralizedFirstOrderAlgorithm
+# with GeodesicAcceleration(DampedNewtonDescent) and LevenbergMarquardtTrustRegion.
+# The damped step solves [J; sqrt(lambda D'D)] du = -[fu; 0] by QR (the
+# :least_squares mode of DampedNewtonDescent), where D'D is the running
+# maximum of the column sums of J^2 (at least min_damping_D). The geodesic
+# correction a reuses that factorization. The trust region accepts a step when
+# (1 - beta)^b_uphill * |f(u + du)| <= loss_old, and loss_old stays Inf as
+# upstream, so only non finite residuals or angles reject. lambda is divided by
+# damping_decrease_factor after a step accepted by both, else multiplied by
+# damping_increase_factor.
+.nl_levenberg_marquardt <- function(F, J, x0, opts, alg, lb = NULL, ub = NULL, ls = FALSE, tr = NULL) {
+  maxiters <- as.integer(opts$maxiters %||% 1000L)
   x <- .nl_project(.as_num(x0), lb, ub)
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
-  f0norm <- max(abs(fx), 0)
-  n <- length(x)
-  Jx <- .nl_jacobian(F, J, x, fx)
-  D <- pmax(sqrt(colSums(Jx^2)), 1e-8)
-  lam <- lambda0
-  nu <- 2
-  small <- 0L
+  tc <- .nlf_term(opts, fx, x, ls)
+  n <- length(x); m <- length(fx)
+  nrm <- function(v) sqrt(.wr_dot(v, v))
+  lam <- alg$damping_initial; lam_factor <- alg$damping_increase_factor
+  DtD <- rep(alg$min_damping_D, n)
+  geodesic <- !isTRUE(alg$disable_geodesic)
+  h <- alg$finite_diff_step_geodesic
+  v_old <- x; norm_v_old <- Inf; loss_old <- Inf; tr_accepted <- FALSE
+  lsolve <- function(q, b) tryCatch(-.as_num(qr.coef(q, c(b, numeric(n)))), error = function(e) NULL)
   for (it in seq_len(maxiters)) {
-    if (.nl_converged(fx, abstol)) return(.nl_result(x, fx, "Success", it - 1L))
-    g <- .as_num(crossprod(Jx, fx))
-    if (.nl_stationary(g, fx, x, lb, ub))
-      return(.nl_result(x, fx, if (ls) "Success" else .nl_stall_code(fx, f0norm, abstol, FALSE), it - 1L))
-    free <- .nl_free(x, g, lb, ub)
-    dx <- .nl_free_step(rbind(Jx, diag(sqrt(lam) * D, n)), c(-fx, numeric(n)), free)
-    xn <- .nl_project(x + dx, lb, ub)
-    if (!is.null(post)) xn <- post(xn, x)
-    dx <- xn - x
-    fn <- F(xn)
-    cost <- sum(fx^2); costn <- if (all(is.finite(fn))) sum(fn^2) else Inf
-    pred <- cost - sum((fx + Jx %*% dx)^2)
-    rho <- if (is.finite(costn) && pred > 0) (cost - costn) / pred else -1
-    if (rho > 0) {
-      rel <- (cost - costn) / max(cost, .Machine$double.xmin)
-      step <- max(abs(dx))
-      x <- xn; fx <- fn
-      Jx <- .nl_jacobian(F, J, x, fx)
-      D <- pmax(D, sqrt(colSums(Jx^2)))
-      lam <- lam * max(1 / 3, 1 - (2 * rho - 1)^3)
-      nu <- 2
-      small <- if (rel < 1e-14 || step <= 4 * .Machine$double.eps * max(1, max(abs(x)))) small + 1L else 0L
-      if (small >= 3L) return(.nl_result(x, fx, .nl_stall_code(fx, f0norm, abstol, ls, F, J, x, lb, ub), it))
-    } else {
-      lam <- lam * nu
-      nu <- 2 * nu
-      if (lam > 1e16) return(.nl_result(x, fx, .nl_stall_code(fx, f0norm, abstol, ls, F, J, x, lb, ub), it))
+    Jx <- .nl_jacobian(F, J, x, fx)
+    DtD <- pmax(DtD, colSums(Jx^2))
+    q <- tryCatch(qr(rbind(Jx, diag(sqrt(lam * DtD), n))), error = function(e) NULL)
+    v <- if (!is.null(q)) lsolve(q, fx)
+    if (is.null(v) || !all(is.finite(v))) return(.nlf_finish(tc, x, fx, "InternalLinearSolveFailed", it))
+    desc_ok <- TRUE; du <- v
+    if (geodesic) {
+      fh <- F(x + h * v)
+      rv <- (2 / h) * ((fh - fx) / h - .as_num(Jx %*% v))
+      a <- lsolve(q, rv)
+      desc_ok <- !is.null(a) && isTRUE(2 * nrm(a) <= nrm(v) * alg$alpha_geodesic)
+      if (desc_ok) du <- v + a / 2
     }
+    xprev <- x
+    if (desc_ok) {
+      nv <- nrm(v)
+      beta <- .wr_dot(v, v_old) / (nv * norm_v_old)
+      xn <- x + du; fn <- F(xn)
+      tr_accepted <- isTRUE((1 - beta)^alg$b_uphill * nrm(fn) <= loss_old)
+      if (tr_accepted) {
+        norm_v_old <- nv; v_old <- v
+        x <- .nl_project(xn, lb, ub)
+        if (!is.null(opts$postcondition)) x <- opts$postcondition(x, xprev)
+        fx <- if (identical(x, xn)) fn else F(x)
+      }
+      .trace_update(tr, it, x, fx, du, tr_accepted)
+      if (.term_check(tc, fx, x, xprev)) return(.nlf_finish(tc, x, fx, "Terminated", it))
+    } else .trace_update(tr, it, x, fx, du, FALSE)
+    # callback_into_cache! of LevenbergMarquardtDampingCache
+    if (tr_accepted && desc_ok) lam_factor <- 1 / alg$damping_decrease_factor
+    lam <- lam * lam_factor
+    lam_factor <- alg$damping_increase_factor
   }
-  .nl_result(x, fx, if (.nl_converged(fx, abstol)) "Success" else "MaxIters", maxiters)
+  .nlf_finish(tc, x, fx, "MaxIters", maxiters)
 }
 
 # Dispatch on the algorithm object. `ls` marks a least squares problem.
-.nl_run <- function(alg, F, J, x0, opts, lb = NULL, ub = NULL, ls = FALSE) {
+.nl_run <- function(alg, F, J, x0, opts, lb = NULL, ub = NULL, ls = FALSE, tr = NULL) {
   abstol <- opts$abstol %||% .nl_default_tol()
   maxiters <- as.integer(opts$maxiters %||% 1000L)
   post <- opts$postcondition
@@ -738,30 +800,46 @@ FastShortcutNLLSPolyalg <- function() {
     best <- NULL
     algs <- alg$algs
     if (!is.null(alg$start_index)) algs <- algs[alg$start_index:length(algs)]
+    # the methods share one cache, so the reported step count accumulates
+    # (total_iters); `iters` stays that of the returned method, which the
+    # homotopy correctors read
+    total <- 0L
     for (a in algs) {
       res <- tryCatch(.nl_run(a, F, J, x0, opts, lb, ub, ls), error = function(e) NULL)
       if (is.null(res)) next
       res$alg <- a$name
-      if (identical(res$retcode, "Success")) return(res)
+      total <- total + max(as.integer(res$total_iters %||% res$iters %||% 0L), 0L)
+      if (identical(res$retcode, "Success")) return(utils::modifyList(res, list(total_iters = total)))
       if (is.null(best) || (all(is.finite(res$resid)) && sum(res$resid^2) < sum(best$resid^2))) best <- res
     }
     if (is.null(best)) stop("every algorithm of ", alg$name, " failed", call. = FALSE)
+    best$total_iters <- total
     return(best)
   }
+  core <- c("NewtonRaphson", "SimpleNewtonRaphson", "GaussNewton", "SimpleTrustRegion", "Broyden", "Klement",
+            "LimitedMemoryBroyden", "LevenbergMarquardt")
+  if (class(alg)[1L] %in% core && (isTRUE(opts$show_trace) || isTRUE(opts$store_trace))) {
+    # show_trace and store_trace of NonlinearSolve (R/nonlinear-polyalg.R)
+    xt <- .nl_project(.as_num(x0), lb, ub)
+    tr <- .trace_init(opts, ls, alg$name, xt, F(xt), xt * 0)
+    res <- .nl_run(alg, F, J, x0, utils::modifyList(opts, list(show_trace = FALSE, store_trace = FALSE)),
+                   lb, ub, ls, tr = tr)
+    res$trace <- .trace_last(tr, res$resid)
+    return(res)
+  }
+  if (inherits(alg, "LimitedMemoryBroyden") && !is.null(alg$run)) return(alg$run(F, J, x0, opts, lb, ub, ls))
   switch(class(alg)[1L],
     NewtonRaphson = , SimpleNewtonRaphson = , GaussNewton =
       .nl_newton(F, J, x0, abstol, maxiters, lb, ub, linesearch = identical(alg$linesearch, "BackTracking"),
-                 post = post, ls = ls),
+                 post = post, ls = ls, tr = tr),
     SimpleTrustRegion =
       .nl_trust_region(F, J, x0, abstol, maxiters, lb, ub,
                        scheme = alg$radius_update_scheme %||% (if (isTRUE(alg$nlsolve_update_rule)) "NLsolve" else "Simple"),
                        max_radius = alg$max_trust_radius, initial_radius = alg$initial_trust_radius,
-                       post = post, ls = ls),
-    Broyden = , Klement =
-      .nl_quasi_newton(F, J, x0, abstol, maxiters, alg, lb, ub, post = post, ls = ls),
-    LevenbergMarquardt =
-      .nl_levenberg_marquardt(F, J, x0, abstol, maxiters, lb, ub, lambda0 = alg$damping_initial %||% 1e-3,
-                              post = post, ls = ls),
+                       post = post, ls = ls, tr = tr),
+    Broyden = , Klement = , LimitedMemoryBroyden =
+      .nl_quasi_newton(F, J, x0, abstol, maxiters, alg, lb, ub, post = post, ls = ls, tr = tr),
+    LevenbergMarquardt = .nl_levenberg_marquardt(F, J, x0, opts, alg, lb, ub, ls = ls, tr = tr),
     if (!is.null(alg$run)) alg$run(F, J, x0, opts, lb, ub, ls)
     else stop("not a nonlinear algorithm: ", class(alg)[1L], call. = FALSE))
 }
@@ -782,7 +860,9 @@ FastShortcutNLLSPolyalg <- function() {
   p <- prob$p
   f <- prob$f$f
   jac <- prob$f$jac
-  list(F = function(x) .as_num(f(x, p)), J = if (is.null(jac)) NULL else function(x) jac(x, p))
+  # dual numbers pass through F, for the AutoForwardDiff Jacobian of .nl_jacobian
+  list(F = function(x) { y <- f(x, p); if (inherits(y, "fdual")) y else .as_num(y) },
+       J = if (is.null(jac)) NULL else function(x) jac(x, p))
 }
 
 .nl_opts <- function(prob, dots) {
@@ -824,7 +904,7 @@ solve.NonlinearProblem <- function(a, b, ...) {
   fns <- .nl_problem_fns(a)
   res <- .nl_solve_bounds(alg, fns, a, opts, ls = FALSE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
-                   stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
+                   stats = c(list(nsteps = res$total_iters %||% res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
                    extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))
 }
 
@@ -838,7 +918,7 @@ solve.NonlinearLeastSquaresProblem <- function(a, b, ...) {
   fns <- .nl_problem_fns(a)
   res <- .nl_solve_bounds(alg, fns, a, opts, ls = TRUE)
   .nl_new_solution("NonlinearSolution", a, alg, res$u, res$retcode, resid = res$resid,
-                   stats = c(list(nsteps = res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
+                   stats = c(list(nsteps = res$total_iters %||% res$iters, alg = res$alg %||% alg$name), res$stats[setdiff(names(res$stats), "nsteps")]),
                    extra = Filter(Negate(is.null), list(trace = res$trace, original = res$original)))
 }
 
@@ -924,7 +1004,14 @@ solve.LinearProblem <- function(a, b, ...) {
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
   if (!missing(b) && !is.null(b) || !is.null(opts$assumptions))
     return(.lin_solution(a, .lin_solve(a, if (missing(b)) NULL else b, opts)))
-  A <- a$A; rhs <- a$b
+  # the default algorithm of LinearSolve: LU for a square matrix, which the
+  # DefaultLinearSolver replaces by a pivoted QR when the factorization fails
+  A <- a$A
+  if (is.matrix(A) && nrow(A) == ncol(A)) {
+    r <- tryCatch(.lin_solve(a, LUFactorization(), opts), error = function(e) NULL, warning = function(w) NULL)
+    if (!is.null(r) && all(is.finite(r$u))) return(.lin_solution(a, r))
+  }
+  rhs <- a$b
   if (inherits(A, "AbstractSciMLOperator")) A <- concretize(A)
   if (!is.matrix(A)) A <- matrix(A, nrow = length(rhs))
   u <- .nl_lstsq(A, rhs)

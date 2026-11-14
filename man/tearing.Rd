@@ -67,7 +67,8 @@ contains other unknowns.}
 \item{allow_parameter}{Allow solving for a variable whose coefficient
 contains parameters.}
 
-\item{conservative}{Only solve for variables with coefficient 1 or -1.}
+\item{conservative}{Only divide by the numeric coefficients 1 and -1;
+symbolic coefficients follow \code{allow_symbolic} and \code{allow_parameter}.}
 
 \item{...}{Options passed on: \code{maxiters} for the Pantelides algorithm.}
 

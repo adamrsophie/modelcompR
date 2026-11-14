@@ -28,6 +28,11 @@
     stop("a variable name must be a non-empty string", call. = FALSE)
   ivs <- if (is.null(iv)) list() else if (is_sym(iv)) list(iv) else lapply(iv, as_sym)
   meta <- meta[!vapply(meta, is.null, TRUE)]
+  # symcompR maps a function name it knows to that function, so gamma(t)
+  # would be the gamma function of t rather than an unknown
+  if (length(ivs) && !is.null(utils::getFromNamespace(".FUNS", "symcompR")[[name]]))
+    stop("'", name, "' is the name of a symcompR function, so ", name, "(", format(ivs[[1L]]),
+         ") would be that function rather than a variable; choose another name", call. = FALSE)
   .register_var(name, kind, meta, ivs)
   e <- if (length(ivs)) do.call(Function(name), ivs) else Symbol(name)
   attr(e, "mtk_meta") <- c(list(kind = kind), meta)

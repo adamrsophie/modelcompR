@@ -88,6 +88,7 @@ reference:
   - debug_system
   - default_toterm
   - equation_dependencies
+  - latexify
   - expand_connections
   - fractional_to_ordinary
   - generate_control_function

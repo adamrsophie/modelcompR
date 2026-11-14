@@ -720,11 +720,13 @@ diff(k * x^2, k)
 subs(k * x^2, k, 3)
 ```
 
-`latex()` takes an expression; apply it to each side of an equation.
+`latex()` takes an expression. `latexify()`, as the Latexify recipes of
+ModelingToolkit, also takes an equation, a list of equations or a system;
+several equations become an `align` environment.
 
 ```{r}
-eq <- as_equation(D(x) ~ -k * x^2 / m)
-paste(latex(eq_lhs(eq)), "=", latex(eq_rhs(eq)))
+latex(-k * x^2 / m)
+latexify(D(x) ~ -k * x^2 / m)
 ```
 
 modelcompR adds a few helpers of its own, named after Symbolics.jl:

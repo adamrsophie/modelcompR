@@ -4,7 +4,18 @@
 \alias{plot.SciMLSolution}
 \title{Plot a solution}
 \usage{
-\method{plot}{SciMLSolution}(x, idxs = NULL, n = 500L, ...)
+\method{plot}{SciMLSolution}(
+  x,
+  idxs = NULL,
+  n = 500L,
+  xlab = NULL,
+  ylab = NULL,
+  type = "l",
+  lty = 1,
+  col = NULL,
+  legend = TRUE,
+  ...
+)
 }
 \arguments{
 \item{x}{A solution.}
@@ -14,6 +25,13 @@ state indices plots each of them); a list of two plots the first against
 the second (a phase plot).}
 
 \item{n}{Number of interpolation points for dense solutions.}
+
+\item{xlab, ylab}{Axis labels; a phase plot labels its axes with the two
+variables unless they are given.}
+
+\item{type, lty, col}{Line settings, as in \code{\link[graphics:matplot]{graphics::matplot()}}.}
+
+\item{legend}{Draw a legend of the plotted variables.}
 
 \item{...}{Passed to \code{\link[graphics:matplot]{graphics::matplot()}}.}
 }

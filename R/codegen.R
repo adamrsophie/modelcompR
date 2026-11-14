@@ -240,6 +240,14 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
   out
 }
 
+# c() for generated functions: the names go from plain numeric results only, so
+# symbolic (modelingtoolkitize) and dual number inputs keep their own c methods
+.cg_c <- function(...) {
+  r <- c(...)
+  if (is.numeric(r) && !is.object(r)) names(r) <- NULL
+  r
+}
+
 #' Build an R function from symbolic expressions
 #'
 #' `build_function(exprs, ...)` returns an R function whose arguments are the
@@ -316,9 +324,19 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
   }
   calls <- lapply(lowered, .to_rcall, names = names)
   result <- switch(out,
-    scalar = calls[[1L]],
-    vector = as.call(c(list(as.name("c")), calls)),
-    matrix = {
+    # .cg_c drops names: arithmetic on a named u would otherwise label the
+    # entries with the names of whatever operand came first
+    scalar = if (is.numeric(calls[[1L]])) calls[[1L]] else call(".cg_c", calls[[1L]]),
+    vector = as.call(c(list(as.name(".cg_c")), calls)),
+    matrix = if (sparse_matrix) {
+      # the structural nonzeros as a Matrix::sparseMatrix, as the SparseMatrixCSC
+      # that Symbolics builds for sparse = true
+      k <- which(nz)
+      as.call(list(quote(Matrix::sparseMatrix), i = as.integer((k - 1L) %% dims[1L] + 1L),
+           j = as.integer((k - 1L) %/% dims[1L] + 1L),
+           x = as.call(c(list(as.name(".cg_c")), calls[k])),
+           dims = as.integer(dims)))
+    } else {
       body <- list(call("<-", as.name(".J"), call("matrix", 0, dims[1L], dims[2L])))
       for (k in which(nz)) {
         i <- ((k - 1L) %% dims[1L]) + 1L
@@ -411,7 +429,9 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
 #' `(u, p, t)` (or `(u, p)` for time independent systems).
 #'
 #' @param sys A complete `System`.
-#' @param sparse Return a sparsity aware matrix function.
+#' @param sparse For `generate_jacobian()`, return a function that builds a
+#'   `Matrix::sparseMatrix` of the structural nonzeros. Symbolic matrices
+#'   are always stored dense, so `calculate_jacobian()` ignores it.
 #' @param simplify Simplify each entry.
 #' @param ... Unused.
 #' @return A symbolic matrix, or an R function.
@@ -505,7 +525,7 @@ generate_rhs <- function(sys, ...) {
 #' @export
 generate_jacobian <- function(sys, sparse = FALSE, ...) {
   J <- calculate_jacobian(sys)
-  .build_closure(.symmatrix_to_list_matrix(J), .sys_args(sys), out = "matrix", ...)
+  .build_closure(.symmatrix_to_list_matrix(J), .sys_args(sys), out = "matrix", sparse_matrix = sparse, ...)
 }
 
 #' @rdname calculate_jacobian

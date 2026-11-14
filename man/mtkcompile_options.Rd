@@ -27,9 +27,11 @@ variables as states. With \code{TRUE}, an event that changes \code{x} updates
 \item \code{tearing_alg}: \code{"carpanzano"} (default) or \code{"modia"}.
 \item \code{allow_symbolic}, \code{allow_parameter}, \code{conservative}: which coefficients
 an equation may be divided by when it is solved for a variable: ones
-containing unknowns (default \code{FALSE}), ones containing parameters
-(default \code{TRUE}), or only 1 and -1 (default \code{FALSE}). A parameter whose
-default value is zero is never divided by.
+containing unknowns (default \code{FALSE}) and ones containing parameters
+(default \code{TRUE}); with \code{conservative = TRUE} (default \code{FALSE}) a
+numeric coefficient must be 1 or -1, while symbolic coefficients still
+follow the first two options. A parameter whose default value is zero
+is never divided by.
 \item \code{maxiters}: iteration limit of the Pantelides algorithm.
 \item \code{inline_linear_sccs}: solve each block of algebraic equations that is
 linear in its variables inside the generated right-hand side (default

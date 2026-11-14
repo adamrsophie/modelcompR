@@ -44,7 +44,21 @@ SimpleTrustRegion(
   initial_trust_radius = NULL
 )
 
-LevenbergMarquardt(damping_initial = 0.001)
+LevenbergMarquardt(
+  linsolve = NULL,
+  damping_initial = 1,
+  alpha_geodesic = 0.75,
+  disable_geodesic = FALSE,
+  damping_increase_factor = 2,
+  damping_decrease_factor = 3,
+  finite_diff_step_geodesic = 0.1,
+  b_uphill = 1,
+  min_damping_D = 1e-08,
+  autodiff = NULL,
+  vjp_autodiff = NULL,
+  jvp_autodiff = NULL,
+  jacobian_reuse = NULL
+)
 
 GaussNewton(linesearch = NULL)
 
@@ -94,6 +108,17 @@ own value.}
 \item{nlsolve_update_rule}{Use the trust region radius update of NLsolve.}
 
 \item{damping_initial}{Initial damping of Levenberg Marquardt.}
+
+\item{alpha_geodesic, disable_geodesic, finite_diff_step_geodesic}{Geodesic
+acceleration of \code{LevenbergMarquardt()}: the correction is kept when
+\verb{2 |a| <= alpha_geodesic |v|}; \code{disable_geodesic = TRUE} turns it off.}
+
+\item{damping_increase_factor, damping_decrease_factor}{Factors applied to
+the damping after a rejected and an accepted step.}
+
+\item{b_uphill}{Exponent of the uphill acceptance test.}
+
+\item{min_damping_D}{Smallest entry of the diagonal damping matrix.}
 
 \item{max_resets}{Largest number of Jacobian resets of the quasi Newton
 methods before giving up.}

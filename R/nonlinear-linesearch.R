@@ -17,7 +17,8 @@
 #' `RelNormTerminationMode()` the norm forms of the absolute and relative
 #' tests. The safe variants (`AbsNormSafeTerminationMode()`,
 #' `RelNormSafeTerminationMode()`) also stop with `"Unstable"` when the
-#' objective grows past `protective_threshold` times its initial value, and
+#' objective grows past `protective_threshold` (`NULL`, the default, turns
+#' this test off) times its initial value, and
 #' with `"Stalled"` when it stays within `min_max_factor` over
 #' `patience_steps` steps near the tolerance (or the steps stay below the
 #' tolerance for `max_stalled_steps` steps); the safe best variants
@@ -63,28 +64,28 @@ AbsNormTerminationMode <- function(internalnorm = NULL) .term_mode("AbsNorm", in
 RelNormTerminationMode <- function(internalnorm = NULL) .term_mode("RelNorm", internalnorm)
 #' @rdname termination_modes
 #' @export
-AbsNormSafeTerminationMode <- function(internalnorm = NULL, protective_threshold = 1000, patience_steps = 100,
+AbsNormSafeTerminationMode <- function(internalnorm = NULL, protective_threshold = NULL, patience_steps = 100,
                                        patience_objective_multiplier = 3, min_max_factor = 1.3,
                                        max_stalled_steps = NULL)
   .term_safe("AbsNormSafe", FALSE, internalnorm, protective_threshold, patience_steps,
              patience_objective_multiplier, min_max_factor, max_stalled_steps)
 #' @rdname termination_modes
 #' @export
-RelNormSafeTerminationMode <- function(internalnorm = NULL, protective_threshold = 1000, patience_steps = 100,
+RelNormSafeTerminationMode <- function(internalnorm = NULL, protective_threshold = NULL, patience_steps = 100,
                                        patience_objective_multiplier = 3, min_max_factor = 1.3,
                                        max_stalled_steps = NULL)
   .term_safe("RelNormSafe", FALSE, internalnorm, protective_threshold, patience_steps,
              patience_objective_multiplier, min_max_factor, max_stalled_steps)
 #' @rdname termination_modes
 #' @export
-AbsNormSafeBestTerminationMode <- function(internalnorm = NULL, protective_threshold = 1000, patience_steps = 100,
+AbsNormSafeBestTerminationMode <- function(internalnorm = NULL, protective_threshold = NULL, patience_steps = 100,
                                            patience_objective_multiplier = 3, min_max_factor = 1.3,
                                            max_stalled_steps = NULL)
   .term_safe("AbsNormSafeBest", TRUE, internalnorm, protective_threshold, patience_steps,
              patience_objective_multiplier, min_max_factor, max_stalled_steps)
 #' @rdname termination_modes
 #' @export
-RelNormSafeBestTerminationMode <- function(internalnorm = NULL, protective_threshold = 1000, patience_steps = 100,
+RelNormSafeBestTerminationMode <- function(internalnorm = NULL, protective_threshold = NULL, patience_steps = 100,
                                            patience_objective_multiplier = 3, min_max_factor = 1.3,
                                            max_stalled_steps = NULL)
   .term_safe("RelNormSafeBest", TRUE, internalnorm, protective_threshold, patience_steps,
@@ -385,7 +386,8 @@ set_initial_step <- function(cache, alpha) {
     return(LineSearchSolution(1, "Failure"))
   }
   if (name == "RobustNonMonotoneLineSearch") {
-    fn <- function(a) (2 * phi(a))^(ls$n_exp / 2)
+    # norm(fu)^n_exp of LineSearch.jl: the square root, then the power
+    fn <- function(a) sqrt(2 * phi(a))^ls$n_exp
     f_old <- fn(0)
     ap <- am <- ls$sigma_1
     # nsteps is 0 on the first search, so eta is infinite and the first step is taken
@@ -393,10 +395,11 @@ set_initial_step <- function(cache, alpha) {
     fbar <- max(state$history %||% f_old)
     for (k in seq_len(ls$maxiters)) {
       f <- fn(ap)
-      if (f <= fbar + eta - ls$gamma * ap * f_old) return(LineSearchSolution(ap))
+      # isTRUE: eta is 0 / 0 = NaN at a root, and the search fails as upstream
+      if (isTRUE(f <= fbar + eta - ls$gamma * ap * f_old)) return(LineSearchSolution(ap))
       ap <- ap * min(max(ap * f_old / (f + (2 * ap - 1) * f_old), ls$tau_min), ls$tau_max)
       f <- fn(-am)
-      if (f <= fbar + eta - ls$gamma * am * f_old) return(LineSearchSolution(-am))
+      if (isTRUE(f <= fbar + eta - ls$gamma * am * f_old)) return(LineSearchSolution(-am))
       am <- am * min(max(am * f_old / (f + (2 * am - 1) * f_old), ls$tau_min), ls$tau_max)
     }
     return(LineSearchSolution(ls$sigma_1, "Failure"))

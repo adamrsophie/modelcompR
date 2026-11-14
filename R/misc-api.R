@@ -134,9 +134,26 @@ apply_to_variables <- function(f, ex) {
   if (!length(a)) return(ex)
   if (.type(ex) == "Derivative") {
     a[[1L]] <- apply_to_variables(f, a[[1L]])
-    return(.rebuild(ex, a))
+    return(.rebuild_meta(ex, a))
   }
-  .rebuild(ex, lapply(a, function(z) apply_to_variables(f, z)))
+  .rebuild_meta(ex, lapply(a, function(z) apply_to_variables(f, z)))
+}
+
+# .rebuild() keeps `e` when the keys of the new arguments are unchanged, which
+# drops metadata such as a scope set on a leaf; rebuild whenever the argument
+# objects differ.
+.rebuild_meta <- function(e, args) {
+  if (identical(.args(e), args)) return(e)
+  ty <- .type(e)
+  if (ty == "Add") return(Reduce(`+`, args))
+  if (ty == "Mul") return(Reduce(`*`, args))
+  if (ty == "Pow") return(args[[1L]]^args[[2L]])
+  if (ty == "Function") return(do.call(Function(.name(e)), args))
+  if (ty == "Derivative") {
+    di <- .deriv_info(e)
+    return(.make_derivative(args[[1L]], di$iv, di$order))
+  }
+  .rebuild(e, args)
 }
 
 # Symbolic parts of an equation-like object, for collect_vars().
@@ -718,3 +735,43 @@ analytically_integrated <- function(sys) {
 #' inherits(System(list(), t_nounits, name = "s"), AbstractSystem)
 #' @export
 AbstractSystem <- c("System", "AbstractSystem")
+
+#' LaTeX for equations and systems
+#'
+#' `latexify()` returns the LaTeX code of an equation, a list of equations or
+#' the equations of a system, as the Latexify recipes of ModelingToolkit:
+#' one equation is `lhs = rhs`, several are an `align` environment with one
+#' `lhs &= rhs` row each. Other objects are passed to `symcompR::latex()`.
+#'
+#' @param x An `Equation`, a formula, a list of equations, a `System`, or a
+#'   symbolic expression.
+#' @param ... Unused.
+#' @return A character string.
+#' @examples
+#' t <- t_nounits; D <- D_nounits
+#' x <- Variable("x", t); k <- Parameter("k")
+#' latexify(D(x) ~ -k * x)
+#' cat(latexify(System(list(D(x) ~ -k * x), t, name = "s")))
+#' @export
+latexify <- function(x, ...) UseMethod("latexify")
+
+#' @export
+latexify.default <- function(x, ...) {
+  if (is.list(x) && !is_sym(x)) {
+    rows <- vapply(x, function(e) {
+      e <- as_equation(e)
+      paste0(symcompR::latex(e$lhs), " &= ", symcompR::latex(e$rhs))
+    }, "")
+    return(paste0("\\begin{align}\n", paste(rows, collapse = " \\\\\n"), "\n\\end{align}\n"))
+  }
+  symcompR::latex(x)
+}
+
+#' @export
+latexify.Equation <- function(x, ...) paste(symcompR::latex(x$lhs), "=", symcompR::latex(x$rhs))
+
+#' @export
+latexify.formula <- function(x, ...) latexify(as_equation(x))
+
+#' @export
+latexify.System <- function(x, ...) latexify(equations(x))

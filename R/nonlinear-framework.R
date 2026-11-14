@@ -171,8 +171,11 @@ TrustRegionRobust <- function(subproblem = MoreTrustRegionDescent(), ...) {
 PseudoTransient <- function(alpha_initial = 1e-3, linesearch = NULL, mass_matrix = NULL, concrete_jac = NULL,
                             linsolve = NULL, autodiff = NULL, jvp_autodiff = NULL, vjp_autodiff = NULL,
                             jacobian_reuse = NULL)
-  GeneralizedFirstOrderAlgorithm(descent = DampedNewtonDescent(initial_damping = alpha_initial, damping_fn = "SER"),
-                                 linesearch = linesearch, name = "PseudoTransient")
+{
+  d <- DampedNewtonDescent(initial_damping = alpha_initial, damping_fn = "SER")
+  d$mass_matrix <- mass_matrix
+  GeneralizedFirstOrderAlgorithm(descent = d, linesearch = linesearch, name = "PseudoTransient")
+}
 
 # ---------------------------------------------------------------------------
 # Descents
@@ -214,14 +217,18 @@ PseudoTransient <- function(alpha_initial = 1e-3, linesearch = NULL, mass_matrix
       lam <- state$lambda %||% d$initial_damping
       if (identical(d$damping_fn, "SER")) {
         # switched evolution relaxation (Kelley and Keyes): solve
-        # (J + alpha^-1 I) du = -f with alpha^-1 scaled by the ratio of
-        # successive residual norms
+        # (J + alpha^-1 M) du = -f (M = I without a mass matrix) with alpha^-1
+        # scaled by the ratio of successive residual norms; the first ratio
+        # is against the residual at init, so it is 0 / 0 at a root and the
+        # step is not finite (Unstable), as upstream
         nf <- sqrt(sum(fx^2))
         inv <- state$inv_alpha %||% (1 / d$initial_damping)
-        if (!is.null(state$res_norm)) inv <- inv * nf / state$res_norm
+        inv <- inv * nf / (state$res_norm %||% nf)
         state$res_norm <- nf
         state$inv_alpha <- inv
-        return(list(du = .nl_lstsq(Jx + diag(inv, ncol(Jx)), -fx)))
+        A <- if (is.null(d$mass_matrix)) Jx + diag(inv, ncol(Jx)) else Jx + inv * as.matrix(d$mass_matrix)
+        if (!all(is.finite(A))) return(list(du = rep(NaN, ncol(Jx))))
+        return(list(du = .nl_lstsq(A, -fx)))
       }
       JtJ <- crossprod(Jx)
       list(du = as.numeric(solve(JtJ + lam * diag(pmax(diag(JtJ), 1e-8), ncol(Jx)), -crossprod(Jx, fx))))
@@ -354,7 +361,7 @@ PseudoTransient <- function(alpha_initial = 1e-3, linesearch = NULL, mass_matrix
   fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   tc <- .nlf_term(opts, fx, x, ls)
-  if (.term_check(tc, fx, x, x)) return(.nlf_finish(tc, x, fx, "Terminated", 0L))
+  # no check before the first step: solve! of NonlinearSolveBase steps first
   state <- new.env(parent = emptyenv())
   Jx <- .nl_jacobian(F, J, x, fx)
   st <- if (!is.null(alg$trustregion)) .nlf_tr_init(alg$trustregion, x, fx, Jx)
@@ -422,7 +429,10 @@ LimitedMemoryBroyden <- function(max_resets = 3L, linesearch = NULL, threshold =
                                  alpha = NULL) {
   a <- .nl_alg("LimitedMemoryBroyden", linesearch = linesearch, threshold = as.integer(threshold),
                max_resets = as.integer(max_resets), reset_tolerance = reset_tolerance, alpha = alpha)
-  a$run <- function(F, J, x0, opts, lb, ub, ls) .nlf_lbroyden(a, F, J, x0, opts, lb, ub, ls)
+  # the quasi Newton kernel of R/nonlinear-solvers.R runs the default and
+  # "BackTracking" line searches; other line search objects run here
+  if (!is.null(linesearch) && !identical(linesearch, "BackTracking"))
+    a$run <- function(F, J, x0, opts, lb, ub, ls) .nlf_lbroyden(a, F, J, x0, opts, lb, ub, ls)
   a
 }
 
@@ -433,7 +443,7 @@ LimitedMemoryBroyden <- function(max_resets = 3L, linesearch = NULL, threshold =
   x <- as.numeric(x0); fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   tc <- .nlf_term(opts, fx, x, ls)
-  if (.term_check(tc, fx, x, x)) return(.nlf_finish(tc, x, fx, "Terminated", 0L))
+  # no check before the first step: solve! of NonlinearSolveBase steps first
   init_B <- function() {
     if (alg$initialization == "true_jacobian") return(.nl_jacobian(F, J, x, fx))
     diag(.nlf_alpha0(alg$alpha, x, fx), length(x))
@@ -481,7 +491,7 @@ LimitedMemoryBroyden <- function(max_resets = 3L, linesearch = NULL, threshold =
   x <- as.numeric(x0); fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   tc <- .nlf_term(opts, fx, x, ls)
-  if (.term_check(tc, fx, x, x)) return(.nlf_finish(tc, x, fx, "Terminated", 0L))
+  # no check before the first step: solve! of NonlinearSolveBase steps first
   n <- length(x); mth <- alg$threshold
   a0 <- 1 / .nlf_alpha0(alg$alpha, x, fx)
   U <- matrix(0, n, 0); V <- matrix(0, n, 0)
@@ -544,15 +554,16 @@ DFSane <- function(sigma_min = 1e-10, sigma_max = 1e10, sigma_1 = 1, M = 10L, ga
   x <- as.numeric(x0); fx <- F(x)
   if (!all(is.finite(fx))) return(.nl_result(x, fx, "InitialFailure", 0L))
   tc <- .nlf_term(opts, fx, x, ls)
-  if (.term_check(tc, fx, x, x)) return(.nlf_finish(tc, x, fx, "Terminated", 0L))
+  # no check before the first step: solve! of NonlinearSolveBase steps first
   lsr <- alg$linesearch
   nexp <- lsr$n_exp %||% 2L
   M <- lsr$M %||% 10L
   fnorm <- function(v) sqrt(sum(v^2))^nexp
   state <- new.env(parent = emptyenv())
   state$fn_1 <- fnorm(fx); state$history <- rep(fnorm(fx), M); state$nsteps <- 0L
+  # safe_dot is BLAS ddot, accumulated with fma (R/nonlinear-wrappers.R)
   spectral <- function(s, y, fu) {
-    sig <- sum(s^2) / sum(s * y)
+    sig <- .wr_dot(s, s) / .wr_dot(s, y)
     if (!is.finite(sig) || !(alg$sigma_min <= abs(sig) && abs(sig) <= alg$sigma_max))
       sig <- min(max(1 / sqrt(sum(fu^2)), 1), 1e5)
     sig
@@ -564,7 +575,8 @@ DFSane <- function(sigma_min = 1e-10, sigma_max = 1e10, sigma_1 = 1, M = 10L, ga
     lsol <- .ls_run(lsr, phi, NULL, NULL, state, sqrt(sum(du^2)))
     if (!identical(lsol$retcode, "Success")) return(.nlf_finish(tc, x, fx, "InternalLineSearchFailed", it))
     xprev <- x; fprev <- fx
-    x <- x + lsol$step_size * du; fx <- F(x)
+    # axpy!(alpha, du, u)
+    x <- .wr_fma(rep_len(lsol$step_size, length(du)), du, x); fx <- F(x)
     if (!is.null(opts$postcondition)) { x <- opts$postcondition(x, xprev); fx <- F(x) }
     if (.term_check(tc, fx, x, xprev)) return(.nlf_finish(tc, x, fx, "Terminated", it))
     sigma <- spectral(x - xprev, fx - fprev, fx)

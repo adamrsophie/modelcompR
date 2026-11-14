@@ -63,7 +63,7 @@ mtkcompile <- function(sys, inputs = list(), outputs = list(), disturbance_input
   extra <- list(...)
   compile_fn <- function(sys) {
     full <- .mtk$hooks$structural_compile
-    if (structural && !is.null(full) && !is.null(.f(sys, "iv")) && !isTRUE(.f(sys, "is_discrete")))
+    if (structural && !is.null(full) && !isTRUE(.f(sys, "is_discrete")))
       do.call(full, c(list(sys, inputs = inputs, outputs = outputs,
                            disturbance_inputs = disturbance_inputs,
                            fully_determined = fully_determined, simplify = simplify), extra))

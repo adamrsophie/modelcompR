@@ -281,12 +281,16 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   il <- which(lc != uc & is.finite(lc))
   sgnI <- c(rep(1, length(iu)), rep(-1, length(il)))
   rowsI <- c(iu, il)
+  # the f_calls and f_grad_calls counters of the IpoptEvaluator
+  ncalls <- c(f = 0L, g = 0L)
   evalf <- function(z, level, lamE = NULL, lamI = NULL, obj = 1) {
     cv <- cons(z)
+    ncalls[["f"]] <<- ncalls[["f"]] + 1L
     out <- list(f = f(z), cE = cv[ie] - lc[ie], cI = sgnI * (cv[rowsI] - c(uc[iu], lc[il])))
     if (level >= 1L) {
       J <- cjac(z)
       out$gf <- grad(z)
+      ncalls[["g"]] <<- ncalls[["g"]] + 1L
       out$JE <- .ipm_triplets(J[ie, , drop = FALSE])
       out$JI <- .ipm_triplets(sgnI * J[rowsI, , drop = FALSE])
     }
@@ -335,5 +339,7 @@ MadNLPOptimizer <- function(...) .ipm_alg("MadNLPOptimizer", .ipm_fields("MadNLP
   if (length(rowsI)) for (k in seq_along(rowsI)) lambda[rowsI[k]] <- lambda[rowsI[k]] + sgnI[k] * r$lamI[k]
   original <- list(status = r$status, iterations = r$iterations, nit = r$iterations, lambda = lambda,
                    constraint_violation = r$violation, restorations = r$restorations)
-  .opt_solution(a, alg, r$z, r$f, retcode, original)
+  sol <- .opt_solution(a, alg, r$z, r$f, retcode, original)
+  .opt_set_fields(sol, stats = OptimizationStats(iterations = r$iterations, fevals = ncalls[["f"]],
+                                                gevals = ncalls[["g"]]))
 }

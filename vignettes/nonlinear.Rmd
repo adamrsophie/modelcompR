@@ -174,7 +174,9 @@ solve(NonlinearProblem(function(u, p) u^2 - p, 1, 2))$u
 ```
 
 `NonlinearFunction(f, jac = J)` attaches an analytic Jacobian; without it
-the solvers use finite differences. The Rosenbrock residuals from Powell's
+the solvers differentiate `f` with dual numbers (forward mode automatic
+differentiation, the AutoForwardDiff default of NonlinearSolve) and fall back
+to finite differences when `f` cannot run on them. The Rosenbrock residuals from Powell's
 badly scaled start make a standard test problem.
 
 ```{r}

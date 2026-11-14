@@ -290,10 +290,15 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 #'   state indices plots each of them); a list of two plots the first against
 #'   the second (a phase plot).
 #' @param n Number of interpolation points for dense solutions.
+#' @param xlab,ylab Axis labels; a phase plot labels its axes with the two
+#'   variables unless they are given.
+#' @param type,lty,col Line settings, as in [graphics::matplot()].
+#' @param legend Draw a legend of the plotted variables.
 #' @param ... Passed to [graphics::matplot()].
 #' @return Invisibly `x`.
 #' @export
-plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
+plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, xlab = NULL, ylab = NULL, type = "l", lty = 1,
+                               col = NULL, legend = TRUE, ...) {
   env <- .sol_env(x)
   ts <- env$t
   if (isTRUE(env$dense) && length(ts) > 1L) ts <- sort(unique(c(seq(ts[1L], ts[length(ts)], length.out = n), env$t)))
@@ -310,12 +315,15 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, ...) {
     labs <- vapply(idl, function(z) if (is_sym(z)) format(z) else as.character(z), "")
     # idxs = (x, y) in Plots.jl: one variable against the other
     if (is.list(idxs) && !is_sym(idxs) && length(idxs) == 2L) {
-      graphics::plot(vals[, 1L], vals[, 2L], type = "l", xlab = labs[1L], ylab = labs[2L], ...)
+      graphics::plot(vals[, 1L], vals[, 2L], type = type, lty = lty, col = col %||% 1L,
+                     xlab = xlab %||% labs[1L], ylab = ylab %||% labs[2L], ...)
       return(invisible(x))
     }
   }
-  graphics::matplot(ts, vals, type = "l", lty = 1, xlab = "t", ylab = "", ...)
-  graphics::legend("topright", legend = labs, col = seq_along(labs), lty = 1, bty = "n")
+  col <- col %||% seq_len(ncol(vals))
+  graphics::matplot(ts, vals, type = type, lty = lty, col = col, xlab = xlab %||% "t", ylab = ylab %||% "", ...)
+  if (legend) graphics::legend("topright", legend = labs, col = rep_len(col, length(labs)),
+                               lty = rep_len(lty, length(labs)), bty = "n")
   invisible(x)
 }
 

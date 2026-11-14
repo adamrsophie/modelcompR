@@ -257,9 +257,10 @@ print.EnsembleSummary <- function(x, ...) {
 }
 
 #' @export
-plot.EnsembleSummary <- function(x, ...) {
-  graphics::matplot(x$t, x$u, type = "l", lty = 1, xlab = "t", ylab = "", ...)
-  graphics::matlines(x$t, x$qlow, lty = 2)
-  graphics::matlines(x$t, x$qhigh, lty = 2)
+plot.EnsembleSummary <- function(x, xlab = "t", ylab = "", ylim = range(x$u, x$qlow, x$qhigh, finite = TRUE),
+                                 col = seq_len(NCOL(x$u)), ...) {
+  graphics::matplot(x$t, x$u, type = "l", lty = 1, col = col, xlab = xlab, ylab = ylab, ylim = ylim, ...)
+  graphics::matlines(x$t, x$qlow, lty = 2, col = col)
+  graphics::matlines(x$t, x$qhigh, lty = 2, col = col)
   invisible(x)
 }

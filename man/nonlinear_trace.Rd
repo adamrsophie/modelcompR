@@ -29,7 +29,9 @@ A \code{NonlinearSolveTracing} object.
 \description{
 Trace levels for the \code{trace_level} option of \code{solve()} with the bounded
 solvers (\code{\link[=TrustRegionReflective]{TrustRegionReflective()}} and the others, and
-\code{\link[=BoundedTrustRegion]{BoundedTrustRegion()}}). \code{show_trace = TRUE} prints one line per step,
+\code{\link[=BoundedTrustRegion]{BoundedTrustRegion()}}) and with \code{\link[=NewtonRaphson]{NewtonRaphson()}}, \code{\link[=GaussNewton]{GaussNewton()}},
+\code{\link[=SimpleTrustRegion]{SimpleTrustRegion()}}, \code{\link[=Broyden]{Broyden()}}, \code{\link[=Klement]{Klement()}} and
+\code{\link[=LevenbergMarquardt]{LevenbergMarquardt()}}. \code{show_trace = TRUE} prints one line per step,
 \code{store_trace = TRUE} keeps the entries in \code{sol$trace}. \code{TraceMinimal()}
 records the iteration, the residual norm (infinity norm, or 2-norm for
 least squares) and the 2-norm of the step;

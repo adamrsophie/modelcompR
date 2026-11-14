@@ -25,7 +25,7 @@ RelNormTerminationMode(internalnorm = NULL)
 
 AbsNormSafeTerminationMode(
   internalnorm = NULL,
-  protective_threshold = 1000,
+  protective_threshold = NULL,
   patience_steps = 100,
   patience_objective_multiplier = 3,
   min_max_factor = 1.3,
@@ -34,7 +34,7 @@ AbsNormSafeTerminationMode(
 
 RelNormSafeTerminationMode(
   internalnorm = NULL,
-  protective_threshold = 1000,
+  protective_threshold = NULL,
   patience_steps = 100,
   patience_objective_multiplier = 3,
   min_max_factor = 1.3,
@@ -43,7 +43,7 @@ RelNormSafeTerminationMode(
 
 AbsNormSafeBestTerminationMode(
   internalnorm = NULL,
-  protective_threshold = 1000,
+  protective_threshold = NULL,
   patience_steps = 100,
   patience_objective_multiplier = 3,
   min_max_factor = 1.3,
@@ -52,7 +52,7 @@ AbsNormSafeBestTerminationMode(
 
 RelNormSafeBestTerminationMode(
   internalnorm = NULL,
-  protective_threshold = 1000,
+  protective_threshold = NULL,
   patience_steps = 100,
   patience_objective_multiplier = 3,
   min_max_factor = 1.3,
@@ -76,7 +76,8 @@ problems, as in NonlinearSolve. With \code{f} the residual and \code{u} the iter
 \code{RelNormTerminationMode()} the norm forms of the absolute and relative
 tests. The safe variants (\code{AbsNormSafeTerminationMode()},
 \code{RelNormSafeTerminationMode()}) also stop with \code{"Unstable"} when the
-objective grows past \code{protective_threshold} times its initial value, and
+objective grows past \code{protective_threshold} (\code{NULL}, the default, turns
+this test off) times its initial value, and
 with \code{"Stalled"} when it stays within \code{min_max_factor} over
 \code{patience_steps} steps near the tolerance (or the steps stay below the
 tolerance for \code{max_stalled_steps} steps); the safe best variants

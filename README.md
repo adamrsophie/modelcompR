@@ -119,11 +119,15 @@ Other tests use analytic solutions and convergence orders.
 
 ## Compatibility with symcompR
 
-Expressions in modelcompR are symcompR expressions, so every symcompR function
-(`simplify`, `expand`, `latex`, `diff`, `subs`, `lambdify`, ...) works on
-equations, Jacobians and observed expressions. Symbols and functions created
-with symcompR directly can be used in models; as in ModelingToolkit, undeclared
-symbols are unknowns. Attaching both packages masks nothing: `flatten()` and
+Expressions in modelcompR are symcompR expressions, so the symcompR functions
+(`simplify`, `expand`, `latex`, `diff`, `subs`, ...) work on the two sides of
+equations, on Jacobian entries and on observed expressions. `latexify()` takes
+whole equations and systems, and `build_function()` compiles expressions of
+time dependent variables, which `lambdify()` does not accept. Symbols created
+with symcompR directly can be used in time independent models, where an
+undeclared symbol is an unknown; in a time dependent model it raises an error,
+as in ModelingToolkit, so declare such unknowns with `Variable("x", t)`.
+Attaching both packages masks nothing: `flatten()` and
 `compose()` hand any argument that is not a system to symcompR, and no
 modelcompR function masks a base R function.
 

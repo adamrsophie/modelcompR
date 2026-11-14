@@ -79,9 +79,12 @@ test_that("bounds from metadata keep the iterates in the box", {
 test_that("least squares problems report stationary points", {
   # (x - 1, x + 1, y - 3): the minimizer is x = 0, y = 3 with residual (-1, 1, 0)
   prob <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] - 1, u[1] + 1, u[2] - 3), c(5, 5))
+  # as NonlinearSolve: the steps stall at the minimizer (StalledSuccess); Gauss
+  # Newton lands there in one step and stalls 32 steps later
   for (alg in list(GaussNewton(), LevenbergMarquardt(), FastShortcutNLLSPolyalg())) {
     sol <- solve(prob, alg)
-    expect_equal(sol$retcode, "Success", info = alg$name)
+    expect_equal(sol$retcode, "StalledSuccess", info = alg$name)
+    if (inherits(alg, "GaussNewton")) expect_identical(sol$stats$nsteps, 33L)
     expect_equal(sol$u, c(0, 3), tolerance = 1e-7, info = alg$name)
     expect_equal(sol$resid, c(-1, 1, 0), tolerance = 1e-7)
   }
@@ -275,10 +278,16 @@ test_that("bound constrained least squares stops at the constrained minimizer", 
   sol <- solve(p1j, TrustRegion())
   expect_identical(sol$retcode, "StalledSuccess")
   expect_equal(sol$u, c(0.49999999999999994, 2.567789719906645e-27), tolerance = 1e-9)
-  for (alg in list(GaussNewton(), LevenbergMarquardt(), SimpleTrustRegion(), FastShortcutNLLSPolyalg())) {
+  for (alg in list(GaussNewton(), LevenbergMarquardt(), SimpleTrustRegion())) {
     sol <- solve(p1, alg)
     expect_true(all(abs(sol$u) < 1e-10), info = alg$name)
   }
+  # with the AutoForwardDiff Jacobian the polyalgorithm reaches its
+  # TrustRegion, which leaves the corner as in Julia (StalledSuccess at
+  # (0.49999999999999994, 2.567789719906645e-27))
+  sol <- solve(p1, FastShortcutNLLSPolyalg())
+  expect_identical(sol$retcode, "StalledSuccess")
+  expect_equal(sol$u, c(0.5, 0), tolerance = 1e-9)
   # the default of a bounded problem is SobolMultistart(FastShortcutBoundedPolyalg())
   expect_equal(solve(p1)$u, c(0.5, 0), tolerance = 1e-6)
   p2 <- NonlinearLeastSquaresProblem(function(u, p) c(u[1] + 2 * u[2] - 1, u[2] - 1), c(0, 0),
@@ -324,7 +333,7 @@ test_that("the Lorenz steady state matches NonlinearSolve.jl", {
   expect_lt(max(abs(mine - ref$value[match(names(mine), ref$name)])), 1e-10)
   # from another start Newton finds the nontrivial root (sqrt(beta (rho - 1)), same, rho - 1)
   far <- solve(NonlinearProblem(sys, list(nx ~ 8, ny ~ 8, nz ~ 24)), NewtonRaphson())
-  expect_equal(unname(far$u), c(sqrt(8 / 3 * 25), sqrt(8 / 3 * 25), 25), tolerance = 1e-9)
+  expect_equal(c(far[nx], far[ny], far[nz]), c(sqrt(8 / 3 * 25), sqrt(8 / 3 * 25), 25), tolerance = 1e-9)
 })
 
 test_that("Broyden and Klement solve problems where Newton stalls", {
@@ -389,4 +398,13 @@ test_that("SCC problems solve linear and homotopy blocks", {
   sol <- solve(prob)
   expect_equal(sol$retcode, "Success")
   expect_equal(unname(sol$u[c("nlscc_x", "nlscc_y", "nlscc_z")]), c(2, 4, 3), tolerance = 1e-9)
+})
+
+test_that("Klement returns Unstable when its diagonal Jacobian turns NaN", {
+  # NonlinearSolve.jl: retcode Unstable after 166 steps at the best iterate
+  prob <- NonlinearProblem(function(u, p) c(10 * (u[2] - u[1]^2), 1 - u[1]), c(-1.2, 1))
+  sol <- solve(prob, Klement())
+  expect_identical(sol$retcode, "Unstable")
+  expect_identical(sol$stats$nsteps, 166L)
+  expect_equal(sol$u, c(-0.5014300321370808, 0.6507150160685404), tolerance = 1e-12)
 })

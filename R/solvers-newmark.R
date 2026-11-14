@@ -141,20 +141,10 @@ GeneralizedAlpha <- function(alpha_m = NULL, alpha_f = NULL, beta = NULL, gamma 
         v1 <- vn + dt * ((1 - gamma) * an + gamma * a)
         ((1 - am) * a + am * an) - f1((1 - af) * v1 + af * vn, (1 - af) * u1 + af * un, p, tf)
       }
-      # NonlinearSolve takes at least one step before its termination test
-      # and returns the iterate of smallest max |residual| (strictly smaller
-      # than at the start; AbsNormSafeBestTerminationMode), so a start
-      # acceleration that already solves the residual moves by the Newton
-      # correction when that lowers the residual (otherwise the error
-      # estimate stays exactly 0 and dt frozen, where Julia's grows)
-      a0 <- an
-      r0 <- resid(an)
-      if (all(is.finite(r0)) && max(abs(r0), 0) <= .nl_default_tol()) {
-        a1 <- an - .as_num(solve(.nl_jacobian(resid, NULL, an, r0), r0))
-        r1 <- resid(a1)
-        if (all(is.finite(r1)) && max(abs(r1), 0) < max(abs(r0), 0)) a0 <- a1
-      }
-      nl <- .nl_run(nlsolve, resid, NULL, a0, list())
+      # the nonlinear solve steps before its termination test (no check at
+      # the start), so a start acceleration that already solves the residual
+      # still moves by the Newton correction, as NonlinearSolve
+      nl <- .nl_run(nlsolve, resid, NULL, an, list())
       if (!identical(nl$retcode, "Success")) return(list(u = z, fail = TRUE, cache = cache, nf = 1L))
       a <- nl$u
       u1 <- un + dt * vn + dtsq2 * ((1 - 2 * beta) * an + 2 * beta * a)

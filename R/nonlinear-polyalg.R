@@ -401,7 +401,9 @@ EisenstatWalkerForcing2 <- function(eta_0 = 0.5, eta_max = 0.9, gamma = 0.9, alp
 #'
 #' Trace levels for the `trace_level` option of `solve()` with the bounded
 #' solvers ([TrustRegionReflective()] and the others, and
-#' [BoundedTrustRegion()]). `show_trace = TRUE` prints one line per step,
+#' [BoundedTrustRegion()]) and with [NewtonRaphson()], [GaussNewton()],
+#' [SimpleTrustRegion()], [Broyden()], [Klement()] and
+#' [LevenbergMarquardt()]. `show_trace = TRUE` prints one line per step,
 #' `store_trace = TRUE` keeps the entries in `sol$trace`. `TraceMinimal()`
 #' records the iteration, the residual norm (infinity norm, or 2-norm for
 #' least squares) and the 2-norm of the step;
