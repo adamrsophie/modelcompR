@@ -75,12 +75,14 @@
 #' @param step_limiter A function `step_limiter(u, integ, p, t)` returning
 #'   the state after each accepted step, or `NULL`.
 #' @param embedding The embedded method of `Cash4()`, 3 or 2.
-#' @param nlsolve The Newton iteration of the implicit stages: an
-#'   [NLNewton()] whose `kappa`, `max_iter`, `new_W_dt_cutoff`, `check_div`
-#'   and `predictor` it uses (`fast_convergence_cutoff` is stored, as
-#'   OrdinaryDiffEq stores it without using it). A `predictor(uprev, p, t,
-#'   dt)` returns a guess of the stage value at the stage time `t`; it
-#'   replaces the guess of `predictor` at every stage.
+#' @param nlsolve The nonlinear solver of the implicit stages: [NLNewton()]
+#'   (with its `kappa`, `max_iter`, `new_W_dt_cutoff`, `always_new`,
+#'   `check_div`, `relax` and `predictor`; `fast_convergence_cutoff` is
+#'   stored, as OrdinaryDiffEq stores it without using it), the fixed point
+#'   iteration [NLFunctional()] or its Anderson accelerated form
+#'   [NLAnderson()]. A `predictor(uprev, p, t, dt)` returns a guess of the
+#'   stage value at the stage time `t`; it replaces the guess of `predictor`
+#'   at every stage.
 #' @return An algorithm object.
 #' @examples
 #' prob <- ODEProblem(function(u, p, t) -50 * (u - cos(t)), 0, c(0, 1))

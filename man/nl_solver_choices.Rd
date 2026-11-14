@@ -67,8 +67,9 @@ is formed again.}
 
 \item{check_div}{Stop early when the iteration diverges.}
 
-\item{relax}{A relaxation in \verb{[0, 1)} damping the Newton update, or
-\code{NULL}.}
+\item{relax}{A relaxation in \verb{[0, 1)} damping the Newton update, a line
+search \verb{function(phi, dphi, phidphi, alpha0, phi0, dphi0)} whose first
+value is the step length along the Newton update, or \code{NULL}.}
 
 \item{alg}{A nonlinear solver algorithm.}
 }

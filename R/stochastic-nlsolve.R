@@ -27,8 +27,9 @@
 #'   is formed again.
 #' @param always_new Form `W` at every solve.
 #' @param check_div Stop early when the iteration diverges.
-#' @param relax A relaxation in `[0, 1)` damping the Newton update, or
-#'   `NULL`.
+#' @param relax A relaxation in `[0, 1)` damping the Newton update, a line
+#'   search `function(phi, dphi, phidphi, alpha0, phi0, dphi0)` whose first
+#'   value is the step length along the Newton update, or `NULL`.
 #' @param max_history,aa_start,droptol The Anderson acceleration memory,
 #'   first accelerated iteration and drop tolerance.
 #' @param alg A nonlinear solver algorithm.

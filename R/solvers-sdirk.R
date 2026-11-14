@@ -197,7 +197,8 @@
   if (ctx$adaptive && length(tab$btilde)) {
     est <- .sdirk_acc(tab$btilde[1L] * Z[, 1L], tab$btilde, Z, seq_len(s)[-1L])
     if (is_imex && length(tab$ebtilde)) est <- .sdirk_acc(est, tab$ebtilde, K, seq_len(s))
-    if (spec$smooth_est) {
+    # can_smooth_est: only the Newton method has W
+    if (spec$smooth_est && nl$kind == "NLNewton") {
       est <- .wsolve(nl$W, est)
       cnt$nsolve <- cnt$nsolve + 1L
     }

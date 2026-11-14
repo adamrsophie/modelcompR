@@ -54,3 +54,16 @@ test_that("stage and step limiters apply", {
   s <- solve(prob, SSPRK33(stage_limiter = lim, step_limiter = lim), dt = 0.1)
   expect_true(all(unlist(s$u) >= 0.5))
 })
+
+test_that("the FSAL low order methods count f as OrdinaryDiffEq does", {
+  # tools/nlfunctional-probe.jl: one call at initialization, two per step
+  prob <- ODEProblem(function(u, p, t) -u, 1, c(0, 1))
+  for (alg in list(Midpoint(), Heun(), Ralston())) {
+    s <- solve(prob, alg)
+    expect_equal(c(s$stats$nf, s$stats$naccept), c(83, 40), info = alg$name)
+    expect_equal(s$u[[length(s$u)]], 0.36793149568344663, tolerance = 1e-14, info = alg$name)
+    s <- solve(prob, alg, dt = 0.1, adaptive = FALSE)
+    expect_equal(c(s$stats$nf, s$stats$naccept), c(21, 10), info = alg$name)
+    expect_equal(s$u[[length(s$u)]], 0.36854098483355185, tolerance = 1e-14, info = alg$name)
+  }
+})

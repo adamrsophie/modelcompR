@@ -109,6 +109,42 @@ NULL
   Rk[lower.tri(Rk)] <- 0
   Rk
 }
+# The QR updates of the Anderson acceleration (qrdelete! and qradd! of NLsolve
+# and of OrdinaryDiffEqNonlinearSolve utils.jl). qrdelete removes the first
+# column of Q[, 1:k] R[1:k, 1:k] by Givens rotations; qradd replaces column k
+# with v, orthogonalized against the first k - 1 columns of Q.
+.aa_givens <- function(f, g) {
+  if (g == 0) return(c(1, 0, f))
+  if (f == 0) return(c(0, 1, g))
+  r <- sqrt(f * f + g * g); cs <- f / r; sn <- g / r
+  if (abs(f) > abs(g) && cs < 0) { cs <- -cs; sn <- -sn; r <- -r }
+  c(cs, sn, r)
+}
+.aa_qrdelete <- function(Q, R, k) {
+  if (k >= 2) for (i in 2:k) {
+    gv <- .aa_givens(R[i - 1, i], R[i, i])
+    r1 <- R[i - 1, ]; r2 <- R[i, ]
+    R[i - 1, ] <- gv[1] * r1 + gv[2] * r2
+    R[i, ] <- -gv[2] * r1 + gv[1] * r2
+    q1 <- Q[, i - 1]; q2 <- Q[, i]
+    Q[, i - 1] <- gv[1] * q1 + gv[2] * q2
+    Q[, i] <- -gv[2] * q1 + gv[1] * q2
+  }
+  if (k >= 2) for (j in 1:(k - 1)) for (i in 1:(k - 1)) R[i, j] <- R[i, j + 1]
+  list(Q = Q, R = R)
+}
+.aa_qradd <- function(Q, R, v, k) {
+  if (k >= 2) for (i in 1:(k - 1)) {
+    r <- .wr_dot(Q[, i], v)
+    R[i, k] <- r
+    v <- .wr_fma(-r, Q[, i], v)
+  }
+  dd <- .wr_l2(v)
+  R[k, k] <- dd
+  Q[, k] <- v / dd
+  list(Q = Q, R = R)
+}
+
 .wr_tmv <- function(A, x) vapply(seq_len(ncol(A)), function(j) .wr_dot(A[, j], x), 0)
 .wr_utrisolve <- function(R, b) {
   for (j in rev(seq_along(b))) {
@@ -938,34 +974,13 @@ NLsolveJL <- function(method = "trust_region", autodiff = NULL, linesearch = NUL
     Q <- matrix(0, nn, m); Rm <- matrix(0, m, m); dgs <- vector("list", m)
     m_eff <- 0L; it <- 0L; conv <- c(FALSE, FALSE)
     fxold <- gold <- NULL
-    givens <- function(f, g) {
-      if (g == 0) return(c(1, 0, f))
-      if (f == 0) return(c(0, 1, g))
-      r <- sqrt(f * f + g * g); cs <- f / r; sn <- g / r
-      if (abs(f) > abs(g) && cs < 0) { cs <- -cs; sn <- -sn; r <- -r }
-      c(cs, sn, r)
-    }
     qrdelete <- function(k) {
-      if (k >= 2) for (i in 2:k) {
-        gv <- givens(Rm[i - 1, i], Rm[i, i])
-        r1 <- Rm[i - 1, ]; r2 <- Rm[i, ]
-        Rm[i - 1, ] <<- gv[1] * r1 + gv[2] * r2
-        Rm[i, ] <<- -gv[2] * r1 + gv[1] * r2
-        q1 <- Q[, i - 1]; q2 <- Q[, i]
-        Q[, i - 1] <<- gv[1] * q1 + gv[2] * q2
-        Q[, i] <<- -gv[2] * q1 + gv[1] * q2
-      }
-      if (k >= 2) for (j in 1:(k - 1)) for (i in 1:(k - 1)) Rm[i, j] <<- Rm[i, j + 1]
+      qr <- .aa_qrdelete(Q, Rm, k)
+      Q <<- qr$Q; Rm <<- qr$R
     }
     qradd <- function(v, k) {
-      if (k >= 2) for (i in 1:(k - 1)) {
-        r <- .wr_dot(Q[, i], v)
-        Rm[i, k] <<- r
-        v <- .wr_fma(-r, Q[, i], v)
-      }
-      dd <- .wr_l2(v)
-      Rm[k, k] <<- dd
-      Q[, k] <<- v / dd
+      qr <- .aa_qradd(Q, Rm, v, k)
+      Q <<- qr$Q; Rm <<- qr$R
     }
     while (it < iterations) {
       it <- it + 1L

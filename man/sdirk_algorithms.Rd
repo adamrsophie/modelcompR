@@ -378,11 +378,14 @@ or of order 3 only for stages in the first half of the step).}
 \item{step_limiter}{A function \code{step_limiter(u, integ, p, t)} returning
 the state after each accepted step, or \code{NULL}.}
 
-\item{nlsolve}{The Newton iteration of the implicit stages: an
-\code{\link[=NLNewton]{NLNewton()}} whose \code{kappa}, \code{max_iter}, \code{new_W_dt_cutoff}, \code{check_div}
-and \code{predictor} it uses (\code{fast_convergence_cutoff} is stored, as
-OrdinaryDiffEq stores it without using it). A \code{predictor(uprev, p, t, dt)} returns a guess of the stage value at the stage time \code{t}; it
-replaces the guess of \code{predictor} at every stage.}
+\item{nlsolve}{The nonlinear solver of the implicit stages: \code{\link[=NLNewton]{NLNewton()}}
+(with its \code{kappa}, \code{max_iter}, \code{new_W_dt_cutoff}, \code{always_new},
+\code{check_div}, \code{relax} and \code{predictor}; \code{fast_convergence_cutoff} is
+stored, as OrdinaryDiffEq stores it without using it), the fixed point
+iteration \code{\link[=NLFunctional]{NLFunctional()}} or its Anderson accelerated form
+\code{\link[=NLAnderson]{NLAnderson()}}. A \code{predictor(uprev, p, t, dt)} returns a guess of the
+stage value at the stage time \code{t}; it replaces the guess of \code{predictor}
+at every stage.}
 
 \item{smooth_est}{Multiply the embedded error estimate by the inverse of
 the Newton matrix (a smoothed estimate for very stiff problems).}

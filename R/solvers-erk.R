@@ -106,7 +106,10 @@ NULL
     ctrl <- list(controller = "PID", pid_beta = tb$pid_beta, accept_safety = tb$pid_accept_safety %||% 0.81)
   }
   interp <- switch(dense, ssp = .ssprk_interp, ends = .lsrk_interp, linear = .sde_linear_interp, .hermite_interp)
-  parts <- list(step = step, interp = interp, init = function(ctx, t, u) list())
+  # initialize! of an FSAL method evaluates fsalfirst, which the first step
+  # then reuses (the driver counts that evaluation)
+  init <- if (fsal) function(ctx, t, u) list(fsal = ctx$f(u, ctx$p, t)) else function(ctx, t, u) list()
+  parts <- list(step = step, interp = interp, init = init)
   # the low storage methods run their register forms, the SSP methods the
   # out of place perform_step! of OrdinaryDiffEqSSPRK (R/solvers-ssprk.R)
   if (is.null(tableau) && !is.null(.LSRK[[name]])) parts <- .lsrk_parts(name)

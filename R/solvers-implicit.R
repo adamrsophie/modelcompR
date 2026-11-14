@@ -119,9 +119,23 @@
     nl$new_W_dt_cutoff <- nlsolve$new_W_dt_cutoff
     # stored as in nlsolve!, which unpacks it without using it
     nl$fast_convergence_cutoff <- nlsolve$fast_convergence_cutoff
-    nl$check_div <- isTRUE(nlsolve$check_div)
+    nl$check_div <- !identical(nlsolve$check_div, FALSE)
     nl$predictor <- nlsolve$predictor
+    nl$kind <- class(nlsolve)[1L]
+    nl$always_new <- isTRUE(nlsolve$always_new)
+    nl$relax <- nlsolve$relax
+    if (nl$kind == "NLAnderson") {
+      # NLAndersonConstantCache; dz, dzold and z_old start as u (set on the
+      # first solve) and the history restarts at every solve
+      nl$aa <- new.env(parent = emptyenv())
+      nl$aa$aa_start <- nlsolve$aa_start
+      nl$aa$droptol <- nlsolve$droptol
+      nl$aa$max_history <- nlsolve$max_history
+    }
   }
+  nl$kind <- nl$kind %||% "NLNewton"
+  # NLNewtonConstantCache starts with new_W = true
+  nl$new_W <- TRUE
   nl$J <- NULL
   nl$Jdu <- NULL
   nl$W <- NULL
@@ -135,16 +149,16 @@
   nl
 }
 
-# The `nlsolve` argument of the SDIRK methods: an NLNewton() whose kappa,
-# max_iter, fast_convergence_cutoff, new_W_dt_cutoff, check_div and
-# predictor the Newton iteration takes. The other nonlinear solvers and the
-# always_new and relax options of NLNewton are not available here.
+# The `nlsolve` argument of ImplicitEuler, Trapezoid and the SDIRK methods:
+# NLNewton(), NLFunctional() or NLAnderson().
 .check_nlsolve <- function(nlsolve) {
   if (is.null(nlsolve)) return(NULL)
-  if (!inherits(nlsolve, "NLNewton"))
-    stop("nlsolve must be NLNewton(); ", class(nlsolve)[1L], " is not available for this method", call. = FALSE)
-  if (isTRUE(nlsolve$always_new) || (!is.null(nlsolve$relax) && !identical(nlsolve$relax, 0)))
-    stop("NLNewton(always_new = TRUE) and NLNewton(relax) are not available for this method", call. = FALSE)
+  if (!inherits(nlsolve, c("NLNewton", "NLFunctional", "NLAnderson")))
+    stop("nlsolve must be NLNewton(), NLFunctional() or NLAnderson(); ", class(nlsolve)[1L],
+         " is not available for this method", call. = FALSE)
+  if (inherits(nlsolve, "NLNewton") && !is.null(nlsolve$relax) && !is.numeric(nlsolve$relax) &&
+      !is.function(nlsolve$relax))
+    stop("relax is a number in [0, 1), a line search function or NULL", call. = FALSE)
   nlsolve
 }
 
@@ -174,13 +188,15 @@
 # differences at (du_pred, uprev)) and W = J_u + cj * J_du. `gdt_test` is
 # the step factor do_newJW compares with (gamma * dt of the nonlinear
 # solver; IRKC's error estimate forms W with dt).
-.update_W <- function(nl, ctx, t, uprev, gdt, dae = NULL, gdt_test = gdt) {
-  nj <- .do_newJW(nl, ctx, t, gdt_test, cj = dae$cj)
+# `newJW` forces the choice of do_newJW; `ju` and `jt` are the state and time
+# of the Jacobian (calc_W of always_new takes integrator.u at t + dt).
+.update_W <- function(nl, ctx, t, uprev, gdt, dae = NULL, gdt_test = gdt, newJW = NULL, ju = uprev, jt = t) {
+  nj <- newJW %||% .do_newJW(nl, ctx, t, gdt_test, cj = dae$cj)
   cnt <- list(nf = 0L, njacs = 0L, nw = 0L)
   # out of place, calc_W computes J afresh whenever it forms W
   if (nj[1L] || (nj[2L] && is.null(dae))) {
     if (is.null(dae)) {
-      jj <- .calc_J(ctx, uprev, t)
+      jj <- .calc_J(ctx, ju, jt)
       nl$J <- jj$J
     } else {
       jj <- .calc_J_dae(ctx, if (is.null(ctx$jac)) dae$du_pred else ctx$du, uprev, t)
@@ -224,51 +240,149 @@
   nl$isfs <- firststage
   dae <- !is.null(u0)
   dirk <- identical(method, "dirk")
+  newton <- nl$kind == "NLNewton"
+  always_new <- newton && isTRUE(nl$always_new)
+  aa <- nl$aa
   cnt <- list(nf = 0L, njacs = 0L, nsolve = 0L, nw = 0L)
   add <- function(x) for (s in names(cnt)) cnt[[s]] <<- cnt[[s]] + as.integer(x[[s]] %||% 0L)
   invgdt <- 1 / (gamma * dt)
+  gdt <- if (dirk) gamma * dt else gamma * dt / alpha
+  dae_w <- if (dae) list(cj = alpha * invgdt, du_pred = tmp * invgdt) else NULL
   eig <- NULL
+  # _compute_rhs of the Newton method: the residual b and the stage value
+  rhs <- function(z) {
+    if (dae) {
+      ustep <- u0 + z
+      b <- ctx$f((tmp + alpha * z) * invgdt, ustep, ctx$p, tstep)
+    } else if (dirk) {
+      ustep <- tmp + gamma * z
+      b <- (dt * ctx$f(ustep, ctx$p, tstep) - .mass_mul(ctx$mass, z)) * invgdt
+    } else {
+      ustep <- z
+      b <- tmp + ctx$f(z, ctx$p, tstep) - (alpha * invgdt) * .mass_mul(ctx$mass, z)
+    }
+    list(b = b, ustep = ustep)
+  }
+  # compute_step_fixedpoint! (out of place) of NLFunctional and NLAnderson:
+  # the next iterate ztmp = g(z), its increment dz and the stage value
+  fixedpoint <- function(z) {
+    if (dae) {
+      ustep <- uprev + z
+      dz <- ctx$f((tmp + alpha * z) * invgdt, ustep, ctx$p, t)
+      ztmp <- z + dz
+    } else if (!dirk) {
+      ustep <- z
+      if (is.null(ctx$mass)) {
+        ztmp <- (tmp + ctx$f(z, ctx$p, tstep)) * (gamma * dt / alpha)
+        dz <- ztmp - z
+      } else {
+        dz <- (tmp + ctx$f(z, ctx$p, tstep)) * (gamma * dt) - alpha * .mass_mul(ctx$mass, z)
+        ztmp <- dz + z
+      }
+    } else {
+      ustep <- tmp + gamma * z
+      if (is.null(ctx$mass)) {
+        ztmp <- dt * ctx$f(ustep, ctx$p, tstep)
+        dz <- ztmp - z
+      } else {
+        dz <- dt * ctx$f(ustep, ctx$p, tstep) - .mass_mul(ctx$mass, z)
+        ztmp <- z + dz
+      }
+    }
+    list(ztmp = ztmp, dz = dz, ustep = ustep)
+  }
+  # relax of NLNewton: a number r damps the step to (1 - r) dz; a function
+  # is a line search linesearch(phi, dphi, phidphi, alpha0, phi0, dphi0)
+  # whose first value is the step length (relax! of the in place method)
+  relax <- function(dz, z) {
+    r <- nl$relax
+    if (is.null(r)) return(dz)
+    if (is.numeric(r)) return(if (r != 0) (1 - r) * dz else dz)
+    phi <- function(a) {
+      rr <- rhs(z - dz * a)
+      .err_norm(rr$b, uprev, rr$ustep, ctx$abstol, ctx$reltol)
+    }
+    eps <- sqrt(.Machine$double.eps)
+    dphi <- function(a) (phi(a + eps) - phi(a)) / eps
+    phidphi <- function(a) {
+      p1 <- phi(a)
+      p2 <- phi(a + eps)
+      list(p1, (p2 - p1) / eps)
+    }
+    pd0 <- phidphi(0)
+    a <- r(phi, dphi, phidphi, 1, pd0[[1L]], pd0[[2L]])[[1L]]
+    dz * a
+  }
+  if (!is.null(aa) && is.null(aa$dz)) {
+    aa$dz <- aa$dzold <- aa$zold <- uprev
+    m <- min(aa$max_history, nl$maxiters, length(z))
+    aa$m <- m
+    aa$Q <- matrix(0, length(z), m)
+    aa$R <- matrix(0, m, m)
+    aa$dzs <- vector("list", m)
+  }
   repeat {
-    gdt <- if (dirk) gamma * dt else gamma * dt / alpha
-    # do_newJW measures the step change by 1 / (gamma dt), without alpha
-    w <- .update_W(nl, ctx, t, uprev, gdt,
-                   dae = if (dae) list(cj = alpha * invgdt, du_pred = tmp * invgdt) else NULL,
-                   gdt_test = gamma * dt)
-    add(w)
-    if (!is.null(w$eigen_est)) eig <- w$eigen_est
+    if (newton && !always_new) {
+      # do_newJW measures the step change by 1 / (gamma dt), without alpha
+      w <- .update_W(nl, ctx, t, uprev, gdt, dae = dae_w, gdt_test = gamma * dt)
+      add(w)
+      if (!is.null(w$eigen_est)) eig <- w$eigen_est
+    }
     if (!is.null(nl$predictor)) {
       upred <- nl$predictor(uprev, ctx$p, if (is.null(pred_c)) tstep else t + pred_c * dt, dt)
       z <- if (dae) upred - u0 else if (dirk) (upred - tmp) * (1 / gamma) else upred
     }
+    if (!is.null(aa)) aa$history <- 0L
     nl$status <- "Convergence"
-    eta <- if (isTRUE(nl$new_W)) max(nl$eta_old, .Machine$double.eps)^0.8 else nl$eta_old
+    # initial_eta: the functional iterations keep eta_old
+    eta <- if (newton && isTRUE(nl$new_W)) max(nl$eta_old, .Machine$double.eps)^0.8 else nl$eta_old
     ndz <- 1
     converged <- FALSE
     for (it in seq_len(nl$maxiters)) {
       ndzprev <- ndz
-      if (dae) {
-        ustep <- u0 + z
-        ztmp <- ctx$f((tmp + alpha * z) * invgdt, ustep, ctx$p, tstep)
-      } else if (dirk) {
-        ustep <- tmp + gamma * z
-        ztmp <- (dt * ctx$f(ustep, ctx$p, tstep) - .mass_mul(ctx$mass, z)) * invgdt
-      } else {
-        ustep <- z
-        ztmp <- tmp + ctx$f(z, ctx$p, tstep) - (alpha * invgdt) * .mass_mul(ctx$mass, z)
+      if (always_new) {
+        # integrator.u = uprev + gamma z, the state calc_W takes at t + dt
+        w <- .update_W(nl, ctx, t, uprev, gdt, dae = dae_w, newJW = c(TRUE, TRUE),
+                       ju = if (dae) uprev else uprev + gamma * z, jt = if (dae) t else t + dt)
+        add(w)
+        if (!is.null(w$eigen_est)) eig <- w$eigen_est
       }
-      cnt$nf <- cnt$nf + 1L
-      if (is.null(nl$W) || any(!is.finite(ztmp))) {
-        # compute_step! solves with W (and counts it) before the norm is
-        # found to be infinite
-        if (!is.null(nl$W)) cnt$nsolve <- cnt$nsolve + 1L
-        ndz <- Inf
+      if (newton) {
+        rr <- rhs(z)
+        ztmp <- rr$b
+        ustep <- rr$ustep
+        cnt$nf <- cnt$nf + 1L
+        if (is.null(nl$W) || any(!is.finite(ztmp))) {
+          # compute_step! solves with W (and counts it) before the norm is
+          # found to be infinite
+          if (!is.null(nl$W)) cnt$nsolve <- cnt$nsolve + 1L
+          ndz <- Inf
+        } else {
+          dz <- relax(.wsolve(nl$W, ztmp), z)
+          cnt$nsolve <- cnt$nsolve + 1L
+          ndz <- .err_norm(dz, uprev, ustep, ctx$abstol, ctx$reltol)
+          # has_special_newton_error (QNDF, NordsieckBDF): the increment norm
+          # times the error constant
+          if (!is.null(ctx$newton_scale)) ndz <- ndz * ctx$newton_scale
+        }
+        znext <- if (is.finite(ndz)) z - dz else z
       } else {
-        dz <- .wsolve(nl$W, ztmp)
-        cnt$nsolve <- cnt$nsolve + 1L
-        ndz <- .err_norm(dz, uprev, ustep, ctx$abstol, ctx$reltol)
-        # has_special_newton_error (QNDF, NordsieckBDF): the increment norm
-        # times the error constant
-        if (!is.null(ctx$newton_scale)) ndz <- ndz * ctx$newton_scale
+        if (!is.null(aa)) {
+          # Anderson acceleration of the iterate from iteration aa_start + 2 on
+          previter <- it - 1L
+          if (previter == aa$aa_start) {
+            aa$dzold <- aa$dz
+            aa$zold <- z
+          } else if (previter > aa$aa_start) {
+            z <- .nl_anderson(aa, z)
+            cnt$nsolve <- cnt$nsolve + 1L
+          }
+        }
+        fp <- fixedpoint(z)
+        cnt$nf <- cnt$nf + 1L
+        ndz <- .err_norm(fp$dz, uprev, fp$ustep, ctx$abstol, ctx$reltol)
+        if (!is.null(aa)) aa$dz <- fp$dz
+        znext <- fp$ztmp
       }
       if (!is.finite(ndz)) {
         nl$status <- "Divergence"
@@ -277,9 +391,9 @@
       }
       if (it > 1L) {
         theta <- nl$prev_theta <- max(0.3 * nl$prev_theta, ndz / ndzprev)
+        # at the precision limit the last step is not applied
         if (abs(theta - 1) <= 100 * sqrt(.Machine$double.eps)) {
           if (ndz <= 1) {
-            z <- z - dz
             converged <- TRUE
             break
           }
@@ -298,9 +412,11 @@
         if (!isTRUE(ctx$accept_prev)) nl$prev_theta <- 1
         theta <- nl$prev_theta
       }
-      z <- z - dz
+      z <- znext
       eta <- theta / (1 - theta)
-      if ((it == 1L && ndz < 1e-5) || ((it > 1L || eta_first) && eta >= 0 && eta * ndz < nl$kappa)) {
+      # check_eta_convergence trusts theta on the first iteration only for
+      # the Newton method of an adaptive algorithm
+      if ((it == 1L && ndz < 1e-5) || ((it > 1L || (eta_first && newton)) && eta >= 0 && eta * ndz < nl$kappa)) {
         converged <- TRUE
         break
       }
@@ -315,17 +431,48 @@
       nl$status <- "Divergence"
       nl$nfails <- nl$nfails + 1L
     }
-    # a stale Jacobian gets one retry with a fresh one
-    if (nl$status == "Divergence" && !isTRUE(nl$J_t == t)) {
+    # a stale Jacobian gets one retry with a fresh one (Newton only)
+    if (newton && nl$status == "Divergence" && !isTRUE(nl$J_t == t)) {
       nl$status <- "TryAgain"
       nl$nfails <- nl$nfails + 1L
-      next
+      if (!always_new) next
     }
     break
   }
   nl$eta_old <- eta
   nl$firstcall <- FALSE
   c(list(z = z, ok = nl$status == "Convergence", eigen_est = eig), cnt)
+}
+
+# anderson of utils.jl: the accelerated iterate from the history of the
+# fixed-point increments. The condition test of droptol takes the current
+# R[1:history, 1:history] (upstream tests the whole, partly unset matrix).
+.nl_anderson <- function(aa, z) {
+  history <- aa$history + 1L
+  m <- aa$m
+  if (history > m) {
+    if (m > 1L) for (i in seq_len(m - 1L)) aa$dzs[[i]] <- aa$dzs[[i + 1L]]
+    qr <- .aa_qrdelete(aa$Q, aa$R, m)
+    aa$Q <- qr$Q; aa$R <- qr$R
+    history <- m
+  }
+  aa$dzs[[history]] <- z - aa$zold
+  qr <- .aa_qradd(aa$Q, aa$R, aa$dz - aa$dzold, history)
+  aa$Q <- qr$Q; aa$R <- qr$R
+  aa$dzold <- aa$dz
+  aa$zold <- z
+  if (!is.null(aa$droptol)) {
+    while (history > 1L && kappa(.wr_upper(aa$R, history), exact = TRUE) > aa$droptol) {
+      qr <- .aa_qrdelete(aa$Q, aa$R, history)
+      aa$Q <- qr$Q; aa$R <- qr$R
+      history <- history - 1L
+    }
+  }
+  aa$history <- history
+  h <- seq_len(history)
+  gam <- .wr_utrisolve(.wr_upper(aa$R, history), .wr_tmv(aa$Q[, h, drop = FALSE], aa$dz))
+  for (i in h) z <- .wr_fma(-gam[i], aa$dzs[[i]], z)
+  z
 }
 
 # Reset the convergence rate after a rejected step (step_reject_controller!).
@@ -454,11 +601,11 @@
 #' (`ODEProblem(sys, ..., jac = TRUE)`) and finite differences otherwise.
 #'
 #' @param max_order Maximum order of `FBDF()`.
-#' @param nlsolve The Newton iteration of `ImplicitEuler()` and
-#'   `Trapezoid()`: an [NLNewton()] whose `kappa`, `max_iter`,
-#'   `new_W_dt_cutoff`, `check_div` and `predictor` (a function
-#'   `predictor(uprev, p, t, dt)` guessing the stage value at the stage time
-#'   `t`) it uses.
+#' @param nlsolve The nonlinear solver of `ImplicitEuler()` and
+#'   `Trapezoid()`: [NLNewton()] (with its `kappa`, `max_iter`,
+#'   `new_W_dt_cutoff`, `always_new`, `check_div`, `relax` and `predictor`, a
+#'   function `predictor(uprev, p, t, dt)` guessing the stage value at the
+#'   stage time `t`), [NLFunctional()] or [NLAnderson()].
 #' @param autodiff How Jacobians are computed when the problem has no
 #'   symbolic Jacobian: `AutoForwardDiff()` (dual numbers, as ForwardDiff;
 #'   central differences when the function cannot run on them),
