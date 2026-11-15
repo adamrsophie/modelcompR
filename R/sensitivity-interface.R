@@ -492,6 +492,8 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   aprob <- SDEProblem(SDEFunction(drift, diffusion, mass_matrix = Maug), z0, prob$tspan, prob$p,
                       noise_rate_prototype = matrix(0, n + n * m + nq, nw))
   aprob$kwargs <- prob$kwargs
+  # the same noise path (a NoiseGrid or other given process)
+  aprob$noise_process <- prob$noise_process
   if (has_cb) {
     rec <- new.env(parent = emptyenv())
     cb <- .sens_forward_callbacks(cbs, fp, fns, n, np, m, rec)

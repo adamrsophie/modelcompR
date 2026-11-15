@@ -10,9 +10,16 @@
 #   dgrad   = -(f_p' lambda + g_p) dt - (sigma_p' lambda) o dW
 # driven by the forward noise path, with the forward state either read from
 # the saved solution (InterpolatingAdjoint) or solved backward with it
-# (BacksolveAdjoint, whose drift is the transformed drift f - sigma_u' sigma
-# of StochasticTransformedFunction when the forward solve was Ito; Julia's
-# InterpolatingAdjoint keeps f for an Ito solve as well). The diffusion has one
+# (BacksolveAdjoint). When the backward solve is Ito, it evaluates the
+# adjoint diffusion B with the forward state at the end of each forward
+# step, the exact adjoint with the state at its start; the drift then takes
+# the correction sum_jl q_jl D_{g_l} B_j, q = dW dW' / dt of the step (for
+# the state of BacksolveAdjoint this is the drift f - c, c = sum_j D_{g_j}
+# g_j). A Stratonovich backward solve takes the Stratonovich drift instead.
+# Julia differentiates the transformed drift for lambda in BacksolveAdjoint
+# and leaves out the correction in InterpolatingAdjoint; both are biased
+# when the noise depends on the state nonlinearly or on the parameters
+# through the state, by an amount that does not vanish with dt. The diffusion has one
 # column per Wiener process: for diagonal noise column i holds
 # (sigma_u' lambda)_i on the diagonal (lambda_i grad sigma_i with
 # `noisemixing`), lambda_i d sigma_i / dp and sigma_i(y); for scalar noise it
@@ -67,7 +74,7 @@
   q
 }
 
-.sens_sde_fns <- function(prob, transform, corfunc_analytical, diffusion_jac, diffusion_paramjac) {
+.sens_sde_fns <- function(prob, shift, corfunc_analytical, diffusion_jac, diffusion_paramjac) {
   rode <- inherits(prob, "RODEProblem")
   n <- length(prob$u0)
   np <- length(prob$p)
@@ -93,8 +100,19 @@
   out$Gp <- if (is.function(diffusion_paramjac)) function(u, p, t) as.matrix(diffusion_paramjac(u, p, t)) else
     function(u, p, t) if (!np) matrix(0, length(as.numeric(g(u, p, t))), 0L) else
       .sens_fd_jac(function(q) as.numeric(g(u, .sens_pvec(p, q), t)), as.numeric(p))
+  # c = sum_j D_{g_j} g_j, the Ito-Stratonovich drift difference times 2
+  # (corfunc_analytical when given)
+  rel <- .Machine$double.eps^(1 / 4)
+  out$cvec <- if (is.function(corfunc_analytical)) function(u, p, t) as.numeric(corfunc_analytical(u, p, t)) else
+    function(u, p, t) {
+      G <- out$G(u, p, t)
+      cols <- .sens_noise_columns(G, out$type, n)
+      Reduce(`+`, lapply(seq_along(cols), function(j)
+        .sens_dir_diff(function(x) .sens_noise_columns(out$G(x, p, t), out$type, n)[[j]], u, cols[[j]], rel)),
+        numeric(n))
+    }
   ujac <- prob$f$jac
-  if (!transform) {
+  if (shift == 0) {
     out$a <- function(u, p, t, W = NULL) as.numeric(f(u, p, t))
     out$Ja <- if (is.function(ujac)) function(u, p, t, W = NULL) as.matrix(ujac(u, p, t)) else
       function(u, p, t, W = NULL) .sens_fd_jac(function(z) f(z, p, t), u)
@@ -102,17 +120,29 @@
       .sens_fd_jac(function(q) f(u, .sens_pvec(p, q), t), as.numeric(p))
     return(out)
   }
-  # the Ito drift transformed for the Stratonovich backward solve
-  rel <- .Machine$double.eps^(1 / 4)
-  cor <- if (is.function(corfunc_analytical)) function(u, p, t) as.numeric(corfunc_analytical(u, p, t)) else
-    function(u, p, t) as.numeric(crossprod(.sens_fd_jac_step(function(z) as.numeric(g(z, p, t)), u, rel),
-                                           as.numeric(g(u, p, t))))
+  # the drift f + shift c, differentiated with nested differences
   h <- if (is.function(corfunc_analytical)) .sens_fd_jac else function(F, x) .sens_fd_jac_step(F, x, rel)
-  out$a <- function(u, p, t, W = NULL) as.numeric(f(u, p, t)) - cor(u, p, t)
+  out$a <- function(u, p, t, W = NULL) as.numeric(f(u, p, t)) + shift * out$cvec(u, p, t)
   out$Ja <- function(u, p, t, W = NULL) h(function(z) out$a(z, p, t), u)
   out$Pa <- function(u, p, t, W = NULL) if (!np) matrix(0, n, 0L) else
     h(function(q) out$a(u, .sens_pvec(p, q), t), as.numeric(p))
   out
+}
+
+# The noise columns g_j of a diffusion value: e_j g_j for diagonal noise.
+.sens_noise_columns <- function(G, type, n) {
+  switch(type,
+         scalar = list(as.numeric(G)),
+         diagonal = lapply(seq_len(n), function(j) { v <- numeric(n); v[j] <- G[j]; v }),
+         lapply(seq_len(ncol(G)), function(j) G[, j]))
+}
+
+# Central difference of F at x along the direction v.
+.sens_dir_diff <- function(F, x, v, rel) {
+  nv <- max(abs(v))
+  if (nv == 0) return(0 * F(x))
+  h <- rel * max(1, max(abs(x))) / nv
+  (F(x + h * v) - F(x - h * v)) / (2 * h)
 }
 
 # The diffusion of the adjoint for the state rows (lambda, grad[, y]): a
@@ -156,9 +186,13 @@
 #' forward noise values. [InterpolatingAdjoint()] reads the forward state
 #' from the saved solution; [BacksolveAdjoint()] solves it backward with
 #' the adjoint (with `checkpointing`, resetting it to the saved values at the
-#' saved times) and, for an Ito forward solve, uses the transformed drift
-#' `f - sigma_u' sigma` of [StochasticTransformedFunction()] (with
-#' `corfunc_analytical` as the correction when given), as Julia does.
+#' saved times). With an Ito backward solve (the default after an Ito
+#' forward solve) the drift carries the Ito correction `sum_jl q_jl D_{g_l}
+#' B_j` of the adjoint diffusion `B` along the noise columns `g_l`, with `q =
+#' dW dW' / dt` of each forward step, so that both methods converge to the
+#' pathwise derivative; a Stratonovich backward solve uses the Stratonovich
+#' drift `f_I - c / 2`, `c = sum_j D_{g_j} g_j` (`corfunc_analytical` when
+#' given). Julia's adjoints leave out this correction.
 #'
 #' Julia integrates the adjoint backward in time with the reversed noise.
 #' R's SDE and RODE solvers integrate forward in time, so the returned
@@ -269,8 +303,16 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   backsolve <- method == "BacksolveAdjoint"
   rode <- kind == "RODEProblem"
   fwd_alg <- env$alg
-  transform <- !rode && backsolve && !identical(fwd_alg$interpretation, "Stratonovich")
-  fns <- .sens_sde_fns(prob, transform, corfunc_analytical, diffusion_jac, diffusion_paramjac)
+  # the interpretations of the forward and of the backward schemes: the
+  # adjoint uses the Ito drift f_I of the forward process (f, or f + c/2
+  # after a Stratonovich solve); a Stratonovich backward solve takes the
+  # Stratonovich drift f_I - c/2, an Ito one f_I with the correction
+  # sum_j D_{g_j} B_j of the adjoint diffusion B along the forward noise
+  ito_f <- !identical(fwd_alg$interpretation, "Stratonovich")
+  ito_b <- !identical((alg %||% fwd_alg)$interpretation, "Stratonovich")
+  shift <- if (rode) 0 else (if (ito_f) 0 else 0.5) - (if (ito_b) 0 else 0.5)
+  ito_cor <- !rode && ito_b
+  fns <- .sens_sde_fns(prob, shift, corfunc_analytical, diffusion_jac, diffusion_paramjac)
   n <- fns$n
   np <- fns$np
   p <- prob$p
@@ -311,7 +353,46 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
       if (!is.null(gu_c)) dl <- dl - as.numeric(gu_c(y, p, tt))
       if (!is.null(gp_c)) dg <- dg - as.numeric(gp_c(y, p, tt))
     }
-    c(dl, dg, if (backsolve) fns$a(y, p, tt, W))
+    out <- c(dl, dg, if (backsolve) fns$a(y, p, tt, W))
+    if (ito_cor) out <- out - ito_correction(z, y, p, tt)
+    out
+  }
+  # sum_jl q_jl D_{g_l(y)} B_j(z): the derivative of the adjoint diffusion
+  # along the forward noise (the backward Ito solve evaluates B with the
+  # forward state at the end of each forward step, the exact adjoint with
+  # the state at its start). q = dW dW' / dt of the forward step, whose
+  # mean is the identity: the realized increments keep the correction exact
+  # for any noise path, also a smooth NoiseGrid
+  mixing <- isTRUE(sensealg$noisemixing)
+  qw_t <- env$W$t
+  qw_W <- as.matrix(env$W$W)
+  qkeep <- !duplicated(qw_t, fromLast = TRUE)
+  qw_t <- qw_t[qkeep]
+  qw_W <- qw_W[qkeep, , drop = FALSE]
+  qforward <- length(qw_t) > 1L && qw_t[length(qw_t)] > qw_t[1L]
+  ito_correction <- function(z, y, p, tt) {
+    l <- z[il]
+    G <- fns$G(y, p, tt)
+    cols <- .sens_noise_columns(G, fns$type, n)
+    m <- length(cols)
+    r <- if (qforward) {
+      k <- findInterval(tt - 1e-12 * max(1, abs(tt)), qw_t)
+      k <- min(max(k, 1L), length(qw_t) - 1L)
+      (qw_W[k + 1L, ] - qw_W[k, ]) / sqrt(qw_t[k + 1L] - qw_t[k])
+    }
+    rel <- .Machine$double.eps^(1 / 4)
+    Bj <- function(x, j) {
+      B <- .sens_sde_diffusion(fns, l, x, p, tt, backsolve, mixing)
+      if (is.matrix(B)) B[, j] else B
+    }
+    if (is.null(r) || length(r) != m)
+      return(Reduce(`+`, lapply(seq_len(m), function(j) .sens_dir_diff(function(x) Bj(x, j), y, cols[[j]], rel)),
+                    numeric(length(z))))
+    # rank one: sum_j r_j D_v B_j with v = sum_l r_l g_l
+    v <- Reduce(`+`, Map(`*`, cols, r), numeric(n))
+    Reduce(`+`, lapply(seq_len(m), function(j)
+      if (r[j] == 0) numeric(length(z)) else r[j] * .sens_dir_diff(function(x) Bj(x, j), y, v, rel)),
+      numeric(length(z)))
   }
   drift <- if (rode) function(z, p, tau, W) -drift_real(z, p, s - tau, W) else
     function(z, p, tau) -drift_real(z, p, s - tau)
@@ -395,7 +476,6 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   if (rode) {
     aprob <- RODEProblem(RODEFunction(drift), z0, c(t0, tend), p, noise = noise, callback = CallbackSet(cb_rev))
   } else {
-    mixing <- isTRUE(sensealg$noisemixing)
     diffusion <- function(z, p, tau) {
       tt <- s - tau
       .sens_sde_diffusion(fns, z[il], state_y(z, tt), p, tt, backsolve, mixing)

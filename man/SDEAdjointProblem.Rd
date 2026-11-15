@@ -84,9 +84,11 @@ driven by the noise path of the forward solution.
 forward noise values. \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}} reads the forward state
 from the saved solution; \code{\link[=BacksolveAdjoint]{BacksolveAdjoint()}} solves it backward with
 the adjoint (with \code{checkpointing}, resetting it to the saved values at the
-saved times) and, for an Ito forward solve, uses the transformed drift
-\verb{f - sigma_u' sigma} of \code{\link[=StochasticTransformedFunction]{StochasticTransformedFunction()}} (with
-\code{corfunc_analytical} as the correction when given), as Julia does.
+saved times). With an Ito backward solve (the default after an Ito
+forward solve) the drift carries the Ito correction \verb{sum_jl q_jl D_\{g_l\} B_j} of the adjoint diffusion \code{B} along the noise columns \code{g_l}, with \verb{q = dW dW' / dt} of each forward step, so that both methods converge to the
+pathwise derivative; a Stratonovich backward solve uses the Stratonovich
+drift \code{f_I - c / 2}, \verb{c = sum_j D_\{g_j\} g_j} (\code{corfunc_analytical} when
+given). Julia's adjoints leave out this correction.
 }
 \details{
 Julia integrates the adjoint backward in time with the reversed noise.

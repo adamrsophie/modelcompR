@@ -552,9 +552,26 @@ refused, since the time at which a Brownian path crosses a level is not
 differentiable.
 
 With a Stratonovich method such as `EulerHeun()` the adjoint is solved with
-the same scheme; with an Ito method the drift is corrected first (see
-`StochasticTransformedFunction()`). With `noisemixing = TRUE` the full
-Jacobian of a diagonal noise term enters the adjoint.
+the same scheme and needs no correction. An Ito method solved backward
+evaluates the adjoint noise term with the forward state at the end of each
+step, while the exact adjoint uses the state at its start; the adjoint drift
+carries the correction for this, built from the realized increments of the
+noise path. Without it (as in SciMLSensitivity) the gradient is biased
+whenever the noise is nonlinear in the state or depends on a parameter
+through the state, and the bias does not shrink with the step size:
+
+```{r}
+mprob <- SDEProblem(function(u, p, t) -p[1] * u, function(u, p, t) p[2] * sin(u), 1, c(0, 1),
+                    c(0.7, 0.4))
+mloss <- function(sol) sum(as.matrix(sol)^2)
+rbind(forward = unlist(solve_gradient(mloss, mprob, EM(), dt = 1 / 512, saveat = 0.25, seed = 2,
+                                      sensealg = ForwardDiffSensitivity())[c("u0", "p")]),
+      adjoint = unlist(solve_gradient(mloss, mprob, EM(), dt = 1 / 512, saveat = 0.25, seed = 2,
+                                      sensealg = InterpolatingAdjoint())[c("u0", "p")]))
+```
+
+With `noisemixing = TRUE` the full Jacobian of a diagonal noise term
+enters the adjoint.
 
 ## Second order sensitivities
 

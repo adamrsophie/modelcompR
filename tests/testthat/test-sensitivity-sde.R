@@ -25,15 +25,22 @@ test_that("SDEAdjointProblem matches Julia for diagonal noise", {
             c(3.0873998756660734, -0.4910055594652466, 0.7119511251266634, -0.14061091021802846))
   sde_check(sol, InterpolatingAdjoint(), c(3.9738277598131146, -0.8293275698406211),
             c(3.087144217004288, -0.491384288040898, 0.7115648193667982, -0.14019538680328994))
-  # an Ito forward solve: BacksolveAdjoint uses the transformed drift
-  sol <- solve(SDEProblem(sde_f, sde_gdiag, sde_u0, c(0, 1), sde_p, noise = sde_grid2()), EM(), dt = 0.05)
-  ito_du0 <- c(3.6237449643094606, -0.8929885564022412)
-  ito_dp <- c(2.954889559093849, -0.37388803081650507, -1.1470841971095112, -0.49575315139355697)
-  sde_check(sol, BacksolveAdjoint(), ito_du0, ito_dp)
-  sde_check(sol, BacksolveAdjoint(), ito_du0, ito_dp,
-            corfunc_analytical = function(u, p, t) c(p[3]^2 * u[1], 2 * p[4]^2 * u[2]^3))
-  sde_check(sol, InterpolatingAdjoint(), c(3.9685419462739335, -0.8958133522845659),
-            c(3.10340858893554, -0.43799453850827774, 0.7037061911368128, -0.14019982974139591))
+  # an Ito forward solve. Julia's adjoints are biased here: its
+  # BacksolveAdjoint differentiates the transformed drift f - c for lambda
+  # and the gradient (du0 = (3.6237449643094606, -0.8929885564022412), dp =
+  # (2.954889559093849, -0.37388803081650507, -1.1470841971095112,
+  # -0.49575315139355697)) and its InterpolatingAdjoint leaves out the Ito
+  # correction (du0 = (3.9685419462739335, -0.8958133522845659)). Both
+  # adjoints here approach the pathwise derivative of the forward scheme
+  prob <- SDEProblem(sde_f, sde_gdiag, sde_u0, c(0, 1), sde_p, noise = sde_grid2())
+  sol <- solve(prob, EM(), dt = 0.05)
+  fw <- solve_gradient(function(s) sum(as.matrix(s)^2) / 2, prob, EM(), dt = 0.05, saveat = c(0.5, 1),
+                       sensealg = ForwardDiffSensitivity())
+  ref <- c(fw$u0, fw$p)
+  for (sa in list(BacksolveAdjoint(), InterpolatingAdjoint())) {
+    r <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = sde_dg, sensealg = sa)
+    expect_lt(max(abs(c(r$du0, r$dp) - ref)) / max(abs(ref)), 0.05)
+  }
 })
 
 test_that("SDEAdjointProblem matches Julia for scalar, general and mixing noise", {
@@ -127,9 +134,9 @@ test_that("costs at every saved time, solve_gradient and continuous costs match 
   # em_interpfix of the probe, which differs from its em_interp)
   sol <- solve(prob, EM(), dt = 0.05)
   r <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = sde_dg, sensealg = InterpolatingAdjoint())
-  expect_equal(unname(r$du0), c(4.019252392281734, -0.8863537645165549), tolerance = 1e-8)
-  expect_equal(unname(r$dp), c(3.1103999804905595, -0.5268919731233217, 0.7318814867874182, -0.15193298799182006),
-               tolerance = 1e-8)
+  fw <- solve_gradient(function(s) sum(as.matrix(s)^2) / 2, prob, EM(), dt = 0.05, saveat = c(0.5, 1),
+                       sensealg = ForwardDiffSensitivity())
+  expect_lt(max(abs(c(r$du0, r$dp) - c(fw$u0, fw$p))) / max(abs(c(fw$u0, fw$p))), 0.05)
   rfix <- adjoint_sensitivities(sol, EM(), t = c(0.5, 1), dgdu_discrete = function(u, p, t, i) sol(t),
                                 sensealg = InterpolatingAdjoint())
   expect_equal(rfix$du0, r$du0, tolerance = 1e-12)
@@ -245,4 +252,28 @@ test_that("a nonsingular mass matrix multiplies the drift in the SDE sensitiviti
   ga <- solve_gradient(loss, prob, ImplicitEM(), dt = dt, adaptive = FALSE, saveat = ts,
                        sensealg = InterpolatingAdjoint())
   expect_lt(max(abs(c(ga$u0, ga$p) - ref)) / max(abs(ref)), 0.01)
+})
+
+test_that("the Ito adjoints converge to the pathwise derivative for noise nonlinear in the state", {
+  # the backward Ito solve evaluates the adjoint diffusion with the forward
+  # state at the end of each step; the correction sum_jl q_jl D_{g_l} B_j
+  # removes the bias that does not vanish with dt (about 10% here before)
+  f <- function(u, p, t) c(-p[1] * u[1] + u[2], -p[2] * u[2])
+  gs <- list(diagonal = function(u, p, t) c(0.3 * u[1] * u[2], p[3] * sin(u[1])),
+             general = function(u, p, t) matrix(c(0.3 * u[1], 0.1 * u[2]^2, p[3] * u[2], 0.2 * sin(u[1]),
+                                                  0.1, 0.1 * u[1]), 2),
+             scalar = function(u, p, t) c(0.3 * u[1]^2, p[3] * u[2]))
+  args <- list(diagonal = list(), general = list(noise_rate_prototype = matrix(0, 2, 3)),
+               scalar = list(noise = "scalar"))
+  ts <- seq(0, 1, by = 0.25)
+  loss <- function(sol) sum(as.matrix(sol)^2)
+  for (nm in names(gs)) {
+    prob <- do.call(SDEProblem, c(list(f, gs[[nm]], c(1, 0.5), c(0, 1), c(0.7, 0.4, 0.2)), args[[nm]]))
+    for (sa in list(InterpolatingAdjoint(noisemixing = TRUE), BacksolveAdjoint(noisemixing = TRUE))) {
+      fw <- solve_gradient(loss, prob, EM(), dt = 1 / 512, saveat = ts, seed = 3, sensealg = ForwardDiffSensitivity())
+      ga <- solve_gradient(loss, prob, EM(), dt = 1 / 512, saveat = ts, seed = 3, sensealg = sa)
+      expect_lt(max(abs(c(ga$u0, ga$p) - c(fw$u0, fw$p))) / max(abs(c(fw$u0, fw$p))), 2e-3,
+                label = paste(nm, sa$name))
+    }
+  }
 })
