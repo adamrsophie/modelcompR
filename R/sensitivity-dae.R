@@ -234,7 +234,7 @@ DAEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   # costs
   cont <- !is.null(g) || !is.null(dgdu_continuous) || !is.null(dgdp_continuous)
   gu_c <- dgdu_continuous %||% if (!is.null(g)) function(u, p, tt) .sens_fd_grad(function(z) g(z, p, tt), u)
-  gp_c <- dgdp_continuous %||% if (!is.null(g) && is.null(dgdu_continuous) && np)
+  gp_c <- dgdp_continuous %||% if (!is.null(g) && np)
     function(u, p, tt) .sens_fd_grad(function(q) g(u, .sens_pvec(p, q), tt), as.numeric(p))
   ts <- if (is.null(t)) numeric() else as.numeric(t)
   ord <- order(ts)

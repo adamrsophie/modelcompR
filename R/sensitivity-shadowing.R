@@ -439,7 +439,7 @@ NILSASProblem <- function(sol, sensealg, alg = NULL, t = NULL, dgdu_discrete = N
     cbind(qr.Q(qr(Wr))[, seq_len(M - 1L), drop = FALSE], fu)
   } else matrix(fu, n, 1L)
   gu <- dgdu_continuous %||% function(u, p, tt) .sens_fd_grad(function(z) g(z, p, tt), u)
-  gp <- dgdp_continuous %||% if (is.null(dgdu_continuous)) function(u, p, tt)
+  gp <- dgdp_continuous %||% if (!is.null(g)) function(u, p, tt)
     .sens_fd_grad(function(q) g(u, .sens_pvec(p, q), tt), as.numeric(p))
   structure(list(sensealg = sensealg, sol = sol, prob = prob, fns = fns, tr = tr, W0 = W, alg = alg,
                  T_seg = (tf - prob$tspan[1L]) / sensealg$nseg, gu = gu, gp = gp, dots = list(...)),

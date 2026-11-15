@@ -204,7 +204,7 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   # costs
   cont <- !is.null(g) || !is.null(dgdu_continuous) || !is.null(dgdp_continuous)
   gu_c <- dgdu_continuous %||% if (!is.null(g)) function(u, p, tt) .sens_fd_grad(function(z) g(z, p, tt), u)
-  gp_c <- dgdp_continuous %||% if (!is.null(g) && is.null(dgdu_continuous) && np)
+  gp_c <- dgdp_continuous %||% if (!is.null(g) && np)
     function(u, p, tt) .sens_fd_grad(function(q) {
       qq <- p
       qq[] <- q
@@ -266,7 +266,7 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
       ha <- J[ms$alg_eq, ms$alg, drop = FALSE]
       hd <- J[ms$alg_eq, ms$diff, drop = FALSE]
       eta <- -solve(t(ha), gu[ms$alg])
-      z[ms$diff] <- z[ms$diff] + solve(t(ms$Mdd), gu[ms$diff] + as.numeric(crossprod(hd, eta)))
+      z[ms$diff_eq] <- z[ms$diff_eq] + solve(t(ms$Mdd), gu[ms$diff] + as.numeric(crossprod(hd, eta)))
       if (np) gp <- gp + as.numeric(crossprod(fns$pjac(y, p, tt)[ms$alg_eq, , drop = FALSE], eta))
     } else {
       dl <- if (is.null(fns$mass)) gu else solve(t(fns$mass), gu)

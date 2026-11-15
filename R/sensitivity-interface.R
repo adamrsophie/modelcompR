@@ -58,12 +58,12 @@
       cb2 <- cb
       cb2$affect <- wrap(cb$affect, cb, TRUE)
       cb2$affect_neg <- wrap(cb$affect_neg, cb, TRUE)
-      cb2
+      .cb_rebind_init(cb2)
     }),
     discrete = lapply(cbs$discrete, function(cb) {
       cb2 <- cb
       cb2$affect <- wrap(cb$affect, cb, FALSE)
-      cb2
+      .cb_rebind_init(cb2)
     })), class = "CallbackSet")
 }
 
@@ -148,7 +148,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     .mtk$sens_hide_t <- old[[2L]]
   })
   dots <- list(...)
-  base_saveat <- dots$saveat
+  base_saveat <- dots$saveat %||% prob$kwargs$saveat
   tq <- numeric()
   for (attempt in 1:4) {
     r <- tryCatch(.solve_gradient(loss, prob, alg, dots, sensealg),
@@ -212,7 +212,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     Ss <- lapply(seq_len(nrow(U)), function(r) matrix(U[r, n + seq_len(n * m)], n, m))
     # samples saved at an event time move with it: the left limit (the
     # first of two samples) changes by f- dtau, the right limit by f+ dtau
-    fixed <- .sens_fixed_times(fenv$t, dots$saveat, prob$tspan)
+    fixed <- .sens_fixed_times(fenv$t, dots$saveat %||% prob$kwargs$saveat, prob$tspan)
     for (ev in fprob$sensitivity$events$events) {
       rows <- which(abs(fenv$t - ev$t) <= 1e-12 * max(1, abs(ev$t)) & !fixed)
       if (!length(rows)) next
@@ -251,7 +251,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   # the backward solve takes the step options of the forward one
   step_opts <- dots[intersect(names(dots), c("dt", "dtmax", "dtmin", "maxiters", "adaptive"))]
   tsave <- env$t
-  fixed <- .sens_fixed_times(env$t, dots$saveat, prob$tspan)
+  fixed <- .sens_fixed_times(env$t, dots$saveat %||% prob$kwargs$saveat, prob$tspan)
   # the parameters in force before a later change enter as parameter costs
   # at a time inside their segment
   hp <- NULL
@@ -337,8 +337,10 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   # samples that move with an event, so dT(rows) differentiates the loss in
   # the times of those rows only, when a sensitivity method asks
   tvis <- env$t[!hidden]
+  pidx <- if (!is.null(data$param_history)) .sol_params_idx(list(param_history = data$param_history), tvis, TRUE)
   ev_t <- function(tv) {
     d <- data
+    d$sens_param_idx <- pidx
     if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
     d$U <- U0[!hidden, , drop = FALSE]
     d$t <- tv
@@ -406,17 +408,45 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   M <- matrix(0, n + nd, n + nd)
   M[cbind(d, d)] <- 1
   aprob <- ODEProblem(ODEFunction(f_aug, mass_matrix = M), c(u0, du0[d]), prob$tspan, prob$p)
+  # the callbacks see the DAE variables u of the state (u, w); after an
+  # affect w is kept as the start of the algebraic re-solve
+  lift <- function(cbs) {
+    if (is.null(cbs)) return(NULL)
+    cs <- .as_callback_set(cbs)
+    wc <- function(cond) if (is.function(cond)) function(u, t, integ, ...) cond(u[seq_len(n)], t, integ, ...)
+    wa <- function(aff) if (is.function(aff)) function(integ, ...) {
+      z <- as.numeric(integ$u)
+      integ$u <- z[seq_len(n)]
+      on.exit(integ$u <- c(as.numeric(integ$u), z[n + seq_len(nd)]))
+      aff(integ, ...)
+    }
+    lc <- function(cb, cont) {
+      cb$condition <- wc(cb$condition)
+      cb$affect <- wa(cb$affect)
+      if (cont) cb$affect_neg <- wa(cb$affect_neg)
+      .cb_rebind_init(cb)
+    }
+    structure(list(continuous = lapply(cs$continuous, lc, TRUE), discrete = lapply(cs$discrete, lc, FALSE)),
+              class = "CallbackSet")
+  }
   aprob$kwargs <- prob$kwargs
+  aprob$kwargs$callback <- lift(prob$kwargs$callback)
+  dots$callback <- lift(dots$callback)
   # a mass matrix method for the DAE method
   oalg <- if (inherits(alg, "DFBDF")) FBDF() else if (inherits(alg, "DImplicitEuler")) ImplicitEuler() else
     if (inherits(alg, "DABDF2")) ABDF2() else if (is.null(alg) || isTRUE(alg$dae) || !isTRUE(alg$mass_matrix))
       Rodas5P() else alg
+  # the solution in the DAE variables, with its interpolation (the steps
+  # interpolate (u, w); .interp_states keeps the first n values) and the
+  # samples solve_gradient() saved for an interpolating loss
   restrict <- function(s) {
     e <- .sol_env(s)
-    out <- .new_ode_solution(t = e$t, u = e$U[, seq_len(n), drop = FALSE], prob = prob, alg = alg %||% e$alg,
-                             retcode = e$retcode, stats = e$stats, p = e$p_final)
-    if (!is.null(e$param_history)) .sol_env(out)$param_history <- e$param_history
-    out
+    data <- mget(setdiff(ls(e, all.names = TRUE), "obs_cache"), envir = e)
+    data$U <- e$U[, seq_len(n), drop = FALSE]
+    if (!is.null(data$sens_interp)) data$sens_interp$U <- data$sens_interp$U[, seq_len(n), drop = FALSE]
+    data$prob <- prob
+    data$alg <- alg %||% e$alg
+    .new_solution(setdiff(class(s), c("SciMLSolution", "function")), data)
   }
   g <- .solve_gradient(function(s) loss(restrict(s)), aprob, oalg, dots, sensealg)
   list(u0 = stats::setNames(g$u0[seq_len(n)], names(prob$u0)), p = g$p, value = g$value, sol = restrict(g$sol))
@@ -559,7 +589,13 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   aenv <- .sol_env(asol)
   U <- aenv$U
   sol <- .new_ode_solution(t = aenv$t, u = U[, seq_len(n), drop = FALSE], prob = prob, alg = aenv$alg,
-                           retcode = aenv$retcode, stats = aenv$stats, p = prob$p)
+                           retcode = aenv$retcode, stats = aenv$stats, p = aenv$p_final %||% prob$p)
+  # the parameters in force at each saved time, so the loss sees them and
+  # .sens_no_hist() can refuse a loss that reads earlier ones
+  if (!is.null(aenv$param_history)) {
+    senv <- .sol_env(sol)
+    senv$param_history <- aenv$param_history
+  }
   ct <- .sens_loss_cotangent(loss, sol)
   .sens_no_hist(ct)
   grad <- numeric(m)

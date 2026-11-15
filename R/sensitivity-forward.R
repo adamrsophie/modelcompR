@@ -159,13 +159,13 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
     cb2$condition <- wrap_cond(cb$condition)
     cb2$affect <- wrap_affect(cb$affect, cb, TRUE)
     cb2$affect_neg <- wrap_affect(cb$affect_neg, cb, TRUE)
-    cb2
+    .cb_rebind_init(cb2)
   })
   discs <- lapply(cbs$discrete, function(cb) {
     cb2 <- cb
     cb2$condition <- wrap_cond(cb$condition)
     cb2$affect <- wrap_affect(cb$affect, cb, FALSE)
-    cb2
+    .cb_rebind_init(cb2)
   })
   reset <- DiscreteCallback(function(u, t, integ) FALSE, function(integ) NULL,
                             initialize = function(integ) rec$events <- list())

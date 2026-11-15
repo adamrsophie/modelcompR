@@ -17,7 +17,8 @@
 # crossover iteration counts as HighsInfo does
 .hs_ipm_solve_lp <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts, info) {
   if (nrow(A) == 0L || all(A == 0))
-    return(.hs_unconstrained(cost, col_lower, col_upper, opts$ptol %||% 1e-7, opts$dtol %||% 1e-7))
+    return(.hs_unconstrained(cost, col_lower, col_upper, opts$ptol %||% 1e-7, opts$dtol %||% 1e-7,
+                             row_lower, row_upper))
   crossover <- opts$run_crossover %||% "on"
   ipx_opts <- list(run_crossover = crossover, primal_feasibility_tolerance = opts$ptol,
                    dual_feasibility_tolerance = opts$dtol)

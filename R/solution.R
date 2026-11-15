@@ -152,6 +152,15 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 .sol_params_at <- function(env, ts, saved = FALSE) {
   h <- env$param_history
   if (is.null(h)) return(env$p_final)
+  h$p[.sol_params_idx(env, ts, saved), , drop = FALSE]
+}
+
+# The rows of the parameter history in force at the times ts. While the
+# loss is differentiated in the saved times (.sens_loss_cotangent), each
+# saved row keeps the parameters it was saved with (sens_param_idx).
+.sol_params_idx <- function(env, ts, saved = FALSE) {
+  h <- env$param_history
+  if (saved && length(env$sens_param_idx) == length(ts)) return(env$sens_param_idx)
   # the history is in integration order, decreasing for backward solves
   back <- length(h$t) > 1L && h$t[2L] < h$t[1L]
   idx <- if (back) findInterval(-ts, -h$t) else findInterval(ts, h$t, left.open = FALSE)
@@ -164,7 +173,7 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
     first <- first[h$t[idx[first]] == ts[first]]
     idx[first] <- idx[first] - 1L
   }
-  h$p[idx, , drop = FALSE]
+  idx
 }
 
 #' Index a solution
@@ -287,7 +296,9 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
     i <- max(1L, min(length(steps), i))
     # after an event, prefer the step that starts at the event time
     dti <- if (isTRUE(steps[[i]]$truncated)) steps[[i]]$dt else ends[i] - starts[i]
-    out[q, ] <- if (deriv == 0L) .step_value(steps[[i]], tt, dti) else .step_deriv(steps[[i]], tt, deriv, dti)
+    # (a solution restricted to the first states keeps the steps of all)
+    v <- if (deriv == 0L) .step_value(steps[[i]], tt, dti) else .step_deriv(steps[[i]], tt, deriv, dti)
+    out[q, ] <- v[seq_len(n)]
   }
   out
 }

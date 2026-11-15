@@ -48,7 +48,8 @@
 }
 
 # solveUnconstrainedLp
-.hs_unconstrained <- function(cost, col_lower, col_upper, ptol, dtol) {
+.hs_unconstrained <- function(cost, col_lower, col_upper, ptol, dtol, row_lower = numeric(),
+                              row_upper = numeric()) {
   n <- length(cost)
   x <- numeric(n); stat <- character(n)
   npi <- 0L; ndi <- 0L
@@ -73,9 +74,16 @@
     if (pinf > ptol) npi <- npi + 1L
     if (dinf > dtol) ndi <- ndi + 1L
   }
+  # the rows of an empty matrix (solveUnconstrainedLp): activity 0, basic,
+  # primal infeasible when 0 is outside their bounds
+  m <- length(row_lower)
+  for (i in seq_len(m)) {
+    pinf <- max(row_lower[i], -row_upper[i], 0)
+    if (pinf > ptol) npi <- npi + 1L
+  }
   status <- if (npi) "Infeasible" else if (ndi) "Unbounded" else "Optimal"
-  list(status = status, col_value = x, col_dual = cost, row_value = numeric(), row_dual = numeric(),
-       col_status = stat, objective = Reduce(`+`, x * cost, 0), nit = 0L, primal_feasible = npi == 0L)
+  list(status = status, col_value = x, col_dual = cost, row_value = numeric(m), row_dual = numeric(m),
+       col_status = stat, row_status = rep("basic", m), objective = Reduce(`+`, x * cost, 0), nit = 0L, primal_feasible = npi == 0L)
 }
 
 .hs_new_ekk <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts) {
@@ -192,7 +200,8 @@
 # primal solution status
 .hs_lp_solve <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts = list()) {
   ptol <- opts$ptol %||% 1e-7; dtol <- opts$dtol %||% 1e-7
-  if (nrow(A) == 0L) return(.hs_unconstrained(cost, col_lower, col_upper, ptol, dtol))
+  if (nrow(A) == 0L || all(A == 0))
+    return(.hs_unconstrained(cost, col_lower, col_upper, ptol, dtol, row_lower, row_upper))
   # the MIP LP relaxation passes the scale factors HiGHS keeps with its LP
   # (fixed_scale, NULL for none) and possibly the retained HEkk (ek)
   sc <- if ("fixed_scale" %in% names(opts)) opts$fixed_scale else if (isFALSE(opts$scale)) NULL else .hs_scale(A, cost)
@@ -392,7 +401,10 @@
   if (is.null(sol$col_value) || length(sol$col_value) != length(cost) ||
       length(sol$row_value) != length(row_lower)) return(sol)
   ptol <- opts$ptol %||% 1e-7; dtol <- opts$dtol %||% 1e-7
-  rtol_p <- 1e-7; rtol_d <- 1e-7; opttol <- 1e-7
+  rtol_p <- opts$primal_residual_tolerance %||% 1e-7; rtol_d <- opts$dual_residual_tolerance %||% 1e-7
+  opttol <- opts$optimality_tolerance %||% 1e-7
+  # kkt_tolerance, when set, replaces all five
+  if (!is.null(opts$kkt_tolerance)) ptol <- dtol <- rtol_p <- rtol_d <- opttol <- opts$kkt_tolerance
   get_res <- !basis_valid
   info <- .hs_get_lp_kkt_failures(sol, cost, A, row_lower, row_upper, col_lower, col_upper,
                                   ptol, dtol, rtol_p, rtol_d, opttol, get_res)

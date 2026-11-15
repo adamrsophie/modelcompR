@@ -131,3 +131,13 @@ test_that("lpKktCheck changes the model status as HiGHS does", {
   expect_equal(r$kkt$dual_objective, 1.5)
   expect_equal(r$kkt$primal_dual_objective_error, 0.5 / 3.5)
 })
+
+test_that("an LP whose matrix has no nonzeros checks its rows", {
+  expect_identical(.hs_highs_run_ipm(1, matrix(0, 1, 1), 1, Inf, 0, Inf)$status, "Infeasible")
+  expect_identical(.hs_highs_run(1, matrix(0, 1, 1), 1, Inf, 0, Inf)$status, "Infeasible")
+  expect_identical(.hs_highs_run(1, matrix(0, 1, 1), -1, Inf, 0, Inf)$status, "Optimal")
+  s <- list(status = "Optimal", col_value = 1 + 1e-6, row_value = 1 + 1e-6, col_dual = 0, row_dual = 1,
+            col_status = "basic")
+  expect_identical(.hs_lp_kkt_check(s, 1, matrix(1), 1, 1, -Inf, Inf)$status, "Optimal")
+  expect_identical(.hs_lp_kkt_check(s, 1, matrix(1), 1, 1, -Inf, Inf, list(kkt_tolerance = 1e-10))$status, "Unknown")
+})

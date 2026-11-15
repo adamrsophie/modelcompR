@@ -80,11 +80,12 @@ PresetTimeCallback <- function(times, affect, initialize = NULL, filter_tstops =
   # PresetTimeFunction of DiffEqCallbacks: the initialization adds the stops
   # and applies the affect when the initial time is one of the times
   once <- .once_times(times)
-  init <- function(integ) {
+  # `aff` is the affect as the solve runs it (the sensitivity methods wrap it)
+  init <- function(integ, aff = affect) {
     once$reset()
     if (!is.null(initialize)) initialize(integ)
     if (!filter_tstops) for (tt in times) add_tstop(integ, tt)
-    if (length(once$take(integ$t))) affect(integ)
+    if (length(once$take(integ$t))) aff(integ)
   }
   cb <- DiscreteCallback(function(u, t, integ) once$any(t),
                          function(integ, ...) {
@@ -120,15 +121,27 @@ PeriodicCallback <- function(affect, dt, phase = 0, initial_affect = FALSE, fina
     fin <- .near_any(st$tf, t)
     (!fin && .near_any(st$times, t)) || (final_affect && fin)
   }
-  init <- function(integ) {
+  init <- function(integ, aff = affect) {
     if (!is.null(initialize)) initialize(integ)
     st$times <- sort(times_for(integ$prob$tspan))
     st$tf <- integ$prob$tspan[2L]
-    if (initial_affect) affect(integ)
+    if (initial_affect) aff(integ)
   }
   cb <- DiscreteCallback(cond, affect, save_positions = save_positions, initialize = init)
   cb$tstops_fn <- times_for
   cb$periodic <- list(dt = dt, phase = phase)
+  cb
+}
+
+# A copy of a callback whose affect was replaced: an initialization that
+# applies the affect (PresetTimeCallback at the initial time,
+# PeriodicCallback with initial_affect) applies the replacement.
+.cb_rebind_init <- function(cb) {
+  ini <- cb$initialize
+  if (is.function(ini) && "aff" %in% names(formals(ini))) {
+    aff <- cb$affect
+    cb$initialize <- function(integ) ini(integ, aff)
+  }
   cb
 }
 

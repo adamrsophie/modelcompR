@@ -277,3 +277,39 @@ test_that("the Ito adjoints converge to the pathwise derivative for noise nonlin
     }
   }
 })
+
+test_that("SDE adjoints keep the forward steps, terminal events and the final parameters", {
+  # saveat keeps fewer times than the forward steps
+  prob6 <- SDEProblem(function(u, p, t) p[1] * u, function(u, p, t) 0 * u, 1, c(0, 1), 1)
+  sol6 <- solve(prob6, EM(), dt = 0.001, saveat = c(0, 1), dense = TRUE)
+  r <- adjoint_sensitivities(sol6, EM(), t = 1, dgdu_discrete = function(u, p, t, i) 1, sensealg = InterpolatingAdjoint())
+  expect_equal(r$du0, 1.001^1000, tolerance = 1e-6)
+  # an event at the final time
+  prob7 <- SDEProblem(function(u, p, t) 0 * u, function(u, p, t) 0 * u, 1, c(0, 1), 2,
+                      callback = PresetTimeCallback(1, function(i) i$u[1] <- i$p[1] * i$u[1]))
+  for (sa in list(InterpolatingAdjoint(), BacksolveAdjoint(), ForwardDiffSensitivity())) {
+    g <- solve_gradient(function(sol) tail(as.matrix(sol)[, 1], 1), prob7, EM(), dt = 0.01, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), c(2, 1), label = sa$name)
+  }
+  # a loss of the parameters after an event changed them
+  prob8 <- SDEProblem(function(u, p, t) 0 * u, function(u, p, t) 0 * u, 1, c(0, 1), 1,
+                      callback = PresetTimeCallback(0.5, function(i) i$p[1] <- 2 * i$p[1]))
+  loss8 <- function(sol) .sol_env(sol)$p_final[1]^2 + tail(as.matrix(sol)[, 1], 1)
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint())) {
+    g <- solve_gradient(loss8, prob8, EM(), dt = 0.01, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p, g$value)), c(1, 8, 5), label = sa$name)
+  }
+  # mixed interpretations need the quadratic variation of a Wiener path
+  tg <- seq(0, 1, by = 0.001)
+  prob5 <- SDEProblem(function(u, p, t) 0 * u, function(u, p, t) p[1] * u, 1, c(0, 1), 1, noise = NoiseGrid(tg, 0 * tg))
+  sol5 <- solve(prob5, EulerHeun(), dt = 0.001)
+  expect_error(adjoint_sensitivities(sol5, EM(), t = 1, dgdu_discrete = function(u, p, t, i) 1,
+                                     sensealg = InterpolatingAdjoint()), "quadratic variation")
+  r <- adjoint_sensitivities(sol5, EulerHeun(), t = 1, dgdu_discrete = function(u, p, t, i) 1, sensealg = InterpolatingAdjoint())
+  expect_equal(c(r$du0, r$dp), c(1, 0), tolerance = 1e-10)
+  # a well conditioned small mass matrix
+  pm <- SDEProblem(SDEFunction(function(u, p, t) -p[1] * u, function(u, p, t) 0.1 * u, mass_matrix = 1e-8 * diag(2)),
+                   c(1, 1), c(0, 0.1), 1, seed = 3)
+  expect_no_error(solve_gradient(function(sol) sum(as.matrix(sol)^2), pm, ImplicitEM(), dt = 0.01,
+                                 adaptive = FALSE, sensealg = InterpolatingAdjoint()))
+})

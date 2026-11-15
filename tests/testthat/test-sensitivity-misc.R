@@ -134,3 +134,69 @@ test_that("UnconstrainedOptimizationAdjoint and OptimizationAdjoint differentiat
   expect_equal(adjoint_sensitivities(sc, dgdu = function(u, p) c(1, 0, 0))$dp,
                c(0, 0, 0, 0, xj[2] / (xj[2] - 2 * xj[1]), 0), tolerance = 1e-9)
 })
+
+test_that("the sensitivity fixes of the final review hold", {
+  # a mass matrix whose differential equation is not in the row of its
+  # variable: lambda is indexed by the equations
+  f <- function(u, p, t) c(u[2] - p[1] * u[1], 0)
+  prob <- ODEProblem(ODEFunction(f, mass_matrix = matrix(c(0, 1, 0, 0), 2)), c(1, 2), c(0, 1), 2)
+  sol <- solve(prob, Rodas5P(), abstol = 1e-10, reltol = 1e-10, dense = TRUE)
+  r <- adjoint_sensitivities(sol, Rodas5P(), t = 1, dgdu_discrete = function(u, p, t, i) c(0, 1),
+                             sensealg = InterpolatingAdjoint(), abstol = 1e-10, reltol = 1e-10)
+  expect_equal(c(r$du0, r$dp), c(2, 0, 1), tolerance = 1e-6)
+  # an affect applied at the initial time by the initialization
+  mk <- function(cb) ODEProblem(function(u, p, t) 0 * u, 1, c(0, 1), 2, callback = cb)
+  last <- function(sol) tail(as.matrix(sol)[, 1], 1)
+  for (cb in list(PresetTimeCallback(0, function(i) i$u[1] <- i$p[1] * i$u[1]),
+                  PeriodicCallback(function(i) i$u[1] <- i$p[1] * i$u[1], 5, initial_affect = TRUE)))
+    for (sa in list(ForwardSensitivity(), ForwardDiffSensitivity(), InterpolatingAdjoint(), QuadratureAdjoint())) {
+      g <- solve_gradient(last, mk(cb), Tsit5(), sensealg = sa)
+      expect_equal(unname(c(g$u0, g$p)), c(2, 1), tolerance = 1e-8, label = sa$name)
+    }
+  # saveat stored in the problem marks fixed sample times
+  cb <- ContinuousCallback(function(u, t, integ) u[1] - integ$p[1], function(integ) NULL)
+  pp <- ODEProblem(function(u, p, t) 1, 0, c(0, 1), 0.5, callback = cb, saveat = c(0, 0.5, 1))
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint())) {
+    g <- solve_gradient(function(sol) as.matrix(sol)[2, 1], pp, Tsit5(), sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), c(1, 0), tolerance = 1e-8)
+  }
+  # a running cost given with dgdu_continuous still differentiates g in p
+  s0 <- solve(ODEProblem(function(u, p, t) 0 * u, 1, c(0, 1), 3), Tsit5(), dense = TRUE)
+  r <- adjoint_sensitivities(s0, Tsit5(), g = function(u, p, t) p[1], dgdu_continuous = function(u, p, t) 0,
+                             sensealg = InterpolatingAdjoint())
+  expect_equal(r$dp, 1, tolerance = 1e-8)
+})
+
+test_that("losses of the event times keep the parameters of each saved row", {
+  t <- t_nounits; D <- D_nounits
+  x <- Variable("mvr_x", t); b <- Parameter("mvr_b"); a <- Parameter("mvr_a")
+  sys <- mtkcompile(System(list(D(x) ~ a), t, name = "mvr",
+    continuous_events = list(SymbolicContinuousCallback(list(x ~ 0.47), list(b ~ Pre(b) + 1),
+                                                        discrete_parameters = list(b)))))
+  prob <- ODEProblem(sys, list(x ~ 0, b ~ 1, a ~ 1), c(0, 1))
+  loss <- function(sol) {
+    i <- which(duplicated(sol$t))
+    sum(sol[b * x][c(i - 1, i)]) + sum(sol[x][i]^2) + tail(sol[x], 1)^2
+  }
+  for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), BacksolveAdjoint())) {
+    g <- solve_gradient(loss, prob, RK4(), dt = 0.05, adaptive = FALSE, sensealg = sa)
+    expect_equal(unname(c(g$u0, g$p)), c(2, 2, 0.94), tolerance = 1e-6, label = sa$name)
+  }
+})
+
+test_that("DAEProblem gradients keep the callbacks and the interpolation in the DAE variables", {
+  fr <- function(du, u, p, t) c(du[1] - p[1], u[2] - u[1])
+  cb <- ContinuousCallback(function(u, t, integ) sum(u) - 1, function(integ) terminate(integ))
+  prob <- DAEProblem(fr, du0 = c(0.25, 0), u0 = c(0, 0), tspan = c(0, 5), p = 0.25,
+                     differential_vars = c(TRUE, FALSE), callback = cb)
+  loss <- function(sol) tail(sol$t, 1) + tail(as.matrix(sol)[, 1], 1)
+  g <- solve_gradient(loss, prob, DFBDF(), reltol = 1e-8, abstol = 1e-10, sensealg = InterpolatingAdjoint())
+  expect_equal(c(unname(g$p), g$value), c(-8, 2.5), tolerance = 1e-6)
+  fr2 <- function(du, u, p, t) c(du[1] - p[1] * u[1], u[2] - u[1])
+  prob2 <- DAEProblem(fr2, du0 = c(1, 0), u0 = c(1, 1), tspan = c(0, 1), p = 1, differential_vars = c(TRUE, FALSE))
+  g <- solve_gradient(function(sol) sol(0.5)[1], prob2, DFBDF(), saveat = c(0, 1), dense = TRUE,
+                      reltol = 1e-8, abstol = 1e-10, sensealg = ForwardDiffSensitivity())
+  expect_equal(c(unname(g$p), unname(g$value)), c(0.5, 1) * exp(0.5), tolerance = 1e-6)
+  s <- solve_gradient(function(sol) sol(0.5)[1], prob2, DFBDF(), reltol = 1e-8, abstol = 1e-10)$sol
+  expect_equal(unname(s(0.25)), rep(exp(0.25), 2), tolerance = 1e-4)
+})

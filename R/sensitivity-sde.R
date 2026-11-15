@@ -294,7 +294,7 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   M <- prob$f$mass_matrix
   if (is.matrix(M) && !.is_identity_mass(M)) {
     # a nonsingular mass matrix multiplies the drift: M du = f dt + M g dW
-    if (kind == "RODEProblem" || abs(det(M)) < 1e-12 * max(1, max(abs(M)))^nrow(M))
+    if (kind == "RODEProblem" || rcond(M) < 1e-12)
       stop("singular mass matrices are not supported by the adjoints of ", kind, "s", call. = FALSE)
     prob <- .sens_sde_unmass(prob, solve(M))
   }
@@ -322,14 +322,16 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   s <- t0 + tend
   tol <- function(x) 1e-12 * max(1, abs(x))
   inside <- function(x) x - t0 > tol(t0) & tend - x > tol(tend)
-  events <- Filter(function(ev) inside(ev$t), events)
+  # events at the end time are pulled back before the backward solve, those
+  # at the start time after it
+  events <- Filter(function(ev) ev$t - t0 >= -tol(t0) & tend - ev$t >= -tol(tend), events)
   ev_t <- vapply(events, `[[`, 0, "t")
   tr <- if (!backsolve) .sens_trajectory(sol, ev_t)
   if (length(events)) p <- .sens_pvec(p, events[[length(events)]]$p_right)
 
   cont <- !is.null(g) || !is.null(dgdu_continuous) || !is.null(dgdp_continuous)
   gu_c <- dgdu_continuous %||% if (!is.null(g)) function(u, p, tt) .sens_fd_grad(function(z) g(z, p, tt), u)
-  gp_c <- dgdp_continuous %||% if (!is.null(g) && is.null(dgdu_continuous))
+  gp_c <- dgdp_continuous %||% if (!is.null(g))
     function(u, p, tt) .sens_fd_grad(function(q) g(u, .sens_pvec(p, q), tt), as.numeric(p))
   ts <- if (is.null(t)) numeric() else as.numeric(t)
   ord <- order(ts)
@@ -370,6 +372,17 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   qw_t <- qw_t[qkeep]
   qw_W <- qw_W[qkeep, , drop = FALSE]
   qforward <- length(qw_t) > 1L && qw_t[length(qw_t)] > qw_t[1L]
+  # converting between the interpretations takes the quadratic variation of
+  # a Wiener process (c / 2 per unit time); a noise path without it (such as
+  # a smooth NoiseGrid) has no single conversion
+  if (shift != 0 && length(qw_t) > 1L) {
+    dW <- diff(qw_W)
+    QV <- crossprod(dW) / abs(qw_t[length(qw_t)] - qw_t[1L])
+    # (a Wiener path on N steps deviates by about sqrt(2 / N))
+    if (any(abs(QV - diag(1, ncol(QV))) > max(0.5, 6 / sqrt(nrow(dW)))))
+      stop("the noise path does not have the quadratic variation of a Wiener process, so the forward ",
+           "and the backward schemes must have the same interpretation (Ito or Stratonovich)", call. = FALSE)
+  }
   ito_correction <- function(z, y, p, tt) {
     l <- z[il]
     G <- fns$G(y, p, tt)
@@ -468,8 +481,12 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   wt <- wt[keep]
   W <- W[keep, , drop = FALSE]
   noise <- NoiseGrid(s - rev(wt), W[rev(seq_along(wt)), , drop = FALSE])
-  tstops <- sort(unique(s - ftimes[inside(ftimes)]))
-  fdt <- abs(diff(ftimes))
+  # the forward steps: the times of the noise path, which has every step
+  # also when the solution saves fewer (saveat)
+  stimes <- sort(unique(c(ftimes, wt[wt - t0 >= -tol(t0) & tend - wt >= -tol(tend)])),
+                 decreasing = tend < t0)
+  tstops <- sort(unique(s - stimes[inside(stimes)]))
+  fdt <- abs(diff(stimes))
   # with fixed steps no longer than the longest forward step, the tstops
   # make the backward solve take exactly the forward steps
   dt <- if (any(fdt > 0)) max(fdt) else abs(tend - t0)
