@@ -219,7 +219,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
       r_right <- rows[length(rows)]
       Ss[[r_right]] <- Ss[[r_right]] + outer(ev$fp, ev$dtau)
       if (length(rows) >= 2L) Ss[[rows[1L]]] <- Ss[[rows[1L]]] + outer(ev$fm, ev$dtau)
-      grad <- grad + sum(ct$dT[rows]) * ev$dtau
+      if (any(ev$dtau != 0)) grad <- grad + sum(ct$dT(rows)) * ev$dtau
     }
     for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% Ss[[r]])
     if (np) {
@@ -268,8 +268,8 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
                                  if (i == last) ct$dp else if (i > nt) ct$dp_hist[i - nt, ] else numeric(np),
                                abstol = dots$abstol %||% 1e-6, reltol = dots$reltol %||% 1e-3,
                                sensealg = sensealg,
-                               dgdt_discrete = if (any(ct$dT != 0)) function(tt)
-                                 sum(ct$dT[abs(env$t - tt) <= 1e-12 * max(1, abs(tt)) & !fixed[seq_len(nt)]]),
+                               dgdt_discrete = function(tt)
+                                 sum(ct$dT(which(abs(env$t - tt) <= 1e-12 * max(1, abs(tt)) & !fixed[seq_len(nt)]))),
                                no_start = !isTRUE(abs(env$t[1L] - prob$tspan[1L]) <= 1e-14 * max(1, abs(prob$tspan[1L])))),
                     step_opts))
   dp <- res$dp
@@ -334,9 +334,9 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   }
   dp <- if (length(p0)) .sens_fd_grad(function(q) ev(U0, .sens_pvec(p0, q)), as.numeric(p0)) else numeric()
   # the cotangent of the saved times (dgdt_discrete): it only matters for
-  # samples that move with an event
+  # samples that move with an event, so dT(rows) differentiates the loss in
+  # the times of those rows only, when a sensitivity method asks
   tvis <- env$t[!hidden]
-  dT <- numeric(length(env$t))
   ev_t <- function(tv) {
     d <- data
     if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
@@ -345,11 +345,15 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     loss(.new_solution(cls, d))
   }
   vis <- which(!hidden)
-  for (j in seq_along(tvis)) {
-    hh <- 1e-6 * max(1, abs(tvis[j]))
-    tp <- tvis; tm <- tvis
-    tp[j] <- tp[j] + hh; tm[j] <- tm[j] - hh
-    dT[vis[j]] <- (ev_t(tp) - ev_t(tm)) / (2 * hh)
+  dT <- function(rows) {
+    vapply(rows, function(r) {
+      j <- match(r, vis)
+      if (is.na(j)) return(0)
+      hh <- 1e-6 * max(1, abs(tvis[j]))
+      tp <- tvis; tm <- tvis
+      tp[j] <- tp[j] + hh; tm[j] <- tm[j] - hh
+      (ev_t(tp) - ev_t(tm)) / (2 * hh)
+    }, 0)
   }
   # the cotangents of the parameters in force before the last change (rows
   # of the parameter history, in integration order); the sensitivity
