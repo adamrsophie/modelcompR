@@ -365,7 +365,13 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   # the state at its start). q = dW dW' / dt of the forward step, whose
   # mean is the identity: the realized increments keep the correction exact
   # for any noise path, also a smooth NoiseGrid
-  mixing <- isTRUE(sensealg$noisemixing)
+  # diagonal noise whose g_i depends on other states needs the mixing form
+  # of the adjoint diffusion; it is used whenever the noise Jacobian at u0
+  # has entries off its diagonal (Julia leaves it to noisemixing = true)
+  mixing <- isTRUE(sensealg$noisemixing) || (!rode && identical(fns$type, "diagonal") && n > 1L && {
+    Gu0 <- fns$Gu(as.numeric(prob$u0), prob$p, t0)
+    any(Gu0[row(Gu0) != col(Gu0)] != 0)
+  })
   qw_t <- env$W$t
   qw_W <- as.matrix(env$W$W)
   qkeep <- !duplicated(qw_t, fromLast = TRUE)
@@ -373,16 +379,12 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   qw_W <- qw_W[qkeep, , drop = FALSE]
   qforward <- length(qw_t) > 1L && qw_t[length(qw_t)] > qw_t[1L]
   # converting between the interpretations takes the quadratic variation of
-  # a Wiener process (c / 2 per unit time); a noise path without it (such as
-  # a smooth NoiseGrid) has no single conversion
-  if (shift != 0 && length(qw_t) > 1L) {
-    dW <- diff(qw_W)
-    QV <- crossprod(dW) / abs(qw_t[length(qw_t)] - qw_t[1L])
-    # (a Wiener path on N steps deviates by about sqrt(2 / N))
-    if (any(abs(QV - diag(1, ncol(QV))) > max(0.5, 6 / sqrt(nrow(dW)))))
-      stop("the noise path does not have the quadratic variation of a Wiener process, so the forward ",
-           "and the backward schemes must have the same interpretation (Ito or Stratonovich)", call. = FALSE)
-  }
+  # a Wiener process (c / 2 per unit time), which only the noise the solver
+  # draws is known to have; a given path (a NoiseGrid, smooth or with few
+  # steps) has no single conversion
+  if (shift != 0 && !is.null(prob$noise_process))
+    stop("with a given noise process the forward and the backward schemes must have the same ",
+         "interpretation (Ito or Stratonovich)", call. = FALSE)
   ito_correction <- function(z, y, p, tt) {
     l <- z[il]
     G <- fns$G(y, p, tt)
@@ -433,7 +435,8 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
     if (length(eidx)) {
       # samples after the events (right limits), the event pullbacks (latest
       # first), then a second sample, the left limit
-      left <- if (length(ks) >= 2L) ks[length(ks)] else integer()
+      left <- if (length(ks) >= 2L || (length(ks) == 1L && .sens_left_only(events[[eidx[1L]]]))) ks[length(ks)] else
+        integer()
       z <- apply_cost(z, setdiff(ks, left))
       for (j in rev(eidx)) {
         ev <- events[[j]]
@@ -539,7 +542,15 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   .sens_no_hist(ct)
   full <- dots[setdiff(names(dots), c("saveat", "save_everystep", "save_start", "save_end", "save_idxs", "dense"))]
   if (!is.null(rec)) rec$events <- list()
-  fsol <- if (length(full) == length(dots) && is.null(rec)) sol else do.call(solve, c(list(prob, alg), full))
+  again <- !(length(full) == length(dots) && is.null(rec))
+  # the solve that saves every step follows the noise path of the first
+  if (again && is.null(prob$noise_process) && !is.null(env$W) && length(env$W$t) > 1L) {
+    wt <- env$W$t
+    W <- as.matrix(env$W$W)
+    keep <- !duplicated(wt, fromLast = TRUE)
+    prob$noise_process <- NoiseGrid(wt[keep], if (ncol(W) == 1L) W[keep, 1L] else W[keep, , drop = FALSE])
+  }
+  fsol <- if (!again) sol else do.call(solve, c(list(prob, alg), full))
   if (!is.null(rec)) {
     fenv <- .sol_env(fsol)
     fenv$sens_events <- rec
@@ -547,11 +558,21 @@ RODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NUL
   np <- length(prob$p)
   last <- length(env$t)
   at_start <- isTRUE(abs(env$t[1L] - prob$tspan[1L]) <= 1e-14 * max(1, abs(prob$tspan[1L])))
+  # the final parameters enter at the end time (after any event there)
+  ts <- env$t
+  tfin <- if (identical(env$retcode, "Terminated")) ts[last] else prob$tspan[2L]
+  if (!isTRUE(abs(ts[last] - tfin) <= 1e-12 * max(1, abs(tfin)))) {
+    ts <- c(ts, tfin)
+    last <- length(ts)
+  }
+  nt <- length(env$t)
   dgdp <- if (np && any(ct$dp != 0)) function(u, p, tt, i) if (i == last) ct$dp else numeric(np)
   res <- do.call(adjoint_sensitivities,
-                 c(list(fsol, env$alg, t = env$t, dgdu_discrete = function(u, p, tt, i) ct$dU[i, ],
+                 c(list(fsol, env$alg, t = ts, dgdu_discrete = function(u, p, tt, i) if (i <= nt) ct$dU[i, ] else numeric(length(u)),
                         dgdp_discrete = dgdp, sensealg = sensealg, no_start = !at_start),
                    dots[intersect(names(dots), "dt")]))
-  list(u0 = stats::setNames(res$du0, names(prob$u0)), p = stats::setNames(res$dp, names(prob$p)),
+  dp <- res$dp
+  if (!is.null(ct$dp_init)) dp <- dp + ct$dp_init
+  list(u0 = stats::setNames(res$du0, names(prob$u0)), p = stats::setNames(dp, names(prob$p)),
        value = ct$value, sol = sol)
 }

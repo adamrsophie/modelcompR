@@ -157,8 +157,9 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     if (attempt == 4L) stop("the loss interpolates the solution at changing times", call. = FALSE)
     tq <- sort(unique(c(tq, as.numeric(r$times))))
     if (!is.null(base_saveat)) {
-      sv <- if (length(base_saveat) == 1L) seq(prob$tspan[1L], prob$tspan[2L], by = base_saveat *
-                                                 sign(prob$tspan[2L] - prob$tspan[1L])) else base_saveat
+      # a step saveat also saves the final time (.sens_fixed_times)
+      sv <- if (length(base_saveat) == 1L) c(seq(prob$tspan[1L], prob$tspan[2L], by = base_saveat *
+                                                   sign(prob$tspan[2L] - prob$tspan[1L])), prob$tspan[2L]) else base_saveat
       dots$saveat <- sort(unique(c(sv, tq)), decreasing = prob$tspan[2L] < prob$tspan[1L])
       .mtk$sens_hide_t <- tq[!vapply(tq, function(x) any(abs(sv - x) <= 1e-12 * max(1, abs(x))), TRUE)]
     } else {
@@ -216,15 +217,29 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     for (ev in fprob$sensitivity$events$events) {
       rows <- which(abs(fenv$t - ev$t) <= 1e-12 * max(1, abs(ev$t)) & !fixed)
       if (!length(rows)) next
-      r_right <- rows[length(rows)]
-      Ss[[r_right]] <- Ss[[r_right]] + outer(ev$fp, ev$dtau)
-      if (length(rows) >= 2L) Ss[[rows[1L]]] <- Ss[[rows[1L]]] + outer(ev$fm, ev$dtau)
+      if (length(rows) == 1L && .sens_left_only(ev)) {
+        # the event saves only its left limit
+        Ss[[rows]] <- Ss[[rows]] + outer(ev$fm, ev$dtau)
+      } else {
+        r_right <- rows[length(rows)]
+        Ss[[r_right]] <- Ss[[r_right]] + outer(ev$fp, ev$dtau)
+        if (length(rows) >= 2L) Ss[[rows[1L]]] <- Ss[[rows[1L]]] + outer(ev$fm, ev$dtau)
+      }
       if (any(ev$dtau != 0)) grad <- grad + sum(ct$dT(rows)) * ev$dtau
     }
     for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% Ss[[r]])
     if (np) {
       Qend <- if (fprob$sensitivity$nq) matrix(U[nrow(U), n + n * m + seq_len(np * m)], np, m) else Q0
+      # an event after the last saved time changes the final parameters
+      evs_all <- fprob$sensitivity$events$events
+      if (length(evs_all)) {
+        tl <- fenv$t[nrow(U)]
+        dir <- sign(prob$tspan[2L] - prob$tspan[1L])
+        late <- which(vapply(evs_all, function(ev) dir * (ev$t - tl) > 1e-12 * max(1, abs(tl)), TRUE))
+        if (length(late)) Qend <- evs_all[[late[length(late)]]]$Q_right
+      }
       grad <- grad + as.numeric(ct$dp %*% Qend)
+      if (!is.null(ct$dp_init)) grad[n + seq_len(np)] <- grad[n + seq_len(np)] + ct$dp_init
       # parameters in force before a later change: Q0 for the first, else the
       # Q after the event that set them
       if (!is.null(ct$dp_hist)) {
@@ -261,11 +276,19 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     tsave <- c(tsave, hp)
     fixed <- c(fixed, rep(TRUE, length(hp)))
   }
+  # the final parameters enter at the end time (after any event there)
+  tfin <- if (identical(env$retcode, "Terminated")) env$t[nt] else prob$tspan[2L]
+  if (!isTRUE(abs(env$t[nt] - tfin) <= 1e-12 * max(1, abs(tfin)))) {
+    tsave <- c(tsave, tfin)
+    fixed <- c(fixed, TRUE)
+    last <- length(tsave)
+  }
   attr(tsave, "fixed") <- fixed
   res <- do.call(adjoint_sensitivities, c(list(sol, alg, t = tsave,
                                dgdu_discrete = function(u, p, tt, i) if (i <= nt) ct$dU[i, ] else numeric(n),
                                dgdp_discrete = if (np && (any(ct$dp != 0) || !is.null(hp))) function(u, p, tt, i)
-                                 if (i == last) ct$dp else if (i > nt) ct$dp_hist[i - nt, ] else numeric(np),
+                                 if (i == last) ct$dp else if (i > nt && i - nt <= length(hp)) ct$dp_hist[i - nt, ]
+                                 else numeric(np),
                                abstol = dots$abstol %||% 1e-6, reltol = dots$reltol %||% 1e-3,
                                sensealg = sensealg,
                                dgdt_discrete = function(tt)
@@ -274,6 +297,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
                     step_opts))
   dp <- res$dp
   if (np && ini$active) dp <- as.numeric(crossprod(ini$dp, dp) + crossprod(ini$du0, res$du0))
+  if (!is.null(ct$dp_init)) dp <- dp + ct$dp_init
   list(u0 = stats::setNames(res$du0, names(prob$u0)), p = stats::setNames(dp, names(prob$p)),
        value = ct$value, sol = sol)
 }
@@ -309,8 +333,15 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     i <- which(abs(env$t - x) <= 1e-12 * max(1, abs(x)))
     if (length(i)) i[length(i)] else NA_integer_
   }, 0L) else integer()
-  ev <- function(U, p) {
+  # sol$prob$p holds the initial parameters: when events change them it gets
+  # its own cotangent (dp_init), which belongs to p directly
+  pinit <- data$prob$p
+  hh <- data$param_history
+  split <- length(p0) && !is.null(pinit) &&
+    ((!is.null(hh) && nrow(hh$p) > 1L) || !identical(as.numeric(pinit), as.numeric(p0)))
+  ev <- function(U, p, pi = NULL) {
     d <- data
+    if (!is.null(pi)) d$prob$p <- pi
     if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U[irows, , drop = FALSE])
     d$U <- U[!hidden, , drop = FALSE]
     d$t <- env$t[!hidden]
@@ -318,7 +349,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     if (!identical(p, p0) && !is.null(d$param_history)) {
       d$param_history$p[nrow(d$param_history$p), ] <- p
     }
-    if (!identical(p, p0) && !is.null(d$prob)) d$prob$p <- p
+    if (!split && !identical(p, p0) && !is.null(d$prob)) d$prob$p <- p
     v <- loss(.new_solution(cls, d))
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v)) stop("the loss must return a finite number", call. = FALSE)
     v
@@ -333,6 +364,8 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     dU[k] <- (ev(Up, p0) - ev(Um, p0)) / (2 * h)
   }
   dp <- if (length(p0)) .sens_fd_grad(function(q) ev(U0, .sens_pvec(p0, q)), as.numeric(p0)) else numeric()
+  dp_init <- if (split) .sens_fd_grad(function(q) ev(U0, p0, .sens_pvec(pinit, q)), as.numeric(pinit))
+  if (!is.null(dp_init) && all(dp_init == 0)) dp_init <- NULL
   # the cotangent of the saved times (dgdt_discrete): it only matters for
   # samples that move with an event, so dT(rows) differentiates the loss in
   # the times of those rows only, when a sensitivity method asks
@@ -375,7 +408,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     if (length(p0) == 1L) dp_hist <- matrix(dp_hist, ncol = 1L)
     if (all(abs(dp_hist) <= 1e-12 * max(1, abs(value)))) dp_hist <- NULL
   }
-  list(value = value, dU = unname(dU), dp = dp, dp_hist = dp_hist, t_hist = h$t, dT = dT)
+  list(value = value, dU = unname(dU), dp = dp, dp_init = dp_init, dp_hist = dp_hist, t_hist = h$t, dT = dT)
 }
 
 # A fully implicit DAE F(du, u, p, t) = 0 of index 1 is the semi-explicit
@@ -445,6 +478,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     data$U <- e$U[, seq_len(n), drop = FALSE]
     if (!is.null(data$sens_interp)) data$sens_interp$U <- data$sens_interp$U[, seq_len(n), drop = FALSE]
     data$prob <- prob
+    data$prob$p <- e$prob$p
     data$alg <- alg %||% e$alg
     .new_solution(setdiff(class(s), c("SciMLSolution", "function")), data)
   }
@@ -601,6 +635,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   grad <- numeric(m)
   for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% matrix(U[r, n + seq_len(n * m)], n, m))
   if (np) grad <- grad + as.numeric(ct$dp %*% Qof(U[nrow(U), ]))
+  if (!is.null(ct$dp_init)) grad[n + seq_len(np)] <- grad[n + seq_len(np)] + ct$dp_init
   list(u0 = stats::setNames(grad[seq_len(n)], names(prob$u0)),
        p = stats::setNames(grad[n + seq_len(np)], names(prob$p)), value = ct$value, sol = sol)
 }

@@ -53,7 +53,9 @@ values.}
 
 \item{noisemixing}{For the adjoints of SDEs with diagonal noise: use the
 full Jacobian of the noise (each noise term may depend on all states)
-instead of its diagonal; see \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}}.}
+instead of its diagonal; see \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}}. The full Jacobian
+is also used without it when the noise Jacobian at \code{u0} has entries
+off its diagonal.}
 
 \item{abstol, reltol}{Tolerances of the quadrature of
 \code{QuadratureAdjoint()}.}

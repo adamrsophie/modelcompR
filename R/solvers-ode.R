@@ -880,7 +880,21 @@ solve.ODEProblem <- function(a, b, ...) {
     us[[length(us) + 1L]] <<- u
   }
   if (save_start) push_save(t0, integ$u)
+  u_pre <- integ$u
+  p_pre <- integ$p
   .init_callbacks(cbs, integ)
+  if (!done && (mm || is_dae) && (!identical(u_pre, integ$u) || !identical(p_pre, integ$p))) {
+    # an affect at the initial time (PresetTimeCallback, initial_affect)
+    # may break the algebraic constraints: reinitialize, as after an event
+    ctx$p <- integ$p
+    ini <- .dae_initialize(ctx, t0, integ$u, integ$du, opts$initializealg, dtmax)
+    add_stats(ini)
+    if (ini$ok) {
+      integ$u[] <- ini$u
+      if (is_dae) integ$du <- ini$du
+    } else warning("could not find consistent algebraic values after an event at t = ", t0, call. = FALSE)
+    integ$u_modified <- TRUE
+  }
   if (integ$u_modified) {
     integ$u_modified <- FALSE
     if (save_start) {

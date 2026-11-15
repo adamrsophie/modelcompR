@@ -139,8 +139,8 @@ PeriodicCallback <- function(affect, dt, phase = 0, initial_affect = FALSE, fina
 .cb_rebind_init <- function(cb) {
   ini <- cb$initialize
   if (is.function(ini) && "aff" %in% names(formals(ini))) {
-    aff <- cb$affect
-    cb$initialize <- function(integ) ini(integ, aff)
+    aff0 <- cb$affect
+    cb$initialize <- function(integ, aff = aff0) ini(integ, aff)
   }
   cb
 }

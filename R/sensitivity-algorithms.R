@@ -70,7 +70,9 @@ print.SensitivityAlgorithm <- function(x, ...) {
 #'   values.
 #' @param noisemixing For the adjoints of SDEs with diagonal noise: use the
 #'   full Jacobian of the noise (each noise term may depend on all states)
-#'   instead of its diagonal; see [SDEAdjointProblem()].
+#'   instead of its diagonal; see [SDEAdjointProblem()]. The full Jacobian
+#'   is also used without it when the noise Jacobian at `u0` has entries
+#'   off its diagonal.
 #' @param abstol,reltol Tolerances of the quadrature of
 #'   `QuadratureAdjoint()`.
 #' @param convert_tspan Unused; kept for the Julia signature.

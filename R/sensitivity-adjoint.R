@@ -193,6 +193,10 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
       e <- which(ev_t == tc)
       if (length(e)) return(events[[e[length(e)]]]$u_right)
       k <- which(abs(env$t - tc) <= tol(tc))
+      # an unsaved start is the initial state; the state at the end time
+      # starts no interval
+      if (!length(k) && abs(tc - t0) <= tol(t0)) return(as.numeric(prob$u0))
+      if (!length(k) && abs(tc - tend) <= tol(tend)) return(NULL)
       if (!length(k)) stop("checkpoint ", tc, " is not a saved time of the solution", call. = FALSE)
       env$U[k[length(k)], ]
     })
@@ -306,11 +310,13 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     }
     Ds <- lapply(events[eidx], .sens_event_jacobian, fns = fns, prob = prob)
     # two samples at an event time are its left and right limits; one is
-    # the value after the event, as the forward solver saves it
-    nleft <- if (length(cidx) >= 2L) 1L else 0L
+    # the value after the event, as the forward solver saves it, unless the
+    # event saves only the value before it
+    last_ev <- events[[eidx[length(eidx)]]]
+    nleft <- if (length(cidx) >= 2L || (length(cidx) == 1L && !cost$fixed[cidx] &&
+                                        .sens_left_only(events[[eidx[1L]]]))) 1L else 0L
     left <- cidx[seq_len(nleft)]
     right <- setdiff(cidx, left)
-    last_ev <- events[[eidx[length(eidx)]]]
     lr <- numeric(n)
     for (k in rev(right)) {
       y <- if (backsolve) z[iy] else attr(Ds[[length(Ds)]], "u_plus") %||% as.numeric(last_ev$u_right)
@@ -338,7 +344,8 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
         # (after a terminating event nothing is integrated)
         if (cont && !is.null(g))
           w <- w + tx * (g(ev$u, .sens_pvec(p, ev$p), tt) -
-                           if (isTRUE(ev$terminate)) 0 else g(as.numeric(ev$u_right), .sens_pvec(p, ev$p_right), tt))
+                           if (isTRUE(ev$terminate)) 0 else
+                             g(as.numeric(attr(D, "u_plus") %||% ev$u_right), .sens_pvec(p, ev$p_right), tt))
       }
       if (np && method == "QuadratureAdjoint") {
         acc$records[[length(acc$records) + 1L]] <-

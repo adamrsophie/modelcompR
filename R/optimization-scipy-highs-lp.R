@@ -305,7 +305,8 @@
       dact <- vapply(seq_len(n), function(j) {
         acc <- c(0, 0)
         for (i in which(A[, j] != 0)) acc <- .cd_add(acc, rd[i] * A[i, j])
-        acc <- .cd_add(acc, -cost[j])
+        # productTransposeQuad rounds A'y, then the cost is taken off in quad
+        acc <- .cd_add(c(acc[1L] + acc[2L], 0), -cost[j])
         acc[1L] + acc[2L]
       }, 0)
     }
@@ -375,7 +376,9 @@
       }
     }
   }
-  info$objective <- sum(cost * x)
+  obj <- 0
+  for (j in seq_len(n)) obj <- obj + cost[j] * x[j]
+  info$objective <- obj
   if (have_dual) {
     # getComplementarityViolations and computeDualObjectiveValue
     free <- lower <= -Inf & upper >= Inf
@@ -403,8 +406,8 @@
   ptol <- opts$ptol %||% 1e-7; dtol <- opts$dtol %||% 1e-7
   rtol_p <- opts$primal_residual_tolerance %||% 1e-7; rtol_d <- opts$dual_residual_tolerance %||% 1e-7
   opttol <- opts$optimality_tolerance %||% 1e-7
-  # kkt_tolerance, when set, replaces all five
-  if (!is.null(opts$kkt_tolerance)) ptol <- dtol <- rtol_p <- rtol_d <- opttol <- opts$kkt_tolerance
+  # kkt_tolerance, when not its default 1e-7, replaces all five
+  if (!is.null(opts$kkt_tolerance) && opts$kkt_tolerance != 1e-7) ptol <- dtol <- rtol_p <- rtol_d <- opttol <- opts$kkt_tolerance
   get_res <- !basis_valid
   info <- .hs_get_lp_kkt_failures(sol, cost, A, row_lower, row_upper, col_lower, col_upper,
                                   ptol, dtol, rtol_p, rtol_d, opttol, get_res)

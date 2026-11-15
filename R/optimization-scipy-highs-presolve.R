@@ -1986,8 +1986,8 @@
 # basis
 .hs_highs_run <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts = list()) {
   sol <- .hs_highs_run_lp(cost, A, row_lower, row_upper, col_lower, col_upper, opts)
-  # lpKktCheck on the original LP, unless the status came from the reduced LP
-  if (isTRUE(sol$from_reduced)) return(sol)
+  # lpKktCheck on the original LP, unless Highs::run returns before it
+  if (isTRUE(sol$no_kkt_check)) return(sol)
   .hs_lp_kkt_check(sol, cost, A, row_lower, row_upper, col_lower, col_upper, opts)
 }
 
@@ -2002,8 +2002,9 @@
     notreduced = return(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, opts)),
     infeasible = return(fail("Infeasible")),
     unboundedorinfeasible = {
+      # Highs::run returns this solve without lpKktCheck
       opts$strategy <- "primal"
-      return(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, opts))
+      return(c(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, opts), list(no_kkt_check = TRUE)))
     })
   if (pre$status == "empty") {
     red <- list(status = "Optimal", nit = 0L, col_value = numeric(), col_dual = numeric(),
@@ -2012,7 +2013,7 @@
     lp <- pre$lp
     red <- .hs_lp_solve(lp$cost, lp$A, lp$row_lower, lp$row_upper, lp$col_lower, lp$col_upper, opts)
     if (is.null(red$row_status)) red$row_status <- character(length(pre$rows))
-    if (!red$status %in% c("Optimal", "Unknown")) return(c(red, list(from_reduced = TRUE)))
+    if (!red$status %in% c("Optimal", "Unknown")) return(c(red, list(no_kkt_check = TRUE)))
   }
   post <- .hs_postsolve(pre, red, opts$dtol %||% 1e-7)
   opts$basis <- list(col_status = post$col_status, row_status = post$row_status)

@@ -200,3 +200,75 @@ test_that("DAEProblem gradients keep the callbacks and the interpolation in the 
   s <- solve_gradient(function(sol) sol(0.5)[1], prob2, DFBDF(), reltol = 1e-8, abstol = 1e-10)$sol
   expect_equal(unname(s(0.25)), rep(exp(0.25), 2), tolerance = 1e-4)
 })
+
+test_that("events saving one side, integrator side effects and late parameter changes", {
+  f <- function(u, p, t) c(-p[1] * u[1] + u[2], -p[2] * u[2])
+  u0 <- c(1, 0.5); p <- c(1.2, 0.8, 0.6)
+  aff <- function(integ) integ$u[1] <- integ$u[1] * integ$p[3] + integ$u[2]
+  fdg <- function(mk, loss, dots, alg) {
+    F <- function(th) loss(do.call(solve, c(list(mk(th[1:2], th[3:5]), alg), dots)))
+    th <- c(u0, p)
+    vapply(seq_along(th), function(j) {
+      a <- th; b <- th; h <- 1e-6 * max(1, abs(th[j]))
+      a[j] <- a[j] + h; b[j] <- b[j] - h
+      (F(a) - F(b)) / (2 * h)
+    }, 0)
+  }
+  chk <- function(mk, loss, dots, sas = list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint()),
+                  tol = 1e-5, alg = Tsit5()) {
+    ref <- fdg(mk, loss, c(dots, list(reltol = 1e-10, abstol = 1e-12)), alg)
+    for (sa in sas) {
+      g <- do.call(solve_gradient, c(list(loss, mk(u0, p), alg), dots,
+                                     list(reltol = 1e-10, abstol = 1e-12, sensealg = sa)))
+      expect_equal(unname(c(g$u0, g$p)), ref, tolerance = tol, label = sa$name)
+    }
+  }
+  # a continuous event saving only its left limit, read by the loss
+  cb1 <- ContinuousCallback(function(u, t, integ) u[1] - 0.8, function(integ) {
+    integ$u[1] <- 0.4 * integ$u[1] + integ$p[3]
+    integ$u[2] <- 2 * integ$u[2]
+  }, save_positions = c(TRUE, FALSE))
+  chk(function(u0, p) ODEProblem(f, u0, c(0, 1), p, callback = cb1),
+      function(sol) {
+        k <- which(abs(sol$t / 0.05 - round(sol$t / 0.05)) > 1e-9)[1L]
+        U <- as.matrix(sol)
+        sum(U[k, ]^2) + 3 * U[k, 2] + sol$t[k]
+      }, list(dt = 0.05, adaptive = FALSE), alg = RK4())
+  # an affect that adds stops (IterativeCallback), also at the initial time
+  for (ia in c(FALSE, TRUE)) {
+    cb2 <- IterativeCallback(function(integ) if (integ$t + 0.4 < 1) integ$t + 0.4 else NULL, aff, initial_affect = ia)
+    chk(function(u0, p) ODEProblem(f, u0, c(0, 1), p, callback = cb2), function(sol) sum(as.matrix(sol)^2),
+        list(saveat = 0.25))
+  }
+  # parameters changed after the last saved time, and the initial ones
+  cb3 <- PresetTimeCallback(0.7, function(integ) integ$p[1] <- integ$p[1] + 0.5 * integ$u[1] * integ$p[3])
+  mk3 <- function(u0, p) ODEProblem(f, u0, c(0, 1), p, callback = cb3)
+  chk(mk3, function(sol) sum(as.matrix(sol)^2) + .sol_env(sol)$p_final[1]^2, list(saveat = c(0, 0.25, 0.5)))
+  chk(mk3, function(sol) sum(as.matrix(sol)^2) + sol$prob$p[1]^2, list(saveat = c(0, 0.25, 0.5, 1)))
+  # a step saveat that does not divide the span, with an interpolating loss
+  pe <- ODEProblem(function(u, p, t) -p[1] * u, 1, c(0, 1), 2)
+  g <- solve_gradient(function(sol) sum(as.matrix(sol)) + sol(0.33), pe, Tsit5(), saveat = 0.3,
+                      reltol = 1e-10, abstol = 1e-12)
+  ts <- c(0, 0.3, 0.6, 0.9, 1)
+  expect_equal(unname(g$value), sum(exp(-2 * ts)) + exp(-0.66), tolerance = 1e-7)
+  # checkpointing when the start and end times are not saved
+  l2 <- function(sol) sum(as.matrix(sol)^2)
+  pr <- ODEProblem(f, u0, c(0, 1), p[1:2])
+  a <- solve_gradient(l2, pr, Tsit5(), saveat = c(0.2, 0.5, 0.9), reltol = 1e-10, abstol = 1e-12,
+                      sensealg = InterpolatingAdjoint(checkpointing = TRUE))
+  b <- solve_gradient(l2, pr, Tsit5(), saveat = c(0.2, 0.5, 0.9), reltol = 1e-10, abstol = 1e-12,
+                      sensealg = ForwardDiffSensitivity())
+  expect_equal(c(a$u0, a$p), c(b$u0, b$p), tolerance = 1e-8)
+})
+
+test_that("an affect at the initial time of a DAE reinitializes the algebraic variables", {
+  yc <- function(x, a) uniroot(function(y) y + y^3 - a * x, c(-5, 5), tol = 1e-14)$root
+  fa <- function(u, p, t) c(-p[1] * u[1] + u[2], u[2] + u[2]^3 - p[2] * u[1])
+  cb <- PresetTimeCallback(c(0, 0.6), function(integ) integ$u[1] <- integ$u[1] * integ$p[3])
+  pr <- ODEProblem(ODEFunction(fa, mass_matrix = diag(c(1, 0))), c(1, yc(1, 0.5)), c(0, 1.5), c(0.7, 0.5, 1.3),
+                   callback = cb)
+  s <- solve(pr, Rodas5P(), reltol = 1e-8, abstol = 1e-10, saveat = c(0, 1.5))
+  expect_identical(format(s$retcode), "Success")
+  U <- as.matrix(s)
+  expect_equal(U[1, 2], yc(1.3, 0.5), tolerance = 1e-8)
+})

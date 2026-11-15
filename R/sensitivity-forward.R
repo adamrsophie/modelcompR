@@ -136,21 +136,21 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
     function(integ, ...) {
       z <- integ$u
       ev <- .sens_event_record(integ, aff, list(...), cb, continuous, n)
-      fake <- .sens_fake_integ(ev$u, ev$p, ev$t, integ)
-      do.call(aff, c(list(fake), ev$args))
-      ev$u_right <- as.numeric(fake$u); ev$p_right <- fake$p
+      # the affect runs on the integrator (its add_tstop() and other side
+      # effects stay) with the state restricted to the original variables
+      integ$u <- ev$u
+      do.call(aff, c(list(integ), ev$args))
+      ev$u_right <- as.numeric(integ$u); ev$p_right <- integ$p
       D <- .sens_event_jacobian(ev, fns, prob)
       X <- rbind(matrix(z[n + seq_len(n * m)], n, m), matrix(z[n + n * m + seq_len(np * m)], np, m))
       tx <- attr(D, "tau_x")
       rec$events[[length(rec$events) + 1L]] <- list(
         t = ev$t, dtau = if (is.null(tx)) numeric(m) else as.numeric(crossprod(tx, X)),
         fm = attr(D, "fm") %||% fns$f(ev$u, ev$p, ev$t),
-        fp = attr(D, "fp") %||% fns$f(ev$u_right, .sens_pvec(ev$p, ev$p_right), ev$t))
+        fp = attr(D, "fp") %||% fns$f(ev$u_right, .sens_pvec(ev$p, ev$p_right), ev$t), save = ev$save)
       X <- D %*% X
       rec$events[[length(rec$events)]]$Q_right <- X[n + seq_len(np), , drop = FALSE]
       integ$u <- c(ev$u_right, as.numeric(X[iu, , drop = FALSE]), as.numeric(X[n + seq_len(np), , drop = FALSE]))
-      integ$p[] <- as.numeric(fake$p)
-      if (isTRUE(fake$terminate)) integ$terminate <- TRUE
       invisible(NULL)
     }
   }
@@ -185,7 +185,15 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
 .sens_event_record <- function(integ, aff, args, cb, continuous, n) {
   list(t = integ$t, tprev = integ$tprev, u = as.numeric(integ$u)[seq_len(n)], p = integ$p,
        affect = aff, args = args, condition = cb$condition, continuous = continuous,
-       idx = if (continuous && length(args)) args[[1L]] else 1L)
+       idx = if (continuous && length(args)) args[[1L]] else 1L,
+       save = cb$save_positions %||% c(TRUE, TRUE))
+}
+
+# Whether the one sample saved at an event is its left limit: the event
+# saves only the value before its affect.
+.sens_left_only <- function(ev) {
+  sp <- ev$save %||% c(TRUE, TRUE)
+  isTRUE(sp[1L]) && !isTRUE(sp[2L])
 }
 
 # An integrator stand-in for running affects and conditions on given values.

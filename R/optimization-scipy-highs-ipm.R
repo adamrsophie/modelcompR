@@ -90,7 +90,7 @@
     unboundedorinfeasible = {
       o <- opts
       o$strategy <- "primal"
-      return(done(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, o)))
+      return(done(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, o), check = FALSE))
     })
   if (pre$status == "empty") {
     red <- list(status = "Optimal", nit = 0L, col_value = numeric(), col_dual = numeric(),

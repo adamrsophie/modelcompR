@@ -65,9 +65,12 @@ test_that("SDEAdjointProblem matches Julia for scalar, general and mixing noise"
             c(2.793609536947338, -0.5213581012052876, 0.2607686249119221, -0.2868971104739691))
   sde_check(sol, InterpolatingAdjoint(noisemixing = TRUE), c(3.6084612640672358, -0.2666027154957468),
             c(2.793914476751979, -0.5212719043054403, 0.2624683543310595, -0.2877672307564562))
-  # without noisemixing only the diagonal of the noise Jacobian enters
-  sde_check(sol, BacksolveAdjoint(), c(3.564292029946659, -0.4712182006866227),
-            c(2.795159181754548, -0.4320573702237581, 0.20638738840682413, -0.0346971342738308))
+  # without noisemixing Julia uses only the diagonal of the noise Jacobian
+  # (du0 = (3.5643, -0.4712), dp = (2.7952, -0.4321, 0.2064, -0.0347), a
+  # wrong gradient for this noise); here the off diagonal entries at u0
+  # switch the full Jacobian on
+  sde_check(sol, BacksolveAdjoint(), c(3.6091032050839607, -0.2661054072677112),
+            c(2.793609536947338, -0.5213581012052876, 0.2607686249119221, -0.2868971104739691))
 })
 
 test_that("costs at every saved time, solve_gradient and continuous costs match Julia", {
@@ -304,7 +307,7 @@ test_that("SDE adjoints keep the forward steps, terminal events and the final pa
   prob5 <- SDEProblem(function(u, p, t) 0 * u, function(u, p, t) p[1] * u, 1, c(0, 1), 1, noise = NoiseGrid(tg, 0 * tg))
   sol5 <- solve(prob5, EulerHeun(), dt = 0.001)
   expect_error(adjoint_sensitivities(sol5, EM(), t = 1, dgdu_discrete = function(u, p, t, i) 1,
-                                     sensealg = InterpolatingAdjoint()), "quadratic variation")
+                                     sensealg = InterpolatingAdjoint()), "same interpretation")
   r <- adjoint_sensitivities(sol5, EulerHeun(), t = 1, dgdu_discrete = function(u, p, t, i) 1, sensealg = InterpolatingAdjoint())
   expect_equal(c(r$du0, r$dp), c(1, 0), tolerance = 1e-10)
   # a well conditioned small mass matrix

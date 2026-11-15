@@ -507,7 +507,8 @@ IterativeCallback <- function(time_choice, affect, initial_affect = FALSE, save_
     st$tnext <- tnew %||% NA_real_
     if (!is.null(tnew)) add_tstop(integ, tnew)
   }
-  init <- function(integ) {
+  # `aff` is the affect as the solve runs it (the sensitivity methods wrap it)
+  init <- function(integ, aff = aff_) {
     if (initial_affect) {
       st$tnext <- integ$t
       aff(integ)
@@ -517,6 +518,7 @@ IterativeCallback <- function(time_choice, affect, initial_affect = FALSE, save_
       if (!is.null(tn)) add_tstop(integ, tn)
     }
   }
+  aff_ <- aff
   DiscreteCallback(function(u, t, integ) isTRUE(abs(t - st$tnext) <= 1e-12 * max(1, abs(t))), aff,
                    initialize = init, save_positions = save_positions)
 }
