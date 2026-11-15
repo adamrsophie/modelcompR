@@ -9,8 +9,11 @@ solve_gradient(loss, prob, alg = NULL, ..., sensealg = NULL)
 \arguments{
 \item{loss}{A function of the solution returning a number.}
 
-\item{prob}{An \code{ODEProblem}, \code{NonlinearProblem}, \code{SteadyStateProblem},
-\code{OptimizationProblem}, \code{SDEProblem} or \code{RODEProblem}.}
+\item{prob}{An \code{ODEProblem}, \code{DAEProblem}, \code{NonlinearProblem},
+\code{SteadyStateProblem}, \code{OptimizationProblem}, \code{SDEProblem} or
+\code{RODEProblem}. A \code{DAEProblem} \code{F(du, u, p, t) = 0} of index 1 is solved
+and differentiated as the mass matrix problem \verb{u_d' = w, 0 = F(w, u, p, t)} (with \code{\link[=FBDF]{FBDF()}} for \code{\link[=DFBDF]{DFBDF()}}, \code{\link[=Rodas5P]{Rodas5P()}} for other DAE methods), so
+its events and every sensitivity method apply.}
 
 \item{alg}{The algorithm for \code{\link[=solve]{solve()}}.}
 

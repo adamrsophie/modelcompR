@@ -117,8 +117,12 @@
 #' with respect to `p` includes that dependence.
 #'
 #' @param loss A function of the solution returning a number.
-#' @param prob An `ODEProblem`, `NonlinearProblem`, `SteadyStateProblem`,
-#'   `OptimizationProblem`, `SDEProblem` or `RODEProblem`.
+#' @param prob An `ODEProblem`, `DAEProblem`, `NonlinearProblem`,
+#'   `SteadyStateProblem`, `OptimizationProblem`, `SDEProblem` or
+#'   `RODEProblem`. A `DAEProblem` `F(du, u, p, t) = 0` of index 1 is solved
+#'   and differentiated as the mass matrix problem `u_d' = w, 0 = F(w, u, p,
+#'   t)` (with [FBDF()] for [DFBDF()], [Rodas5P()] for other DAE methods), so
+#'   its events and every sensitivity method apply.
 #' @param alg The algorithm for [solve()].
 #' @param ... Options for [solve()] (`saveat`, `abstol`, `reltol`, `dt`,
 #'   `seed`, ...); the adjoint is solved with the same tolerances.
@@ -175,8 +179,9 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   if (inherits(prob, c("SDEProblem", "RODEProblem")) && inherits(sensealg, c("BacksolveAdjoint", "InterpolatingAdjoint")))
     return(.sens_stochastic_gradient(loss, prob, alg, dots, sensealg))
   if (inherits(prob, "SDEProblem")) return(.sens_sde_gradient(loss, prob, alg, dots, sensealg))
+  if (inherits(prob, "DAEProblem")) return(.sens_dae_gradient(loss, prob, alg, dots, sensealg))
   if (!inherits(prob, "ODEProblem"))
-    stop("solve_gradient() supports ODE, nonlinear, steady state, optimization and SDE problems, and RODE problems ",
+    stop("solve_gradient() supports ODE, DAE, nonlinear, steady state, optimization and SDE problems, and RODE problems ",
          "with BacksolveAdjoint() or InterpolatingAdjoint()", call. = FALSE)
   if (.is_sensealg(sensealg, "ShadowingSensitivityAlgorithm"))
     stop("shadowing methods differentiate long time averages: use ForwardLSSProblem(), NILSSProblem(), ",
@@ -365,6 +370,52 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
     if (all(abs(dp_hist) <= 1e-12 * max(1, abs(value)))) dp_hist <- NULL
   }
   list(value = value, dU = unname(dU), dp = dp, dp_hist = dp_hist, t_hist = h$t, dT = dT)
+}
+
+# A fully implicit DAE F(du, u, p, t) = 0 of index 1 is the semi-explicit
+# DAE u_d' = w, 0 = F(w, u, p, t) in (u, w), with w the derivatives of the
+# differential variables: a mass matrix ODEProblem, whose sensitivities
+# (with events, reinitialization of the algebraic variables and every
+# method) apply. The differential equation of variable d sits in row d, so
+# the mass matrix is diagonal.
+.sens_dae_gradient <- function(loss, prob, alg, dots, sensealg) {
+  F <- prob$f$f %||% prob$f
+  u0 <- as.numeric(prob$u0)
+  du0 <- as.numeric(prob$du0 %||% numeric(length(u0)))
+  n <- length(u0)
+  dv <- prob$differential_vars
+  if (is.null(dv)) {
+    Jd <- .sens_fd_jac(function(x) as.numeric(F(x, u0, prob$p, prob$tspan[1L])), du0)
+    dv <- colSums(abs(Jd)) > 0
+  }
+  d <- which(as.logical(dv))
+  nd <- length(d)
+  rest <- setdiff(seq_len(n + nd), d)
+  f_aug <- function(z, p, t) {
+    du <- numeric(n)
+    du[d] <- z[n + seq_len(nd)]
+    out <- numeric(n + nd)
+    out[d] <- z[n + seq_len(nd)]
+    out[rest] <- as.numeric(F(du, z[seq_len(n)], p, t))
+    out
+  }
+  M <- matrix(0, n + nd, n + nd)
+  M[cbind(d, d)] <- 1
+  aprob <- ODEProblem(ODEFunction(f_aug, mass_matrix = M), c(u0, du0[d]), prob$tspan, prob$p)
+  aprob$kwargs <- prob$kwargs
+  # a mass matrix method for the DAE method
+  oalg <- if (inherits(alg, "DFBDF")) FBDF() else if (inherits(alg, "DImplicitEuler")) ImplicitEuler() else
+    if (inherits(alg, "DABDF2")) ABDF2() else if (is.null(alg) || isTRUE(alg$dae) || !isTRUE(alg$mass_matrix))
+      Rodas5P() else alg
+  restrict <- function(s) {
+    e <- .sol_env(s)
+    out <- .new_ode_solution(t = e$t, u = e$U[, seq_len(n), drop = FALSE], prob = prob, alg = alg %||% e$alg,
+                             retcode = e$retcode, stats = e$stats, p = e$p_final)
+    if (!is.null(e$param_history)) .sol_env(out)$param_history <- e$param_history
+    out
+  }
+  g <- .solve_gradient(function(s) loss(restrict(s)), aprob, oalg, dots, sensealg)
+  list(u0 = stats::setNames(g$u0[seq_len(n)], names(prob$u0)), p = g$p, value = g$value, sol = restrict(g$sol))
 }
 
 .sens_no_hist <- function(ct) {

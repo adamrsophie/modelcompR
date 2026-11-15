@@ -156,7 +156,9 @@
 #' [QuadratureAdjoint()], [GaussAdjoint()] and [GaussKronrodAdjoint()]).
 #'
 #' [adjoint_sensitivities()] uses it for DAE solutions. The forward
-#' solution must be dense; callbacks are not supported. The Jacobians of
+#' solution must be dense; callbacks are not supported here, but
+#' [solve_gradient()] differentiates a `DAEProblem` with events through its
+#' semi-explicit form `u_d' = w, 0 = F(w, u, p, t)`. The Jacobians of
 #' the residual come from the System the problem was built from
 #' (symbolically) or from the problem's Jacobian and central differences;
 #' `du(t)` is the derivative of the forward interpolant (by central
@@ -169,7 +171,8 @@
 #'   [SundialsAdjoint()] (solved as `InterpolatingAdjoint`).
 #' @param alg The algorithm of the backward solve; the forward algorithm when
 #'   `NULL`.
-#' @param callback Must be `NULL`: callbacks are not supported.
+#' @param callback Must be `NULL`: callbacks are not supported (see
+#'   [solve_gradient()]).
 #' @return An `ODEProblem` or `DAEProblem` with elements `alg` and `finish`
 #'   (a function of the backward solution returning `list(du0, dp)`).
 #' @examples
@@ -206,7 +209,8 @@ DAEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   cbs <- .as_callback_set(callback)
   fcb <- .as_callback_set(prob$kwargs$callback)
   if (length(cbs$continuous) + length(cbs$discrete) + length(fcb$continuous) + length(fcb$discrete))
-    stop("Callbacks are not currently supported for DAEProblem adjoints.", call. = FALSE)
+    stop("Callbacks are not currently supported for DAEProblem adjoints; solve_gradient() differentiates ",
+         "a DAEProblem with events (as its semi-explicit mass matrix form).", call. = FALSE)
   withgrad <- method == "InterpolatingAdjoint"
   alg <- alg %||% env$alg %||% DFBDF()
   fns <- .sens_dae_fns(prob, sol, sensealg)

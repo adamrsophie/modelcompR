@@ -40,7 +40,8 @@ the gradients of the continuous cost.}
 
 \item{g}{The continuous cost \code{g(u, p, t)}.}
 
-\item{callback}{Must be \code{NULL}: callbacks are not supported.}
+\item{callback}{Must be \code{NULL}: callbacks are not supported (see
+\code{\link[=solve_gradient]{solve_gradient()}}).}
 
 \item{no_start}{Leave out the discrete cost at the initial time.}
 
@@ -70,7 +71,9 @@ state of \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}}, or a quadr
 \code{\link[=QuadratureAdjoint]{QuadratureAdjoint()}}, \code{\link[=GaussAdjoint]{GaussAdjoint()}} and \code{\link[=GaussKronrodAdjoint]{GaussKronrodAdjoint()}}).
 
 \code{\link[=adjoint_sensitivities]{adjoint_sensitivities()}} uses it for DAE solutions. The forward
-solution must be dense; callbacks are not supported. The Jacobians of
+solution must be dense; callbacks are not supported here, but
+\code{\link[=solve_gradient]{solve_gradient()}} differentiates a \code{DAEProblem} with events through its
+semi-explicit form \verb{u_d' = w, 0 = F(w, u, p, t)}. The Jacobians of
 the residual come from the System the problem was built from
 (symbolically) or from the problem's Jacobian and central differences;
 \code{du(t)} is the derivative of the forward interpolant (by central

@@ -87,3 +87,38 @@ test_that("DAEAdjointProblem rejects the unsupported configurations", {
   expect_equal(unname(r$dp), c(-1, 1) * exp(-0.5), tolerance = 1e-6)
   expect_equal(unname(r$du0), c(exp(-0.5), 0), tolerance = 1e-6)
 })
+
+test_that("solve_gradient() differentiates DAEProblems with events", {
+  # F(du, u, p, t) = 0 is solved as u_d' = w, 0 = F(w, u, p, t), a mass
+  # matrix problem whose events reinitialize the algebraic variables
+  fr <- function(du, u, p, t) c(du[1] + p[1] * u[1] - u[2], u[2] + u[2]^3 - p[2] * u[1])
+  yc <- function(x, a) uniroot(function(y) y + y^3 - a * x, c(-5, 5), tol = 1e-14)$root
+  ts <- seq(0, 1.5, by = 0.25)
+  loss <- function(sol) sum(as.matrix(sol)^2)
+  mk <- function(x0, p, cb) {
+    y0 <- yc(x0, p[2])
+    DAEProblem(fr, du0 = c(-p[1] * x0 + y0, 0), u0 = c(x0, y0), tspan = c(0, 1.5), p = p,
+               differential_vars = c(TRUE, FALSE), callback = cb)
+  }
+  cbs <- list(PresetTimeCallback(0.6, function(integ) integ$u[1] <- integ$u[1] * integ$p[3] + 0.2 * integ$u[2]),
+              ContinuousCallback(function(u, t, integ) u[1] - 0.7, function(integ) integ$u[1] <- integ$u[1] + integ$p[3]))
+  th <- c(1, 0.7, 0.5, 1.3)
+  y0 <- yc(1, 0.5)
+  dy <- 1 / (1 + 3 * y0^2)
+  for (cb in cbs) {
+    F <- function(x) loss(solve(mk(x[1], x[2:4], cb), DFBDF(), reltol = 1e-12, abstol = 1e-12, saveat = ts))
+    ref <- vapply(seq_along(th), function(j) {
+      a <- th; b <- th
+      a[j] <- a[j] + 1e-6; b[j] <- b[j] - 1e-6
+      (F(a) - F(b)) / 2e-6
+    }, 0)
+    prob <- mk(1, th[2:4], cb)
+    for (sa in list(ForwardDiffSensitivity(), InterpolatingAdjoint(), GaussAdjoint())) {
+      g <- solve_gradient(loss, prob, DFBDF(), saveat = ts, reltol = 1e-8, abstol = 1e-10, sensealg = sa)
+      # the algebraic initial value follows x0 and a
+      got <- c(g$u0[1] + g$u0[2] * 0.5 * dy, g$p[1], g$p[2] + g$u0[2] * dy, g$p[3])
+      expect_equal(unname(got), ref, tolerance = 1e-4, label = sa$name)
+      expect_equal(dim(as.matrix(g$sol)), c(length(ts), 2L))
+    }
+  }
+})
