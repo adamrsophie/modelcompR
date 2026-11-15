@@ -1985,6 +1985,13 @@
 # postsolve and the cleanup solve of the original LP from the postsolved
 # basis
 .hs_highs_run <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts = list()) {
+  sol <- .hs_highs_run_lp(cost, A, row_lower, row_upper, col_lower, col_upper, opts)
+  # lpKktCheck on the original LP, unless the status came from the reduced LP
+  if (isTRUE(sol$from_reduced)) return(sol)
+  .hs_lp_kkt_check(sol, cost, A, row_lower, row_upper, col_lower, col_upper, opts)
+}
+
+.hs_highs_run_lp <- function(cost, A, row_lower, row_upper, col_lower, col_upper, opts = list()) {
   use_presolve <- !isFALSE(opts$presolve)
   if (!use_presolve || nrow(A) == 0L || all(A == 0))
     return(.hs_lp_solve(cost, A, row_lower, row_upper, col_lower, col_upper, opts))
@@ -2005,7 +2012,7 @@
     lp <- pre$lp
     red <- .hs_lp_solve(lp$cost, lp$A, lp$row_lower, lp$row_upper, lp$col_lower, lp$col_upper, opts)
     if (is.null(red$row_status)) red$row_status <- character(length(pre$rows))
-    if (!red$status %in% c("Optimal", "Unknown")) return(red)
+    if (!red$status %in% c("Optimal", "Unknown")) return(c(red, list(from_reduced = TRUE)))
   }
   post <- .hs_postsolve(pre, red, opts$dtol %||% 1e-7)
   opts$basis <- list(col_status = post$col_status, row_status = post$row_status)

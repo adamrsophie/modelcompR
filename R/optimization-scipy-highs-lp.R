@@ -263,3 +263,162 @@
   sol$ek <- ek; sol$scale <- sc
   sol
 }
+
+# getKktFailures for an LP (HighsSolution.cpp): the absolute and relative
+# primal and dual infeasibilities, the residual errors when there is no
+# basis (get_residuals), the complementarity violations and the relative
+# primal dual objective error of the solution `sol` of the LP
+.hs_get_lp_kkt_failures <- function(sol, cost, A, row_lower, row_upper, col_lower, col_upper,
+                                    ptol, dtol, rtol_p = 1e-7, rtol_d = 1e-7, opttol = 1e-7,
+                                    get_residuals = FALSE) {
+  n <- length(cost); m <- length(row_lower)
+  have_dual <- !is.null(sol$col_dual) && length(sol$col_dual) == n
+  info <- list(num_primal_infeasibilities = 0L, max_primal_infeasibility = 0, sum_primal_infeasibilities = 0,
+               num_relative_primal_infeasibilities = 0L, max_relative_primal_infeasibility = 0,
+               num_dual_infeasibilities = 0L, max_dual_infeasibility = 0, sum_dual_infeasibilities = 0,
+               num_relative_dual_infeasibilities = 0L, max_relative_dual_infeasibility = 0,
+               num_primal_residual_errors = -1L, max_primal_residual_error = 0,
+               num_relative_primal_residual_errors = -1L, max_relative_primal_residual_error = 0,
+               num_dual_residual_errors = -1L, max_dual_residual_error = 0,
+               num_relative_dual_residual_errors = -1L, max_relative_dual_residual_error = 0,
+               num_complementarity_violations = -1L, primal_dual_objective_error = Inf)
+  if (get_residuals) {
+    info$num_primal_residual_errors <- info$num_relative_primal_residual_errors <- 0L
+    if (have_dual) info$num_dual_residual_errors <- info$num_relative_dual_residual_errors <- 0L
+  }
+  x <- sol$col_value; rv <- sol$row_value
+  cd <- if (have_dual) sol$col_dual else numeric(n)
+  rd <- if (have_dual) sol$row_dual else numeric(m)
+  if (get_residuals) {
+    pact <- .hs_row_values_quad(A, x)
+    if (have_dual) {
+      # productTransposeQuad, less the cost in HighsCDouble
+      dact <- vapply(seq_len(n), function(j) {
+        acc <- c(0, 0)
+        for (i in which(A[, j] != 0)) acc <- .cd_add(acc, rd[i] * A[i, j])
+        acc <- .cd_add(acc, -cost[j])
+        acc[1L] + acc[2L]
+      }, 0)
+    }
+  }
+  lower <- c(col_lower, row_lower); upper <- c(col_upper, row_upper)
+  value <- c(x, rv); dual <- c(cd, rd)
+  # getVariableKktFailures
+  var_kkt <- function(l, u, v, d) {
+    pinf <- if (v < l) l - v else if (v > u) v - u else 0
+    at <- if ((l - v)^2 <= ptol) "lo" else if ((v - u)^2 <= ptol) "up" else "no"
+    mid <- "no"
+    dinf <- 0
+    if (l < u) {
+      if (l <= -Inf && u >= Inf) dinf <- abs(d)
+      else if ((u - l)^2 > ptol) {
+        if (v < (l + u) * 0.5) { mid <- "lo"; dinf <- max(-d, 0) } else { mid <- "up"; dinf <- max(d, 0) }
+      }
+    }
+    list(pinf = pinf, dinf = dinf, at = at, mid = mid)
+  }
+  norm_b <- 0; norm_c <- 0
+  maxs <- list(cp = 0, cd = 0, rcp = 0, rcd = 0)
+  for (pass in 0:1) {
+    for (k in seq_len(n + m)) {
+      is_col <- k <= n
+      cst <- if (is_col) cost[k] else 0
+      if (pass == 0L && is_col && dual[k]^2 < dtol) norm_c <- max(abs(cst), norm_c)
+      r <- var_kkt(lower[k], upper[k], value[k], dual[k])
+      if (pass == 0L) {
+        if (r$at == "lo") norm_b <- max(abs(lower[k]), norm_b)
+        else if (r$at == "up") norm_b <- max(abs(upper[k]), norm_b)
+      } else {
+        if (r$pinf > 0) {
+          if (r$pinf > ptol) info$num_primal_infeasibilities <- info$num_primal_infeasibilities + 1L
+          info$max_primal_infeasibility <- max(info$max_primal_infeasibility, r$pinf)
+          info$sum_primal_infeasibilities <- info$sum_primal_infeasibilities + r$pinf
+          rb <- norm_b
+          if (r$at == "no") rb <- if (r$mid %in% c("no", "lo")) max(abs(lower[k]), rb) else max(abs(upper[k]), rb)
+          rel <- r$pinf / (1 + rb)
+          if (rel > ptol) info$num_relative_primal_infeasibilities <- info$num_relative_primal_infeasibilities + 1L
+          info$max_relative_primal_infeasibility <- max(info$max_relative_primal_infeasibility, rel)
+        }
+        if (have_dual && r$dinf > 0) {
+          if (r$dinf > dtol) info$num_dual_infeasibilities <- info$num_dual_infeasibilities + 1L
+          info$max_dual_infeasibility <- max(info$max_dual_infeasibility, r$dinf)
+          info$sum_dual_infeasibilities <- info$sum_dual_infeasibilities + r$dinf
+          rc <- norm_c
+          if (is_col && cst != 0 && dual[k]^2 >= dtol) rc <- max(abs(cst), rc)
+          rel <- r$dinf / (1 + rc)
+          if (rel > dtol) info$num_relative_dual_infeasibilities <- info$num_relative_dual_infeasibilities + 1L
+          info$max_relative_dual_infeasibility <- max(info$max_relative_dual_infeasibility, rel)
+        }
+        if (!is_col && get_residuals) {
+          e <- abs(pact[k - n] - rv[k - n]); rel <- e / (1 + norm_b)
+          if (e > rtol_p) info$num_primal_residual_errors <- info$num_primal_residual_errors + 1L
+          info$max_primal_residual_error <- max(info$max_primal_residual_error, e)
+          if (rel > rtol_p) info$num_relative_primal_residual_errors <- info$num_relative_primal_residual_errors + 1L
+          info$max_relative_primal_residual_error <- max(info$max_relative_primal_residual_error, rel)
+        }
+        if (is_col && get_residuals && have_dual) {
+          e <- abs(dact[k] + cd[k]); rel <- e / (1 + norm_c)
+          if (e > rtol_d) info$num_dual_residual_errors <- info$num_dual_residual_errors + 1L
+          info$max_dual_residual_error <- max(info$max_dual_residual_error, e)
+          if (rel > rtol_d) info$num_relative_dual_residual_errors <- info$num_relative_dual_residual_errors + 1L
+          info$max_relative_dual_residual_error <- max(info$max_relative_dual_residual_error, rel)
+        }
+      }
+    }
+  }
+  info$objective <- sum(cost * x)
+  if (have_dual) {
+    # getComplementarityViolations and computeDualObjectiveValue
+    free <- lower <= -Inf & upper >= Inf
+    midp <- (lower + upper) * 0.5
+    pres <- ifelse(free, 1, ifelse(value < midp, abs(lower - value), abs(upper - value)))
+    info$num_complementarity_violations <- sum(pres * abs(dual) > opttol, na.rm = TRUE)
+    bound <- ifelse(free, 1, ifelse(value < midp, lower, upper))
+    dobj <- 0
+    for (k in seq_len(n + m)) dobj <- dobj + bound[k] * dual[k]
+    info$dual_objective <- dobj
+    info$primal_dual_objective_error <- abs(info$objective - dobj) / (1 + abs(info$objective) + abs(dobj))
+  }
+  info
+}
+
+# Highs::lpKktCheck: with a basis the absolute infeasibilities, without one
+# the relative measures and residuals decide the primal and dual solution
+# status, and a relative violation of the tolerances above 100 turns
+# "Optimal" into "Unknown" (and one within 100 "Unknown" into "Optimal");
+# "UnboundedOrInfeasible" with a primal feasible point becomes "Unbounded"
+.hs_lp_kkt_check <- function(sol, cost, A, row_lower, row_upper, col_lower, col_upper, opts = list(),
+                             basis_valid = TRUE) {
+  if (is.null(sol$col_value) || length(sol$col_value) != length(cost) ||
+      length(sol$row_value) != length(row_lower)) return(sol)
+  ptol <- opts$ptol %||% 1e-7; dtol <- opts$dtol %||% 1e-7
+  rtol_p <- 1e-7; rtol_d <- 1e-7; opttol <- 1e-7
+  get_res <- !basis_valid
+  info <- .hs_get_lp_kkt_failures(sol, cost, A, row_lower, row_upper, col_lower, col_upper,
+                                  ptol, dtol, rtol_p, rtol_d, opttol, get_res)
+  st <- sol$status
+  if (st == "UnboundedOrInfeasible" && info$num_primal_infeasibilities == 0L &&
+      (!get_res || info$num_primal_residual_errors == 0L)) st <- "Unbounded"
+  vp <- 0; vd <- 0; vo <- 0
+  if (basis_valid) {
+    if (info$num_primal_infeasibilities > 0L) vp <- max(info$max_primal_infeasibility / ptol, vp)
+    if (info$num_dual_infeasibilities > 0L) vd <- max(info$max_dual_infeasibility / dtol, vd)
+    vo <- info$primal_dual_objective_error / opttol
+    pfeas <- info$num_primal_infeasibilities == 0L && vp <= 100
+  } else {
+    vp <- max(info$max_relative_primal_infeasibility / ptol, info$max_relative_primal_residual_error / rtol_p)
+    vd <- max(info$max_relative_dual_infeasibility / dtol, info$max_relative_dual_residual_error / rtol_d)
+    if (info$primal_dual_objective_error > opttol) vo <- info$primal_dual_objective_error / opttol
+    pfeas <- vp <= 100
+  }
+  v <- max(vo, vp, vd)
+  if (st == "Optimal" && v > 100) {
+    st <- "Unknown"
+  } else if (st == "Unknown" && v <= 100) {
+    st <- "Optimal"
+  }
+  sol$status <- st
+  sol$primal_feasible <- pfeas
+  sol$kkt <- info
+  sol
+}

@@ -94,3 +94,40 @@ test_that("a rank deficient refactor backtracks as HEkk::getNonsingularInverse d
   singular(6L)
   expect_false(.hs_reinvert(ek))
 })
+
+test_that("lpKktCheck changes the model status as HiGHS does", {
+  # min x1 + x2 s.t. x1 + x2 >= 1, x >= 0: optimal x = (1, 0), y = 1
+  cost <- c(1, 1); A <- matrix(c(1, 1), 1)
+  rl <- 1; ru <- Inf; cl <- c(0, 0); cu <- c(Inf, Inf)
+  ok <- list(status = "Optimal", col_value = c(1, 0), row_value = 1, col_dual = c(0, 0), row_dual = 1,
+             col_status = c("basic", "lower"))
+  chk <- function(s, ...) .hs_lp_kkt_check(s, cost, A, rl, ru, cl, cu, list(), ...)
+  r <- chk(ok)
+  expect_identical(r$status, "Optimal")
+  expect_true(r$primal_feasible)
+  expect_equal(r$kkt$primal_dual_objective_error, 0)
+  # a primal infeasibility of 1e-4 is 1000 times the tolerance
+  bad <- ok; bad$col_value <- c(1, -1e-4)
+  r <- chk(bad)
+  expect_identical(r$status, "Unknown")
+  expect_false(r$primal_feasible)
+  expect_identical(r$kkt$num_primal_infeasibilities, 1L)
+  # within 100 times the tolerances "Unknown" becomes "Optimal"
+  unk <- ok; unk$status <- "Unknown"; unk$col_value <- c(1, -5e-6)
+  expect_identical(chk(unk)$status, "Optimal")
+  # a primal feasible point turns UnboundedOrInfeasible into Unbounded
+  ub <- ok; ub$status <- "UnboundedOrInfeasible"
+  expect_identical(chk(ub)$status, "Unbounded")
+  ub$col_value <- c(1, -1)
+  expect_identical(chk(ub)$status, "UnboundedOrInfeasible")
+  # without a basis the residuals count: a row value off by 1e-3
+  nb <- ok; nb$row_value <- 1 + 1e-3
+  r <- chk(nb, basis_valid = FALSE)
+  expect_identical(r$kkt$num_relative_primal_residual_errors, 1L)
+  expect_identical(r$status, "Unknown")
+  # the dual objective: a dual error moves it from the primal one
+  du <- ok; du$row_dual <- 1.5
+  r <- chk(du)
+  expect_equal(r$kkt$dual_objective, 1.5)
+  expect_equal(r$kkt$primal_dual_objective_error, 0.5 / 3.5)
+})

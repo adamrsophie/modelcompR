@@ -58,8 +58,12 @@
   info <- new.env(parent = emptyenv())
   info$ipm_nit <- 0L
   info$crossover_nit <- 0L
-  done <- function(sol) {
+  done <- function(sol, check = TRUE) {
     force(sol)  # the solve must run before the counts are read
+    # lpKktCheck on the original LP (relative measures without a basis)
+    if (check) sol <- .hs_lp_kkt_check(sol, cost, A, row_lower, row_upper, col_lower, col_upper, opts,
+                                       basis_valid = !identical(sol$basis_valid, FALSE) &&
+                                         !all(sol$col_status %in% ""))
     sol$ipm_nit <- info$ipm_nit
     sol$crossover_nit <- info$crossover_nit
     sol$simplex_nit <- sol$nit %||% 0L
@@ -96,7 +100,7 @@
     red <- .hs_ipm_solve_lp(lp$cost, lp$A, lp$row_lower, lp$row_upper, lp$col_lower, lp$col_upper,
                             opts, info)
     if (!red$status %in% c("Optimal", "Unknown"))
-      return(done(list(status = red$status, nit = red$nit, primal_feasible = FALSE)))
+      return(done(list(status = red$status, nit = red$nit, primal_feasible = FALSE), check = FALSE))
     if (is.null(red$col_status)) red$col_status <- character(length(red$col_value))
     if (is.null(red$row_status)) red$row_status <- character(length(red$row_value))
   }

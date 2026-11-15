@@ -16,5 +16,11 @@
   each name.
 * Where an upstream method is biased or wrong, the port follows the
   correct method and documents the difference: for example the randomized
-  quasi Monte Carlo designs and corrected estimators of `gsa()`, and complex
-  states in the Radau and Gauss-Legendre methods.
+  quasi Monte Carlo designs and corrected estimators of `gsa()`, the Ito
+  correction of the SDE adjoints, and complex states in the Radau and
+  Gauss-Legendre methods.
+* Beyond the reference packages, the sensitivity methods differentiate
+  events in mass matrix problems and SDEs, `DAEProblem`s with events,
+  losses that read `sol$t`, interpolate `sol(t)` or read parameters before
+  an event changed them, and decreasing time spans with events and
+  checkpointing.
