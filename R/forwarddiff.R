@@ -134,8 +134,36 @@ as.double.fdual <- function(x, ...) {
 #' @export
 is.na.fdual <- function(x) is.na(.ad_primal(x))
 
+# The order of the primal values, for trimmed means and medians
+.ad_sorted <- function(x) x[order(.ad_primal(x))]
+
 #' @export
-mean.fdual <- function(x, ...) sum(x) / length(x)
+mean.fdual <- function(x, trim = 0, na.rm = FALSE, ...) {
+  if (na.rm) x <- x[!is.na(x)]
+  n <- length(x)
+  if (anyNA(.ad_primal(x))) return(x[which(is.na(x))[1L]])
+  if (n == 0L) return(NaN)
+  if (trim > 0 && n) {
+    if (trim >= 0.5) return(median.fdual(x))
+    lo <- floor(n * trim) + 1L
+    hi <- n + 1L - lo
+    x <- .ad_sorted(x)[lo:hi]
+    n <- length(x)
+  }
+  sum(x) / n
+}
+
+#' @export
+#' @importFrom stats median
+median.fdual <- function(x, na.rm = FALSE, ...) {
+  if (na.rm) x <- x[!is.na(x)]
+  if (anyNA(.ad_primal(x))) return(x[which(is.na(x))[1L]])
+  n <- length(x)
+  if (n == 0L) return(NA_real_)
+  x <- .ad_sorted(x)
+  h <- (n + 1L) %/% 2L
+  if (n %% 2L == 1L) x[h] else (x[h] + x[h + 1L]) / 2
+}
 
 #' @export
 print.fdual <- function(x, ...) {
@@ -334,7 +362,14 @@ Math.fdual <- function(x, ...) {
 Summary.fdual <- function(..., na.rm = FALSE) {
   g <- .Generic
   x <- .ad_c(list(...))
+  if (na.rm) x <- x[!is.na(x)]
   n <- length(x)
+  # a missing value propagates as in base R; ties take the first extreme
+  if (g %in% c("max", "min", "range") && anyNA(.ad_primal(x))) {
+    na <- x[which(is.na(x))[1L]]
+    return(if (g == "range") .ad_c(list(na, na)) else na)
+  }
+  if (n == 0L && g %in% c("max", "min", "range")) return(get(g, baseenv())(numeric()))
   switch(g,
     sum = {
       if (n == 0L) return(0)
@@ -487,12 +522,16 @@ Summary.fdual <- function(..., na.rm = FALSE) {
   # dual numbers are real; complex states fall back to finite differences
   if (is.complex(x)) return(NULL)
   x <- as.numeric(x)
-  r <- tryCatch(suppressWarnings(.ad_jacobian(function(z) {
+  # a warning on dual inputs means some base R function did not see the dual
+  # numbers (c(0, x) drops them, mean() of a list is NA): the result is not
+  # trusted and the caller falls back to finite differences
+  r <- tryCatch(withCallingHandlers(.ad_jacobian(function(z) {
     y <- f(z)
     if (!inherits(y, "fdual") && !(is.numeric(y) && !is.object(y))) stop("not a dual result")
     y
-  }, x)), error = function(e) NULL)
-  if (is.null(r) || !is.matrix(r$jacobian) || ncol(r$jacobian) != length(x) || anyNA(r$jacobian)) return(NULL)
+  }, x), warning = function(w) stop("warning on dual numbers")), error = function(e) NULL)
+  if (is.null(r) || !is.matrix(r$jacobian) || ncol(r$jacobian) != length(x) || anyNA(r$jacobian) ||
+      anyNA(r$value)) return(NULL)
   r$chunks <- as.integer(ceiling(length(x) / max(1L, .ad_chunksize(length(x)))))
   r
 }

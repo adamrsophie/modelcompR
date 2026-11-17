@@ -218,7 +218,21 @@ solve.OptimizationProblem <- function(a, b, ...) {
   b <- if (missing(b)) NULL else b
   if (!is.null(b) && !inherits(b, "OptimizationAlgorithm"))
     stop(IncompatibleOptimizerError(paste0("not an optimization algorithm: ", class(b)[1L])))
-  if (inherits(a$f, "MultiObjectiveOptimizationFunction")) return(.opt_solve_core(a, b, opts))
+  if (inherits(a$f, "MultiObjectiveOptimizationFunction")) {
+    if (!identical(unclass(a$sense %||% MinSense), "MaxSense")) return(.opt_solve_core(a, b, opts))
+    # maximize every objective: minimize their negatives and report the
+    # objectives with their signs
+    w <- a
+    fn <- a$f
+    w$f$f <- function(x, p) -fn$f(x, p)
+    if (is.function(fn$jac)) w$f$jac <- function(x, p) -fn$jac(x, p)
+    if (is.function(fn$hess)) w$f$hess <- function(x, p) {
+      h <- fn$hess(x, p)
+      if (is.list(h)) lapply(h, function(z) -z) else -h
+    }
+    sol <- .opt_solve_core(w, b, opts)
+    return(.opt_set_fields(sol, objective = -.sol_env(sol)$objective, prob = a))
+  }
   # the objective sense, the callback and the statistics (OptimizationBase's
   # OptimizationCache and __solve): wrap the functions of the problem
   start <- proc.time()[["elapsed"]]
@@ -302,6 +316,11 @@ solve.OptimizationProblem <- function(a, b, ...) {
     stop(IncompatibleOptimizerError(paste0("The algorithm ", class(b)[1L], " is a multiobjective optimizer and ",
                                            "needs a problem built from a `MultiObjectiveOptimizationFunction`; use ",
                                            "a single objective algorithm for this problem.")))
+  # integer and binary unknowns are checked before any dispatch, so a
+  # continuous method never returns a point that is not integral
+  if (any(a$int %||% FALSE) && !is.null(b) && !inherits(b, "BranchAndBound") && !isTRUE(b$integer))
+    stop("the problem has integer or binary unknowns, which ", b$name, "() does not handle; use ",
+         "BranchAndBound(relaxation = ", b$name, "())", call. = FALSE)
   hook <- if (is.null(b)) NULL else .opt_family_hook(b)
   if (!is.null(hook)) return(hook(a, b, opts))
   # algorithms of the wrapper packages (OptimizationSciPy, OptimizationPRIMA,
@@ -755,8 +774,7 @@ print.MultiObjectiveOptimizationSolution <- function(x, ...) {
   scale[!(scale > 0)] <- 1
   # weights on the simplex lattice with n points along each edge
   steps <- max(alg$points, 2L) - 1L
-  grid <- as.matrix(expand.grid(rep(list(0:steps), k - 1L)))
-  grid <- grid[rowSums(grid) <= steps, , drop = FALSE]
+  grid <- .simplex_compositions(steps, k - 1L)
   W <- cbind(grid, steps - rowSums(grid)) / steps
   pts <- list(); start <- x0
   for (r in seq_len(nrow(W))) {
@@ -773,4 +791,19 @@ print.MultiObjectiveOptimizationSolution <- function(x, ...) {
   keep <- keep[order(Fm[keep, 1L])]
   list(X = X[keep, , drop = FALSE], F = Fm[keep, , drop = FALSE], retcode = "Success",
        stats = list(nsolves = nrow(W) + k))
+}
+
+# The points of {0, ..., steps}^m with sum at most steps, in the row order
+# of expand.grid (the first column fastest), generated directly instead of
+# filtering the (steps + 1)^m grid
+.simplex_compositions <- function(steps, m) {
+  if (m <= 0L) return(matrix(0L, 1L, 0L))
+  if (m == 1L) return(matrix(0:steps, ncol = 1L))
+  out <- lapply(0:steps, function(v) {
+    sub <- .simplex_compositions(steps - v, m - 1L)
+    cbind(sub, v)
+  })
+  M <- do.call(rbind, out)
+  dimnames(M) <- NULL
+  M
 }

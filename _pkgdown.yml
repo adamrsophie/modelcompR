@@ -102,6 +102,8 @@ reference:
   - mtkcompile_options
   - no_if_lift
   - register_symbolic
+  - arithmetic_mode
+  - cache_info
   - respecialize
   - sorted_incidence_matrix
   - substitute_component

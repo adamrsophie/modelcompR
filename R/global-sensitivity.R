@@ -274,6 +274,14 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   list(v = as.numeric(y), size = NULL)
 }
 
+# .gsa_eval over the designs block(1), ..., block(nb), one at a time
+.gsa_eval_blocks <- function(f, nb, block) {
+  evs <- lapply(seq_len(nb), function(i) .gsa_eval(f, block(i), FALSE))
+  multi <- evs[[1L]]$multi
+  Y <- if (multi) do.call(cbind, lapply(evs, `[[`, "Y")) else unlist(lapply(evs, `[[`, "Y"))
+  list(Y = Y, multi = multi, y_size = evs[[1L]]$y_size)
+}
+
 # The outputs of f on the columns of X: a vector (one output) or a matrix
 # with one column per parameter set; y_size is the shape of a solution
 .gsa_eval <- function(f, X, batch) {
@@ -317,11 +325,14 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   nboot <- method$nboot
   n <- ncol(A) %/% nboot
   so <- 2L %in% method$order
-  pts <- do.call(cbind, lapply(seq_len(nboot), function(i) {
+  block <- function(i) {
     cols <- (n * (i - 1L) + 1L):(n * i)
     .gsa_fuse(A[, cols, drop = FALSE], B[, cols, drop = FALSE], so)
-  }))
-  ev <- .gsa_eval(f, pts, batch)
+  }
+  # a batch function gets the whole design at once; otherwise the design is
+  # built and evaluated block by block, so only the outputs are kept
+  ev <- if (batch) .gsa_eval(f, do.call(cbind, lapply(seq_len(nboot), block)), batch) else
+    .gsa_eval_blocks(f, nboot, block)
   .gsa_sobol_analysis(method, ev$Y, d, n, Ei_estimator, ev$y_size, ev$multi)
 }
 
@@ -470,27 +481,36 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 # ---------------------------------------------------------------------------
 # Regression
 
-# pinv of Julia: singular values below eps * min(m, n) * sigma_max are dropped
-.gsa_pinv <- function(A) {
-  s <- svd(A)
-  tol <- .Machine$double.eps * min(dim(A)) * max(s$d)
-  keep <- s$d > tol
-  s$v[, keep, drop = FALSE] %*% (t(s$u[, keep, drop = FALSE]) / s$d[keep])
-}
-
 .gsa_rowsd <- function(M) apply(M, 1L, stats::sd)
 
+# Standardized regression coefficients of a fit with an intercept, so they
+# do not change when inputs or outputs are shifted (GlobalSensitivity fits
+# through the origin). Coefficients that the design does not determine are NA.
 .gsa_reg_coefs <- function(X, Y) {
-  beta <- qr.coef(qr(t(X)), t(Y))
+  beta <- qr.coef(qr(cbind(1, t(X))), t(Y))[-1L, , drop = FALSE]
   t(beta * .gsa_rowsd(X) / rep(.gsa_rowsd(Y), each = nrow(X)))
 }
 .gsa_reg_corr <- function(X, Y) t(stats::cov(t(X), t(Y)) / outer(.gsa_rowsd(X), .gsa_rowsd(Y)))
+# Partial correlations as correlations of residuals: input i and each output
+# are regressed on the other inputs with an intercept. GlobalSensitivity's
+# pseudoinverse of a singular correlation matrix is not a partial
+# correlation (one input with Y = 100 + X gives -1); a residual with no
+# variance gives NA.
 .gsa_reg_partial <- function(X, Y) {
-  XY <- rbind(X, Y)
-  sdv <- .gsa_rowsd(XY)
-  prec <- .gsa_pinv(stats::cov(t(XY)) / outer(sdv, sdv))
-  pcc <- -prec / sqrt(outer(diag(prec), diag(prec)))
-  t(pcc[seq_len(nrow(X)), nrow(X) + seq_len(nrow(Y)), drop = FALSE])
+  nx <- nrow(X); N <- ncol(X)
+  out <- matrix(NA_real_, nrow(Y), nx)
+  tol <- function(v, ref) sum(v^2) <= (1e-12 * max(1, sum((ref - mean(ref))^2)))
+  for (i in seq_len(nx)) {
+    Z <- qr(cbind(rep(1, N), t(X[-i, , drop = FALSE])))
+    rx <- qr.resid(Z, X[i, ])
+    if (tol(rx, X[i, ])) next
+    for (j in seq_len(nrow(Y))) {
+      ry <- qr.resid(Z, Y[j, ])
+      if (tol(ry, Y[j, ])) next
+      out[j, i] <- sum(rx * ry) / sqrt(sum(rx^2) * sum(ry^2))
+    }
+  }
+  out
 }
 
 .gsa_regression <- function(X, Y, method) {
@@ -847,7 +867,10 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     r <- matrix(.qmc_int(rng, method$nboot * n, 1, n), method$nboot, n)
     bd <- vapply(seq_len(method$nboot), function(i) .gsa_calc_delta(Xi[r[i, ]], Y[r[i, ]], Ygrid, cuts), 0)
     adj[fi] <- 2 * deltas[fi] - mean(bd)
-    band <- z * stats::sd(bd) / sqrt(method$nboot)
+    # the normal bootstrap interval: the spread of the bootstrap statistics
+    # (GlobalSensitivity divides it by sqrt(nboot), which is the error of
+    # their mean, not of the estimate)
+    band <- z * stats::sd(bd)
     lo[fi] <- adj[fi] - band; hi[fi] <- adj[fi] + band
   }
   structure(list(deltas = deltas, adjusted_deltas = adj, adjusted_deltas_low = lo, adjusted_deltas_hi = hi),
@@ -883,6 +906,11 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   dim <- length(D)
   n_var <- method$n_var; n_outer <- method$n_outer; n_inner <- method$n_inner
   if (method$n_perms == -1L) {
+    # the exact version evaluates dim! permutations
+    work <- factorial(dim) * (dim - 1) * n_outer * n_inner
+    if (work > 5e7)
+      stop("the exact Shapley effects of ", dim, " inputs need ", format(work, big.mark = ","),
+           " evaluations; set `n_perms` for the random version", call. = FALSE)
     message("Since `n_perms` wasn't set the exact version of Shapley will be used")
     perms <- .gsa_permutations(seq_len(dim))
   } else {
@@ -891,8 +919,10 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   }
   m <- length(perms)
   A <- .dist_rand_mat(D, n_var)
-  Bm <- matrix(0, dim, m * (dim - 1L) * n_outer * n_inner)
-  for (ip in seq_len(m)) {
+  # the samples of each permutation; without batch they are evaluated
+  # permutation by permutation, so the design is never stored whole
+  perm_block <- function(ip) {
+    Bm <- matrix(0, dim, (dim - 1L) * n_outer * n_inner)
     perm <- perms[[ip]]
     srt <- order(perm)
     for (j in seq_len(dim - 1L)) {
@@ -903,13 +933,14 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
         cur <- comp[, l]
         xj <- .gsa_cond_sampling(D, n_inner, plus, minus, cur)
         xx <- rbind(xj, matrix(cur, length(cur), ncol(xj)))
-        ind <- (ip - 1L) * (dim - 1L) * n_outer * n_inner + (j - 1L) * n_outer * n_inner + (l - 1L) * n_inner + 1L
+        ind <- (j - 1L) * n_outer * n_inner + (l - 1L) * n_inner + 1L
         Bm[, ind:(ind + n_inner - 1L)] <- xx[srt, , drop = FALSE]
       }
     }
+    Bm
   }
-  X <- cbind(A, Bm)
-  ev <- .gsa_eval(f, X, batch)
+  ev <- if (batch) .gsa_eval(f, cbind(A, do.call(cbind, lapply(seq_len(m), perm_block))), batch) else
+    .gsa_eval_blocks(f, m + 1L, function(i) if (i == 1L) A else perm_block(i - 1L))
   Ym <- if (ev$multi) ev$Y else matrix(ev$Y, 1L)
   nout <- nrow(Ym)
   Sh <- Sh2 <- matrix(0, nout, dim)

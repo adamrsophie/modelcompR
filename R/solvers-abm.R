@@ -34,6 +34,7 @@
 # which a NaN shows) go to the exact .pw_fma() (rounding to odd,
 # R/optimization-prima-powell.R).
 .fma <- function(a, b, c) {
+  if (.arith$native) return(a * b + c)
   if (is.complex(a) || is.complex(b) || is.complex(c)) return(.fma_complex(a, b, c))
   p <- a * b
   ta <- a * 134217729; ah <- ta - (ta - a); al <- a - ah

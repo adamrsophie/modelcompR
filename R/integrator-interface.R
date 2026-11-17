@@ -224,6 +224,8 @@ set_proposed_dt <- function(integ, dt) {
   I <- .integ_I(integ)
   # inside a callback the driver takes the next step size from dtnew
   I$dt <- I$dtnew <- abs(.as_num(dt))
+  # an explicit request wins over the relaxation after a continuous event
+  I$dt_user <- TRUE
   invisible(integ)
 }
 

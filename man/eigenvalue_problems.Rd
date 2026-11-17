@@ -29,7 +29,12 @@ KrylovKitEigen(krylovdim = 30L)
 
 JacobiDavidsonJL(krylovdim = 30L)
 
-EigenvalueSolution(values, vectors = NULL, retcode = "Success")
+EigenvalueSolution(
+  values,
+  vectors = NULL,
+  retcode = "Success",
+  residuals = NULL
+)
 }
 \arguments{
 \item{A, B}{Matrices.}
@@ -42,7 +47,7 @@ EigenvalueSolution(values, vectors = NULL, retcode = "Success")
 
 \item{krylovdim}{Dimension of the Krylov space of the Arnoldi iteration.}
 
-\item{values, vectors, retcode}{Fields of an \code{EigenvalueSolution}.}
+\item{values, vectors, retcode, residuals}{Fields of an \code{EigenvalueSolution} (\code{residuals}: the residual norm of each pair of an Arnoldi solve).}
 }
 \value{
 A problem, an algorithm, or the targets.

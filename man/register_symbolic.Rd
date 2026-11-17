@@ -12,7 +12,9 @@ register_symbolic(name, fn, derivatives = NULL)
 \item{fn}{An R function of numeric arguments.}
 
 \item{derivatives}{Optional list of R functions, the partial derivatives
-with respect to each argument, taking the same arguments as \code{fn}.}
+with respect to each argument, taking the same arguments as \code{fn}; or
+one function \verb{function(i, ...)} of the argument index \code{i} followed by
+the arguments of \code{fn} (for functions of any number of arguments).}
 }
 \value{
 A symbolic function.

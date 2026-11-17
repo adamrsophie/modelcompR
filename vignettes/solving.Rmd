@@ -368,6 +368,20 @@ ens2 <- EnsembleProblem(decay,
 unlist(solve(ens2, Tsit5(), trajectories = 5, seed = 1)$u)
 ```
 
+With `rng_streams = "trajectory"` trajectory `i` draws from the `i`th
+L'Ecuyer-CMRG stream of the seed, so the result is the same in batches, on
+several cores or serially. A trajectory that throws an error stops the
+ensemble, unless `retries` runs it again or `on_error = "collect"` keeps the
+error in its place; `retcodes` and `failures` report each trajectory, and
+`checkpoint` saves each batch so that an interrupted ensemble resumes.
+
+```{r}
+e1 <- solve(ens2, Tsit5(), trajectories = 6, seed = 1, rng_streams = "trajectory")
+e2 <- solve(ens2, Tsit5(), trajectories = 6, seed = 1, rng_streams = "trajectory", batch_size = 2)
+identical(unlist(e1$u), unlist(e2$u))
+c(e1$failures, e1$backend)
+```
+
 ## The solver catalog
 
 The algorithms are grouped as in OrdinaryDiffEq.jl. Each constructor
@@ -763,6 +777,54 @@ Y <- rs(ts)
 matplot(ts, Y * rep(c(1, 1e4, 1), each = length(ts)), type = "l", log = "x", lty = 1,
         xlab = "t", ylab = "concentration (y2 scaled by 1e4)")
 legend("right", legend = c("y1", "1e4 y2", "y3"), col = 1:3, lty = 1, bty = "n")
+```
+
+## Large problems: sparse Jacobians, reduced storage, native arithmetic
+
+A Jacobian returned as a sparse matrix of the Matrix package keeps the
+Newton matrices of the implicit and Rosenbrock methods sparse; they are
+factorized by a sparse LU. Without an analytic Jacobian, `AutoSparse()`
+with the `sparsity` pattern of the `ODEFunction` differences the columns of
+each color of a column coloring together.
+
+```{r sparse-jacobian}
+n <- 300
+L <- Matrix::bandSparse(n, k = -1:1, diagonals = list(rep(1, n - 1), rep(-2, n), rep(1, n - 1))) * 100
+f <- function(u, p, t) as.numeric(L %*% u) - u^3
+u0 <- sin(pi * seq_len(n) / (n + 1))
+s1 <- solve(ODEProblem(ODEFunction(f, jac = function(u, p, t) L - Matrix::Diagonal(n, 3 * u^2)), u0, c(0, 0.2)),
+            Rodas5P())
+s2 <- solve(ODEProblem(ODEFunction(f, sparsity = L), u0, c(0, 0.2)), Rodas5P(autodiff = AutoSparse(AutoFiniteDiff())))
+max(abs(tail(s1$u, 1)[[1]] - tail(s2$u, 1)[[1]]))
+```
+
+`save_idxs` selects the saved components; the solution still stores every
+state, so symbolic indexing of any variable works. With
+`save_idxs_storage = "reduced"` only the selected components are stored, as
+`save_idxs` does in Julia, and the solution interpolates linearly between
+them.
+
+```{r reduced-storage}
+big <- ODEProblem(function(u, p, t) -u, as.numeric(1:200), c(0, 1))
+full <- solve(big, Tsit5(), saveat = 0.01, save_idxs = 1)
+small <- solve(big, Tsit5(), saveat = 0.01, save_idxs = 1, save_idxs_storage = "reduced")
+# the full store answers for any state, the reduced one only for the saved
+full[2][1:3]
+tryCatch(small[2], error = conditionMessage)
+```
+
+By default the solvers replay the floating point operations of the Julia
+packages, so the results match Julia bit for bit. `arithmetic_mode("native")`
+uses R's arithmetic and LAPACK for the same algorithms and tolerances: the
+results differ by rounding, and the solves are faster.
+
+```{r native-arithmetic}
+osc <- ODEProblem(function(u, p, t) c(u[2], -u[1]), c(1, 0), c(0, 30))
+old <- arithmetic_mode("native")
+sn <- solve(osc, Tsit5(), reltol = 1e-8, abstol = 1e-10)
+arithmetic_mode(old)
+sr <- solve(osc, Tsit5(), reltol = 1e-8, abstol = 1e-10)
+c(native = tail(sn$u, 1)[[1]][1] - cos(30), reference = tail(sr$u, 1)[[1]][1] - cos(30))
 ```
 
 ## Julia equivalents

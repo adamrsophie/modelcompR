@@ -438,7 +438,9 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   if (is.null(P)) return(function(x) x)
   if (inherits(P, "InvPreconditioner")) return(function(x) as.numeric(P$P %*% x))
   if (is.function(P)) return(P)
-  function(x) as.numeric(solve(P, x))
+  # a matrix preconditioner is factorized once per solve
+  F <- qr(as.matrix(P))
+  function(x) as.numeric(qr.coef(F, x))
 }
 
 # the default algorithm (defaultalg of LinearSolve)
@@ -532,21 +534,31 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     }
     solved <- nrm(r) <= tol
   } else if (method %in% c("gmres", "fgmres", "minres")) {
-    # restarted GMRES with right preconditioning (MINRES, for symmetric A,
-    # reaches the same minimal residual iterate)
+    # restarted GMRES on Pl A Pr y = Pl b, x = Pr y (MINRES, for symmetric
+    # A, reaches the same minimal residual iterate); the Arnoldi process
+    # minimizes the left preconditioned residual and each restart checks
+    # the residual of the original system
     restart <- opts$restart %||% min(n, 50L)
     repeat {
-      r <- b - mv(x)
-      beta <- nrm(r)
-      solved <- beta <= tol
+      r0 <- b - mv(x)
+      solved <- nrm(r0) <= tol
       if (solved || it >= maxit) break
+      r <- Pl(r0)
+      beta <- nrm(r)
+      if (beta == 0) break
       V <- matrix(0, n, restart + 1L); H <- matrix(0, restart + 1L, restart)
       Z <- matrix(0, n, restart)
       V[, 1L] <- r / beta
       k_used <- 0L
+      # the least squares problem min |beta e1 - H y| is kept triangular by
+      # Givens rotations applied as the columns of H arrive; |g[k + 1]| is
+      # its residual
+      cs <- sn <- numeric(restart)
+      g <- c(beta, numeric(restart))
+      R <- matrix(0, restart, restart)
       for (k in seq_len(restart)) {
         Z[, k] <- Pr(V[, k])
-        w <- mv(Z[, k])
+        w <- Pl(mv(Z[, k]))
         for (j in seq_len(k)) {
           H[j, k] <- sum(w * V[, j])
           w <- w - H[j, k] * V[, j]
@@ -554,15 +566,29 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
         H[k + 1L, k] <- nrm(w)
         k_used <- k
         it <- it + 1L
-        e1 <- c(beta, numeric(k))
-        y <- qr.coef(qr(H[seq_len(k + 1L), seq_len(k), drop = FALSE]), e1)
-        res <- nrm(e1 - H[seq_len(k + 1L), seq_len(k), drop = FALSE] %*% y)
+        h <- H[seq_len(k + 1L), k]
+        for (j in seq_len(k - 1L)) {
+          tmp <- cs[j] * h[j] + sn[j] * h[j + 1L]
+          h[j + 1L] <- -sn[j] * h[j] + cs[j] * h[j + 1L]
+          h[j] <- tmp
+        }
+        den <- sqrt(h[k]^2 + h[k + 1L]^2)
+        if (den == 0) { cs[k] <- 1; sn[k] <- 0 } else { cs[k] <- h[k] / den; sn[k] <- h[k + 1L] / den }
+        R[seq_len(k), k] <- c(h[seq_len(k - 1L)], cs[k] * h[k] + sn[k] * h[k + 1L])
+        g[k + 1L] <- -sn[k] * g[k]
+        g[k] <- cs[k] * g[k]
+        res <- abs(g[k + 1L])
         if (H[k + 1L, k] < 1e-14 || res <= tol || it >= maxit) break
         V[, k + 1L] <- w / H[k + 1L, k]
       }
-      e1 <- c(beta, numeric(k_used))
-      y <- qr.coef(qr(H[seq_len(k_used + 1L), seq_len(k_used), drop = FALSE]), e1)
-      y[is.na(y)] <- 0
+      Rk <- R[seq_len(k_used), seq_len(k_used), drop = FALSE]
+      dg <- abs(diag(Rk))
+      y <- if (all(dg > 0)) backsolve(Rk, g[seq_len(k_used)]) else {
+        e1 <- c(beta, numeric(k_used))
+        yy <- qr.coef(qr(H[seq_len(k_used + 1L), seq_len(k_used), drop = FALSE]), e1)
+        yy[is.na(yy)] <- 0
+        yy
+      }
       x <- x + as.numeric(Z[, seq_len(k_used), drop = FALSE] %*% y)
     }
   } else if (method == "lsmr") {
@@ -599,12 +625,30 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
 .lin_solve <- function(prob, alg, opts, cache = new.env(parent = emptyenv())) {
   A <- prob$A; b <- as.numeric(prob$b)
   if (inherits(A, "LowRankUpdatedMatrix")) {
-    # Woodbury: (A + U C V')^-1 b
-    Ainv_b <- solve(A$A, b); Ainv_U <- solve(A$A, A$U)
-    cap <- solve(A$C) + crossprod(A$V, Ainv_U)
-    u <- as.numeric(Ainv_b - Ainv_U %*% solve(cap, crossprod(A$V, Ainv_b)))
-    full <- A$A + A$U %*% A$C %*% t(A$V)
-    return(list(u = u, resid = as.numeric(full %*% u - b), iters = 1L, alg = alg %||% LUFactorization()))
+    # Woodbury without the inverse of C: with z = A^-1 b and W = A^-1 U,
+    # x = z - W (I + C V' W)^-1 C V' z, from one factorization of A; the
+    # residual uses the low rank form, not the full matrix
+    F <- qr(A$A)
+    z <- qr.coef(F, b); W <- qr.coef(F, A$U)
+    C <- as.matrix(A$C)
+    cap <- diag(nrow(C)) + C %*% crossprod(A$V, W)
+    u <- tryCatch(as.numeric(z - W %*% solve(cap, C %*% crossprod(A$V, z))),
+                  error = function(e) rep(NaN, length(b)))
+    r <- if (all(is.finite(u))) as.numeric(A$A %*% u + A$U %*% (C %*% crossprod(A$V, u)) - b) else rep(NaN, length(b))
+    return(list(u = u, resid = r, iters = 1L, alg = alg %||% LUFactorization()))
+  }
+  # Matrix package matrices: a sparse LU or Cholesky factorization of the
+  # Matrix package by default and for the sparse direct solvers, a dense
+  # matrix for the other methods
+  if (inherits(A, "Matrix")) {
+    sparse_algs <- c("KLUFactorization", "PureKLUFactorization", "UMFPACKFactorization",
+                     "PureUMFPACKFactorization", "SparspakFactorization", "CHOLMODFactorization")
+    if (is.null(alg) || alg$name %in% sparse_algs) {
+      u <- tryCatch(as.numeric(Matrix::solve(A, b)), error = function(e) rep(NaN, length(b)))
+      r <- if (all(is.finite(u))) as.numeric(A %*% u - b) else rep(NaN, length(b))
+      return(list(u = u, resid = r, iters = 1L, alg = alg %||% KLUFactorization()))
+    }
+    A <- as.matrix(A)
   }
   # SciMLOpFactorization (R/solvers-amf.R) factorizes the operator part by part
   if (identical(alg$method, "sciml_op")) return(.amf_lin_solve(A, b, alg, cache))
@@ -642,7 +686,9 @@ init.LinearProblem <- function(prob, alg = NULL, ...) {
 
 .lin_solution <- function(prob, r) {
   ok <- all(is.finite(r$u)) && max(abs(r$resid), 0) <= max(1e-6, 1e-8 * max(1, max(abs(prob$b), 0)))
-  if (!is.matrix(prob$A) || nrow(prob$A) > ncol(prob$A)) ok <- all(is.finite(r$u))
+  # least squares problems have a residual; a function operator has none
+  if (is.function(prob$A) || (length(dim(prob$A)) == 2L && nrow(prob$A) > ncol(prob$A)) ||
+      !length(r$resid)) ok <- all(is.finite(r$u))
   if (!is.null(prob$sys)) prob$u0 <- stats::setNames(r$u, .nl_names(unknowns(prob$sys)))
   # Krylov methods report their own convergence
   rc <- r$retcode %||% (if (ok) "Success" else "Failure")
@@ -676,7 +722,7 @@ print.LinearCache <- function(x, ...) {
 #' @param nev Number of eigenvalues.
 #' @param which The `EigenvalueTarget`.
 #' @param krylovdim Dimension of the Krylov space of the Arnoldi iteration.
-#' @param values,vectors,retcode Fields of an `EigenvalueSolution`.
+#' @param values,vectors,retcode,residuals Fields of an `EigenvalueSolution` (`residuals`: the residual norm of each pair of an Arnoldi solve).
 #' @param ... Options.
 #' @return A problem, an algorithm, or the targets.
 #' @examples
@@ -718,8 +764,9 @@ JacobiDavidsonJL <- function(krylovdim = 30L) ArnoldiMethodJL(krylovdim)
 
 #' @rdname eigenvalue_problems
 #' @export
-EigenvalueSolution <- function(values, vectors = NULL, retcode = "Success")
-  structure(list(values = values, vectors = vectors, retcode = retcode), class = "EigenvalueSolution")
+EigenvalueSolution <- function(values, vectors = NULL, retcode = "Success", residuals = NULL)
+  structure(list(values = values, vectors = vectors, retcode = retcode, residuals = residuals),
+            class = "EigenvalueSolution")
 
 .eig_order <- function(v, which) {
   key <- switch(which, LM = -Mod(v), SM = Mod(v), LR = -Re(v), SR = Re(v), LI = -Im(v), SI = Im(v), -Mod(v))
@@ -728,38 +775,68 @@ EigenvalueSolution <- function(values, vectors = NULL, retcode = "Success")
 
 #' @export
 solve.EigenvalueProblem <- function(a, b = NULL, ...) {
+  opts <- list(...)
   A <- as.matrix(a$A)
   M <- if (is.null(a$B)) A else solve(as.matrix(a$B), A)
   n <- nrow(M)
   if (inherits(b, "ArnoldiMethodJL") && n > 2L * (b$krylovdim %||% 30L)) {
-    r <- .arnoldi(M, a$nev, a$which, b$krylovdim)
-    return(EigenvalueSolution(r$values, r$vectors))
+    r <- .arnoldi(M, a$nev, a$which, b$krylovdim, tol = opts$tol %||% 1e-10,
+                  maxrestarts = opts$maxiters %||% 50L)
+    return(EigenvalueSolution(r$values, r$vectors, r$retcode, r$residuals))
   }
   e <- eigen(M)
   o <- .eig_order(e$values, a$which)[seq_len(min(a$nev, n))]
   EigenvalueSolution(e$values[o], e$vectors[, o, drop = FALSE])
 }
 
-# Arnoldi iteration with explicit restarts on the wanted Ritz vectors
-.arnoldi <- function(M, nev, which, m) {
+# Arnoldi iteration with explicit restarts on the wanted Ritz vectors. The
+# smallest magnitude eigenvalues are found by shift and invert (the largest
+# of M^-1, from one factorization). The retcode is Success only when the
+# residual |M x - lambda x| / |x| of every returned pair is within
+# tol * max(1, |lambda|); otherwise the pairs are returned with MaxIters and
+# their residuals.
+.arnoldi <- function(M, nev, which, m, tol = 1e-10, maxrestarts = 50L) {
   n <- nrow(M)
+  op <- function(x) as.numeric(M %*% x)
+  inv <- FALSE
+  if (identical(which, "SM")) {
+    F <- qr(M)
+    if (F$rank == n) {
+      op <- function(x) as.numeric(qr.coef(F, x))
+      inv <- TRUE
+    }
+  }
+  target <- if (inv) "LM" else which
+  m <- max(as.integer(m), min(n, nev + 1L))
   v <- stats::rnorm(n)
-  for (restart in seq_len(50L)) {
-    V <- matrix(0, n, m + 1L); H <- matrix(0, m + 1L, m)
+  check <- function(values, X) {
+    vapply(seq_along(values), function(j) {
+      x <- X[, j]
+      sqrt(sum(Mod(M %*% x - values[j] * x)^2)) / sqrt(sum(Mod(x)^2))
+    }, 0)
+  }
+  for (restart in seq_len(maxrestarts)) {
+    mk <- m
+    V <- matrix(0, n, mk + 1L); H <- matrix(0, mk + 1L, mk)
     V[, 1L] <- v / sqrt(sum(v^2))
-    for (k in seq_len(m)) {
-      w <- as.numeric(M %*% V[, k])
-      for (j in seq_len(k)) { H[j, k] <- sum(w * V[, j]); w <- w - H[j, k] * V[, j] }
+    for (k in seq_len(mk)) {
+      w <- op(V[, k])
+      # two passes of Gram Schmidt keep the basis orthogonal
+      for (pass in 1:2) for (j in seq_len(k)) {
+        hjk <- sum(w * V[, j]); H[j, k] <- H[j, k] + hjk; w <- w - hjk * V[, j]
+      }
       H[k + 1L, k] <- sqrt(sum(w^2))
-      if (H[k + 1L, k] < 1e-14) { m <- k; break }
+      if (H[k + 1L, k] < 1e-14) { mk <- k; break }
       V[, k + 1L] <- w / H[k + 1L, k]
     }
-    e <- eigen(H[seq_len(m), seq_len(m), drop = FALSE])
-    o <- .eig_order(e$values, which)[seq_len(min(nev, m))]
-    X <- V[, seq_len(m), drop = FALSE] %*% e$vectors[, o, drop = FALSE]
-    res <- abs(H[m + 1L, m] * e$vectors[m, o])
-    if (all(res < 1e-10 * max(1, Mod(e$values[o])))) return(list(values = e$values[o], vectors = X))
+    e <- eigen(H[seq_len(mk), seq_len(mk), drop = FALSE])
+    o <- .eig_order(e$values, target)[seq_len(min(nev, mk))]
+    X <- V[, seq_len(mk), drop = FALSE] %*% e$vectors[, o, drop = FALSE]
+    vals <- if (inv) 1 / e$values[o] else e$values[o]
+    res <- check(vals, X)
+    if (all(res <= tol * pmax(1, Mod(vals))))
+      return(list(values = vals, vectors = X, retcode = "Success", residuals = res))
     v <- Re(rowSums(X))
   }
-  list(values = e$values[o], vectors = X)
+  list(values = vals, vectors = X, retcode = "MaxIters", residuals = res)
 }

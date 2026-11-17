@@ -83,6 +83,7 @@ NULL
 # a * b + c with a single rounding (Julia's fma, and muladd on hardware with
 # FMA): the exact product by Veltkamp splitting, then an exact sum
 .wr_fma <- function(a, b, c) {
+  if (.arith$native) return(a * b + c)
   p <- a * b
   t <- 134217729 * a; ah <- t - (t - a); al <- a - ah
   t <- 134217729 * b; bh <- t - (t - b); bl <- b - bh
@@ -99,6 +100,7 @@ NULL
 # products accumulated left to right with fma, axpy with fma, and the column
 # oriented upper triangular solve (trsv) with fma
 .wr_dot <- function(a, b) {
+  if (.arith$native) return(sum(a * b))
   s <- 0
   for (i in seq_along(a)) s <- .wr_fma(a[i], b[i], s)
   s
@@ -229,6 +231,7 @@ NULL
 # and getrs): partial pivoting on the first largest entry, multipliers scaled
 # by the reciprocal of the pivot, fma updates and fma triangular solves
 .wr_lu_solve <- function(A, b) {
+  if (.arith$native) return(as.numeric(base::solve(A, b)))
   n <- nrow(A)
   for (j in seq_len(n)) {
     p <- j - 1L + which.max(abs(A[j:n, j]))

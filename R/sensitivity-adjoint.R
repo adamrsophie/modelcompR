@@ -191,7 +191,13 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     if (abs(cps[length(cps)] - tend) > tol(tend)) cps <- c(cps, tend)
     states <- lapply(cps, function(tc) {
       e <- which(ev_t == tc)
-      if (length(e)) return(events[[e[length(e)]]]$u_right)
+      # in a semi-explicit DAE the solver solves the algebraic equations
+      # again after the affect: the checkpoint starts from that state
+      if (length(e)) {
+        ev <- events[[e[length(e)]]]
+        if (isTRUE(ms$dae)) return(as.numeric(attr(.sens_event_jacobian(ev, fns, prob), "u_plus") %||% ev$u_right))
+        return(ev$u_right)
+      }
       k <- which(abs(env$t - tc) <= tol(tc))
       # an unsaved start is the initial state; the state at the end time
       # starts no interval

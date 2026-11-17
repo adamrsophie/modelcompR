@@ -114,12 +114,20 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 .sol_series <- function(env, idx, rows = NULL) {
   U <- env$U
   if (is.null(rows)) rows <- seq_len(nrow(U))
-  if (is.numeric(idx) && !is_sym(idx)) return(U[rows, idx])
+  red <- env$reduced_idxs
+  col <- function(i) {
+    if (is.null(red)) return(i)
+    j <- match(i, red)
+    if (anyNA(j)) stop("state ", i[is.na(j)][1L], " was not saved (save_idxs_storage = \"reduced\")", call. = FALSE)
+    j
+  }
+  if (is.numeric(idx) && !is_sym(idx)) return(U[rows, col(idx)])
   sys <- env$sys
   if (is.null(sys)) stop("symbolic indexing needs a problem built from a system", call. = FALSE)
   v <- as_sym(idx)
   ui <- match(.key(v), .keys(unknowns(sys)))
-  if (!is.na(ui)) return(unname(U[rows, ui]))
+  if (!is.na(ui)) return(unname(U[rows, col(ui)]))
+  if (!is.null(red)) stop("observed values need every state; solve with save_idxs_storage = \"full\"", call. = FALSE)
   fn <- .sol_observed_fn(env, v)
   # parameters of the saved rows, so a row saved before an event keeps them
   p <- if (!is.null(env$param_history)) .sol_params_at(env, env$t, saved = TRUE)[rows, , drop = FALSE]
@@ -288,8 +296,16 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   starts <- vapply(steps, `[[`, 0, "t0")
   ends <- vapply(steps, function(s) s$tend %||% (s$t0 + s$dt), 0)
   fwd <- ends[length(ends)] >= starts[1L]
+  nt <- length(env$t)
   for (q in seq_along(tq)) {
     tt <- tq[q]
+    # the end time of a solve whose last step ended in an event: the saved
+    # state after the event, as inside the span, where the step starting at
+    # an event time gives its right limit
+    if (deriv == 0L && nt && tt == env$t[nt] && tt == ends[length(ends)]) {
+      out[q, ] <- env$U[nt, seq_len(n)]
+      next
+    }
     # starts increase forward in time and decrease for backward solves
     i <- if (fwd) findInterval(tt, starts, rightmost.closed = TRUE) else
       findInterval(-tt, -starts, rightmost.closed = TRUE)

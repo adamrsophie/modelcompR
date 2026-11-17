@@ -149,10 +149,36 @@ EnsembleSolution <- function(u, elapsed = 0, converged = TRUE)
 #' @param trajectories Number of trajectories.
 #' @param batch_size Trajectories per reduction batch.
 #' @param seed Seed for the random number generator.
+#' @param on_error What a trajectory that throws an error does: `"stop"`
+#'   (the default) stops the ensemble with the trajectory numbers and their
+#'   messages; `"collect"` keeps the error object in place of the output and
+#'   counts it in `failures`.
+#' @param retries How many times a trajectory that throws an error is run
+#'   again (its `prob_func` sees the repeat number) before `on_error`
+#'   applies.
+#' @param rng_streams `"session"` (the default): the streams described for
+#'   `ensemblealg`. `"trajectory"`: trajectory `i` draws from the `i`th
+#'   L'Ecuyer-CMRG stream of `seed`, so the results do not depend on the
+#'   ensemble algorithm, the number of cores or `batch_size`.
+#' @param checkpoint Optional file: after each batch the reduced output,
+#'   the retcodes and the random state are saved there, and a solve given
+#'   an existing checkpoint resumes after its last batch.
 #' @param ... Solver options for each trajectory.
+#' @return An `EnsembleSolution`: the reduced output `u`, `elapsed`,
+#'   `converged` (whether the reduction stopped the ensemble or every batch
+#'   ran), `retcodes` (the retcode of each trajectory's last solve, `"Error"`
+#'   for a collected error), `failures` (the number of trajectories whose
+#'   retcode is not successful) and `backend` (how the trajectories ran:
+#'   the GPU names run on CPU workers).
 #' @export
 solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), ...,
-                                  trajectories, batch_size = trajectories, seed = NULL) {
+                                  trajectories, batch_size = trajectories, seed = NULL,
+                                  on_error = c("stop", "collect"), retries = 0L,
+                                  rng_streams = c("session", "trajectory"), checkpoint = NULL) {
+  on_error <- match.arg(on_error)
+  rng_streams <- match.arg(rng_streams)
+  retries <- as.integer(retries)
+  if (length(retries) != 1L || is.na(retries) || retries < 0L) stop("`retries` must be a count", call. = FALSE)
   if (inherits(b, "EnsembleAlgorithm")) {
     ensemblealg <- b
     b <- NULL
@@ -160,36 +186,104 @@ solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), .
   if (missing(trajectories)) stop("give the number of trajectories", call. = FALSE)
   start <- proc.time()[["elapsed"]]
   dots <- list(...)
+  # trajectory streams: the i-th L'Ecuyer-CMRG stream of the seed
+  tstreams <- NULL
+  if (rng_streams == "trajectory") {
+    tstreams <- .with_seed(seed, {
+      old <- RNGkind()[1L]
+      RNGkind("L'Ecuyer-CMRG")
+      stats::runif(1L)
+      s <- get(".Random.seed", envir = globalenv())
+      RNGkind(old)
+      out <- vector("list", trajectories)
+      for (i in seq_len(trajectories)) out[[i]] <- s <- parallel::nextRNGStream(s)
+      out
+    })
+  }
   one <- function(i) {
+    if (!is.null(tstreams)) {
+      kind <- RNGkind()
+      RNGkind("L'Ecuyer-CMRG")
+      assign(".Random.seed", tstreams[[i]], envir = globalenv())
+      on.exit(do.call(RNGkind, as.list(kind)))
+    }
     rep_ <- 1L
+    tries <- 0L
+    attempt <- function() tryCatch({
+      repeat {
+        prob_i <- a$prob_func(a$prob, i, rep_)
+        sol <- if (is.null(b)) do.call(solve, c(list(prob_i), dots)) else do.call(solve, c(list(prob_i, b), dots))
+        rc <- tryCatch(as.character(sol$retcode %||% NA_character_)[1L], error = function(e) NA_character_)
+        out <- a$output_func(sol, i)
+        rerun <- is.list(out) && length(out) == 2L && is.logical(out[[2L]]) && length(out[[2L]]) == 1L
+        val <- if (rerun) out[[1L]] else out
+        if (!(rerun && isTRUE(out[[2L]]))) break
+        rep_ <- rep_ + 1L
+      }
+      list(value = val, retcode = rc)
+    }, error = function(e) list(value = e, retcode = "Error"))
     repeat {
-      prob_i <- a$prob_func(a$prob, i, rep_)
-      sol <- if (is.null(b)) do.call(solve, c(list(prob_i), dots)) else do.call(solve, c(list(prob_i, b), dots))
-      out <- a$output_func(sol, i)
-      rerun <- is.list(out) && length(out) == 2L && is.logical(out[[2L]]) && length(out[[2L]]) == 1L
-      val <- if (rerun) out[[1L]] else out
-      if (!(rerun && isTRUE(out[[2L]]))) break
+      r <- attempt()
+      if (!identical(r$retcode, "Error") || tries >= retries) break
+      tries <- tries + 1L
       rep_ <- rep_ + 1L
     }
-    val
+    r
   }
+  retcodes <- character(trajectories)
+  # unpack the outputs of a batch: worker errors (a try-error of mclapply,
+  # an error of the trajectory) stop the ensemble or are collected
+  unpack <- function(batch, I) {
+    vals <- vector("list", length(batch))
+    for (k in seq_along(batch)) {
+      r <- batch[[k]]
+      if (inherits(r, "try-error")) r <- list(value = attr(r, "condition") %||% simpleError(as.character(r)),
+                                              retcode = "Error")
+      retcodes[I[k]] <<- r$retcode
+      vals[k] <- list(r$value)
+    }
+    err <- which(retcodes[I] == "Error")
+    if (length(err) && on_error == "stop")
+      stop("trajectory ", paste(I[err], collapse = ", "), " failed: ",
+           conditionMessage(vals[[err[1L]]]), call. = FALSE)
+    vals
+  }
+  # converged: one batch (all trajectories), or the flag of the last
+  # reduction (SciMLBase's solve_batch)
+  converged <- batch_size >= trajectories
   run <- function() {
     mapper <- .ensemble_mapper(ensemblealg)
     on.exit(mapper$close())
     u <- a$u_init
     done <- 0L
+    if (!is.null(checkpoint) && file.exists(checkpoint)) {
+      ck <- readRDS(checkpoint)
+      if (!identical(ck$trajectories, trajectories)) stop("the checkpoint is of an ensemble of ", ck$trajectories,
+                                                          " trajectories", call. = FALSE)
+      u <- ck$u; done <- ck$done; retcodes[seq_len(done)] <<- ck$retcodes[seq_len(done)]
+      if (!is.null(ck$seed)) assign(".Random.seed", ck$seed, envir = globalenv())
+      if (isTRUE(ck$stopped)) { converged <<- TRUE; return(u) }
+    }
     while (done < trajectories) {
       I <- seq.int(done + 1L, min(trajectories, done + batch_size))
-      batch <- mapper$map(I, one)
+      batch <- unpack(mapper$map(I, one), I)
       red <- a$reduction(u, batch, I)
       u <- red[[1L]]
       done <- max(I)
+      if (batch_size < trajectories) converged <<- isTRUE(red[[2L]])
+      if (!is.null(checkpoint))
+        saveRDS(list(trajectories = trajectories, u = u, done = done, retcodes = retcodes, stopped = isTRUE(red[[2L]]),
+                     seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE)), checkpoint)
       if (isTRUE(red[[2L]])) break
     }
     u
   }
   u <- .with_seed(seed, run())
-  structure(list(u = u, elapsed = proc.time()[["elapsed"]] - start, converged = TRUE),
+  ran <- nzchar(retcodes)
+  rcs <- retcodes[ran]
+  failures <- sum(rcs == "Error" | (!is.na(rcs) & !successful_retcode(rcs) & rcs != "Default"))
+  structure(list(u = u, elapsed = proc.time()[["elapsed"]] - start, converged = converged,
+                 retcodes = retcodes[ran], failures = failures, backend = .ensemble_backend(ensemblealg)),
             class = "EnsembleSolution")
 }
 
@@ -263,4 +357,14 @@ plot.EnsembleSummary <- function(x, xlab = "t", ylab = "", ylim = range(x$u, x$q
   graphics::matlines(x$t, x$qlow, lty = 2, col = col)
   graphics::matlines(x$t, x$qhigh, lty = 2, col = col)
   invisible(x)
+}
+
+# How an ensemble algorithm runs its trajectories in this port
+.ensemble_backend <- function(alg) {
+  switch(alg$name %||% "EnsembleSerial",
+    EnsembleSerial = "serial",
+    EnsembleThreads = , EnsembleGPUKernel = , EnsembleGPUArray =
+      if (.Platform$OS.type == "windows") "serial (no forked workers on Windows)" else "forked CPU workers",
+    EnsembleDistributed = , EnsembleSplitThreads = "socket cluster of CPU workers",
+    alg$name)
 }

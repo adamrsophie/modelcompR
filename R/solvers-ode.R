@@ -257,6 +257,7 @@ RK4 <- function() {
   if (!is.null(.ode_norm$f)) return(.ode_norm$f(x))
   n <- length(x)
   if (n == 0L) return(0)
+  if (.arith$native) return(sqrt(sum(Re(x)^2 + Im(x)^2) / n))
   # complex states: the sum of abs2 (re^2 + im^2) of the elements, real(x) / n
   if (is.complex(x)) {
     a2 <- Re(x) * Re(x) + Im(x) * Im(x)
@@ -451,6 +452,7 @@ RK4 <- function() {
 }
 
 .fastpower <- function(x, y) {
+  if (.arith$native) return(x^y)
   out <- .exp2_f32(.f32(.f32(y) * .fastlog2(x)))
   out[x == 0] <- 0
   out[is.infinite(x) & is.infinite(y)] <- Inf
@@ -570,8 +572,30 @@ RK4 <- function() {
 # (DefaultODEAlgorithm, R/solvers-default.R).
 .default_ode_alg <- function(prob) DefaultODEAlgorithm()
 
+# Mass matrices as base R matrices: Matrix package objects, SciML operators
+# and scalars are converted; any other type is an error, so an unfamiliar
+# representation never stands for the identity.
+.as_mass <- function(M, n = NULL) {
+  if (is.null(M)) return(NULL)
+  if (inherits(M, "Matrix") || inherits(M, "AbstractSciMLOperator")) M <- as.matrix(M)
+  if (is.numeric(M) && is.null(dim(M)) && length(M) == 1L) {
+    if (is.null(n)) stop("a scalar mass matrix needs the number of states", call. = FALSE)
+    M <- M * diag(n)
+  }
+  if (!is.matrix(M) || !(is.numeric(M) || is.complex(M) || is.logical(M)))
+    stop("unsupported mass matrix of class ", class(M)[1L],
+         "; use a base R matrix, a Matrix package matrix or a SciML operator", call. = FALSE)
+  if (is.logical(M)) storage.mode(M) <- "double"
+  if (nrow(M) != ncol(M) || (!is.null(n) && nrow(M) != n))
+    stop("the mass matrix is ", nrow(M), " x ", ncol(M), " but the problem has ",
+         if (is.null(n)) "a square system" else paste(n, "states"), call. = FALSE)
+  M
+}
+
 .is_identity_mass <- function(M) {
-  is.null(M) || !is.matrix(M) || (nrow(M) == ncol(M) && all(M == diag(nrow(M))))
+  if (is.null(M)) return(TRUE)
+  M <- .as_mass(M)
+  all(M == diag(nrow(M)))
 }
 
 #' Solve a problem
@@ -639,7 +663,8 @@ solve.ODEProblem <- function(a, b, ...) {
 # solve or init are checked: the problem keywords also hold the
 # ModelingToolkit construction options (guesses, use_scc, ...).
 .R_SOLVE_KEYWORDS <- c("qmin", "qmax", "gamma", "beta1", "beta2", "pid_beta", "qsteady_min", "qsteady_max",
-                       "discontinuity_detection", "sys_tstops", "stald", "time_filter", "kwargs_verbosity")
+                       "discontinuity_detection", "sys_tstops", "stald", "time_filter", "kwargs_verbosity",
+                       "save_idxs_storage")
 
 .check_solve_kwargs <- function(opts, keys = names(opts)) {
   handle <- opts$kwargshandle %||% "error"
@@ -665,6 +690,20 @@ solve.ODEProblem <- function(a, b, ...) {
     stop("the right-hand side returned ", length(v), " values for a state of length ", n,
          "; f(u, p, t) must return one value per state", call. = FALSE)
   invisible()
+}
+
+# Every evaluation of the right-hand side is checked, not only the first:
+# a function that returns a scalar later would be recycled by R. The length
+# is that of the state passed in, which resize() and addat() may change.
+.checked_f <- function(f) {
+  if (!is.function(f)) return(f)
+  function(u, p, t, ...) {
+    v <- f(u, p, t, ...)
+    if (length(v) != length(u))
+      stop("the right-hand side returned ", length(v), " values at t = ", format(t[1L], digits = 15),
+           " for a state of length ", length(u), "; f(u, p, t) must return one value per state", call. = FALSE)
+    v
+  }
 }
 
 # build_null_solution of DiffEqBase (solve.jl): a problem without unknowns
@@ -702,6 +741,10 @@ solve.ODEProblem <- function(a, b, ...) {
   if (tdir == 0) tdir <- 1
   abstol <- opts$abstol %||% 1e-6
   reltol <- opts$reltol %||% 1e-3
+  for (tl in list(list("abstol", abstol), list("reltol", reltol)))
+    if (!length(tl[[2L]]) || !(length(tl[[2L]]) %in% c(1L, length(prob$u0))))
+      stop("`", tl[[1L]], "` has ", length(tl[[2L]]), " values; give one, or one per state (", length(prob$u0), ")",
+           call. = FALSE)
   maxiters <- opts$maxiters %||% 1e5
   dtmax <- opts$dtmax %||% abs(tf - t0)
   # dtmin defaults to 0 (OrdinaryDiffEqCore solve.jl); the step is bounded
@@ -768,10 +811,10 @@ solve.ODEProblem <- function(a, b, ...) {
   integ$prob <- prob
   integ$sol_events <- list()
   if (is_dae) integ$du <- .as_num(prob$du0)
-  M <- prob$f$mass_matrix
+  M <- .as_mass(prob$f$mass_matrix, length(integ$u))
   mm <- !is_dae && !.is_identity_mass(M)
-  ctx <- list(f = .shape_f(prob$f$f, dim(prob$u0)), fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
-              p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac,
+  ctx <- list(f = if (is_dae) .shape_f(prob$f$f, dim(prob$u0)) else .checked_f(.shape_f(prob$f$f, dim(prob$u0))), fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
+              p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac, sparsity = prob$f$sparsity,
               tgrad = prob$f$tgrad, abstol = abstol, reltol = reltol, n = length(integ$u),
               adaptive = adaptive, composite = length(algs) > 1L, dae = is_dae,
               algebraic = if (mm) rowSums(abs(M)) == 0 else NULL,
@@ -823,6 +866,20 @@ solve.ODEProblem <- function(a, b, ...) {
     # an array state: sol$u and sol(t) give the arrays (SciMLBase keeps u0's shape)
     if (length(dim(prob$u0)) > 1L && ncol(U) == length(prob$u0)) env$u_dim <- dim(prob$u0)
     if (!is.null(opts$save_idxs)) env$save_idxs <- get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
+    # save_idxs_storage = "reduced": only the saved components are kept (as
+    # save_idxs in Julia); the solution then interpolates linearly between
+    # the saved values, and other variables and observed values are
+    # unavailable
+    if (identical(opts$save_idxs_storage %||% "full", "reduced") && !is.null(env$save_idxs)) {
+      env$reduced_idxs <- env$save_idxs
+      env$U <- env$U[, env$save_idxs, drop = FALSE]
+      env$save_idxs <- seq_len(ncol(env$U))
+      env$steps <- NULL
+      env$dense <- FALSE
+      env$u_dim <- NULL
+    } else if (!identical(opts$save_idxs_storage %||% "full", "full") &&
+               !identical(opts$save_idxs_storage, "reduced"))
+      stop("`save_idxs_storage` must be \"full\" or \"reduced\"", call. = FALSE)
     if (length(integ$param_p) > 1L)
       env$param_history <- list(t = integ$param_t, p = do.call(rbind, integ$param_p))
     if (!is.null(alg_choice)) env$alg_choice <- alg_choice
@@ -995,8 +1052,11 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
 
 .integ_step <- function(I) {
   old_norm <- .ode_norm$f
+  old_ws <- .inline_ws$cur
   .ode_norm$f <- I$internalnorm
-  on.exit(.ode_norm$f <- old_norm)
+  if (is.null(I$inline_ws)) I$inline_ws <- new.env(parent = emptyenv())
+  .inline_ws$cur <- I$inline_ws
+  on.exit({ .ode_norm$f <- old_norm; .inline_ws$cur <- old_ws })
   evalq(repeat {
     if (done) break
     if (!(tdir * integ$t < tdir * tf && !integ$terminate)) {
@@ -1314,7 +1374,9 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
       # caches, the controller history and multistep histories restart
       # a continuous event proposes dtrelax times the step (set_proposed_dt!
       # in DiffEqBase's apply_callback!)
-      if (adaptive) dt <- if (!is.null(ev$dtrelax)) max(dtmin, ev$dtrelax * dt_int) else min(abs(dtnew), dtmax)
+      if (adaptive) dt <- if (isTRUE(get0("dt_user", inherits = FALSE))) min(abs(dtnew), dtmax) else
+        if (!is.null(ev$dtrelax)) max(dtmin, ev$dtrelax * dt_int) else min(abs(dtnew), dtmax)
+      dt_user <- FALSE
       if (co$discontinuity_detection && isTRUE(ev$maybe_disco)) {
         # reinit_controller! after an event that may be a discontinuity
         css[[cur]] <- utils::modifyList(css[[cur]], list(q11 = 1, errold = 1e-4, err = c(1, 1, 1), dt_factor = 1,
@@ -1323,6 +1385,7 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
       break
     }
     dt <- min(abs(dtnew), dtmax)
+    dt_user <- FALSE
     break
   }, I)
   invisible(I)

@@ -70,8 +70,18 @@
     }, p)
     J
   }
-  out$vjp <- function(l, u, p, t) list(u = as.numeric(crossprod(out$jac(u, p, t), l)),
-                                       p = as.numeric(crossprod(out$pjac(u, p, t), l)))
+  # a vjp(v, u, p, t) of the problem function (SciMLBase: J' v by the
+  # state) gives the state part; a list(u, p) result gives both
+  uvjp <- prob$f$vjp
+  out$vjp <- function(l, u, p, t) {
+    if (is.function(uvjp)) {
+      r <- uvjp(l, u, p, t)
+      if (is.list(r)) return(list(u = as.numeric(r$u), p = as.numeric(r$p %||% crossprod(out$pjac(u, p, t), l))))
+      return(list(u = as.numeric(r), p = as.numeric(crossprod(out$pjac(u, p, t), l))))
+    }
+    list(u = as.numeric(crossprod(out$jac(u, p, t), l)),
+         p = as.numeric(crossprod(out$pjac(u, p, t), l)))
+  }
   out
 }
 
@@ -82,10 +92,14 @@
   us <- unknowns(sys)
   ps <- .problem_params(sys)
   iv <- .f(sys, "iv")
-  key <- paste(c(.keys(rhs), "|", .keys(us), "|", .keys(ps)), collapse = ";")
-  if (is.null(.mtk$sens_cache)) .mtk$sens_cache <- new.env(parent = emptyenv())
-  hit <- .mtk$sens_cache[[key]]
-  if (!is.null(hit)) return(hit)
+  key <- paste(c(.keys(rhs), "|", .keys(us), "|", .keys(ps), "|", .mtk$fun_version %||% 0L), collapse = ";")
+  # ponytail: the cache is dropped as a whole once it holds 64 systems
+  if (is.null(.mtk$sens_cache) || length(.mtk$sens_cache) >= 64L) .mtk$sens_cache <- new.env(parent = emptyenv())
+  # names are limited to 10000 bytes: a long key is stored under its hash,
+  # with the key itself to tell collisions apart
+  slot <- .cache_slot(key)
+  hit <- .mtk$sens_cache[[slot]]
+  if (!is.null(hit) && identical(hit$key, key)) return(hit$value)
   others <- c(.parameters_of(sys, TRUE), if (!is.null(iv)) list(iv))
   args <- .codegen_args(sys, with_t = !is.null(iv))
   Ju <- .partials(rhs, us, others)
@@ -107,7 +121,7 @@
     vjp <- function(l, u, p, t) vjp0(l, u, p)
   }
   out <- list(jac = jac, pjac = pjac, vjp = vjp)
-  assign(key, out, envir = .mtk$sens_cache)
+  assign(slot, list(key = key, value = out), envir = .mtk$sens_cache)
   out
 }
 
@@ -126,7 +140,9 @@
   if (length(ae) != length(av))
     stop("the mass matrix must have as many zero rows as zero columns (a semi-explicit DAE)", call. = FALSE)
   Mdd <- M[de, dv, drop = FALSE]
-  if (length(dv) && abs(det(Mdd)) < 0x1.56e1fc2f8f359p-997)
+  # a scale free test: the determinant of 1e-16 I is 1e-320 although the
+  # matrix is perfectly conditioned
+  if (length(dv) && (!all(is.finite(Mdd)) || rcond(Mdd) < .Machine$double.eps))
     stop("The submatrix corresponding to the differential variables of the mass matrix must be nonsingular!",
          call. = FALSE)
   list(diff = dv, alg = av, diff_eq = de, alg_eq = ae, Mdd = Mdd, dae = length(av) > 0L)
@@ -271,4 +287,17 @@
   du0 <- J[seq_len(n), , drop = FALSE]
   dp <- J[n + seq_len(np), , drop = FALSE]
   list(du0 = du0, dp = dp, active = TRUE)
+}
+
+# A name for a cache key: the key itself when short, else its length and
+# two polynomial hashes of its bytes
+.cache_slot <- function(key) {
+  if (nchar(key, "bytes") < 1000L) return(key)
+  b <- as.numeric(utf8ToInt(key))
+  h <- function(m, base) {
+    r <- 0
+    for (v in b) r <- (r * base + v) %% m
+    r
+  }
+  paste0("#", length(b), ":", h(2147483647, 257), ":", h(1000000007, 131))
 }

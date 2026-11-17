@@ -1056,7 +1056,7 @@ solve.SCCNonlinearProblem <- function(a, b, ...) {
 #' @export
 solve.LinearProblem <- function(a, b, ...) {
   opts <- utils::modifyList(a$kwargs %||% list(), list(...))
-  if (!missing(b) && !is.null(b) || !is.null(opts$assumptions))
+  if (!missing(b) && !is.null(b) || !is.null(opts$assumptions) || inherits(a$A, c("LowRankUpdatedMatrix", "Matrix")))
     return(.lin_solution(a, .lin_solve(a, if (missing(b)) NULL else b, opts)))
   # the default algorithm of LinearSolve: LU for a square matrix, which the
   # DefaultLinearSolver replaces by a pivoted QR when the factorization fails

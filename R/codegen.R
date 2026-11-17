@@ -17,7 +17,9 @@
 #' @param name Function name.
 #' @param fn An R function of numeric arguments.
 #' @param derivatives Optional list of R functions, the partial derivatives
-#'   with respect to each argument, taking the same arguments as `fn`.
+#'   with respect to each argument, taking the same arguments as `fn`; or
+#'   one function `function(i, ...)` of the argument index `i` followed by
+#'   the arguments of `fn` (for functions of any number of arguments).
 #' @return A symbolic function.
 #' @examples
 #' sq <- register_symbolic("sq", function(x) x^2)
@@ -27,6 +29,8 @@
 register_symbolic <- function(name, fn, derivatives = NULL) {
   stopifnot(is.function(fn))
   assign(name, list(fn = fn, derivatives = derivatives), envir = .mtk$funs)
+  # derivative caches keyed by expressions depend on the definitions
+  .mtk$fun_version <- (.mtk$fun_version %||% 0L) + 1L
   Function(name)
 }
 
@@ -150,7 +154,9 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
     i <- which(vapply(fargs, function(a) identical(.key(a), .key(v)), TRUE))
     if (length(i) != 1L || n != 1L || length(.args(e)) > 2L) .cg_error(e)
     argcalls <- lapply(fargs, .to_rcall, names = names)
-    if (!is.null(reg$derivatives) && length(reg$derivatives) >= i) {
+    if (is.function(reg$derivatives)) {
+      out <- as.call(c(list(reg$derivatives, i), argcalls))
+    } else if (!is.null(reg$derivatives) && length(reg$derivatives) >= i) {
       out <- as.call(c(list(reg$derivatives[[i]]), argcalls))
     } else {
       out <- call(".fd_partial", reg$fn, i, as.call(c(list(as.name("list")), argcalls)))
@@ -310,17 +316,39 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
   }
   lowered <- lapply(flat, function(e) .subst(e, rule))
 
-  stmts <- list()
-  for (ol in obs_lines) stmts[[length(stmts) + 1L]] <- call("<-", as.name(ol$ph), .to_rcall(ol$rhs, names))
   nz <- !vapply(lowered, .is_zero, TRUE)
-  if (cse && sum(nz) > 0L && !any(vapply(lowered[nz], .has_piecewise, TRUE))) {
-    cs <- symcompR::cse(lowered[nz], prefix = ".c")
-    for (r in cs$replacements) {
-      ph <- .name(r[[1L]])
-      names[[ph]] <- as.name(ph)
-      stmts[[length(stmts) + 1L]] <- call("<-", as.name(ph), .to_rcall(r[[2L]], names))
+  orhs <- lapply(obs_lines, `[[`, "rhs")
+  # Derivative and Subs nodes must keep their argument expressions (a
+  # subexpression of f(x) in Derivative(f(x), x) is not a variable)
+  .cse_ok <- function(e) !.has_piecewise(e) && !.has_derivative(e) && !.has_type(e, "Subs")
+  joint <- length(orhs) && all(vapply(orhs, .cse_ok, TRUE))
+  # (name, expression) of the assignments before the result
+  defs <- lapply(obs_lines, function(ol) list(ph = ol$ph, rhs = ol$rhs))
+  if (cse && sum(nz) > 0L && all(vapply(lowered[nz], .cse_ok, TRUE))) {
+    # one elimination over the observed assignments and the outputs, so a
+    # subexpression they share is computed once
+    no <- if (joint) length(orhs) else 0L
+    cs <- symcompR::cse(c(if (joint) orhs, lowered[nz]), prefix = ".c")
+    if (joint) for (i in seq_len(no)) defs[[i]]$rhs <- cs$reduced[[i]]
+    reps <- lapply(cs$replacements, function(r) list(ph = .name(r[[1L]]), rhs = r[[2L]]))
+    for (r in reps) names[[r$ph]] <- as.name(r$ph)
+    defs <- c(reps, defs)
+    lowered[nz] <- cs$reduced[no + seq_len(sum(nz))]
+  }
+  # assignments in dependency order (the observed in their order, each
+  # after the eliminated subexpressions it uses)
+  stmts <- list()
+  if (length(defs)) {
+    dn <- vapply(defs, `[[`, "", "ph")
+    deps <- lapply(defs, function(d) intersect(.free_names(d$rhs), dn))
+    done <- character()
+    while (length(done) < length(dn)) {
+      ready <- which(!(dn %in% done) & vapply(deps, function(x) all(x %in% done), TRUE))
+      if (!length(ready)) stop("cyclic assignments in generated code", call. = FALSE)
+      k <- ready[1L]
+      stmts[[length(stmts) + 1L]] <- call("<-", as.name(dn[k]), .to_rcall(defs[[k]]$rhs, names))
+      done <- c(done, dn[k])
     }
-    lowered[nz] <- cs$reduced
   }
   calls <- lapply(lowered, .to_rcall, names = names)
   result <- switch(out,
@@ -331,11 +359,18 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
     matrix = if (sparse_matrix) {
       # the structural nonzeros as a Matrix::sparseMatrix, as the SparseMatrixCSC
       # that Symbolics builds for sparse = true
+      # The pattern is built once: a call fills the values of a compiled
+      # template (column major order is the CSC order), keeping structural
+      # entries whose current value is zero.
       k <- which(nz)
-      as.call(list(quote(Matrix::sparseMatrix), i = as.integer((k - 1L) %% dims[1L] + 1L),
-           j = as.integer((k - 1L) %/% dims[1L] + 1L),
-           x = as.call(c(list(as.name(".cg_c")), calls[k])),
-           dims = as.integer(dims)))
+      tmpl <- Matrix::sparseMatrix(i = as.integer((k - 1L) %% dims[1L] + 1L),
+                                   j = as.integer((k - 1L) %/% dims[1L] + 1L),
+                                   x = rep(1, length(k)), dims = as.integer(dims))
+      as.call(list(as.name("{"),
+                   call("<-", as.name(".J"), tmpl),
+                   call("<-", call("@", as.name(".J"), as.name("x")),
+                        call("as.numeric", as.call(c(list(as.name(".cg_c")), calls[k])))),
+                   as.name(".J")))
     } else {
       body <- list(call("<-", as.name(".J"), call("matrix", 0, dims[1L], dims[2L])))
       for (k in which(nz)) {
@@ -583,4 +618,18 @@ IfElse <- function(cond, a, b) {
   if (isTRUE(cond)) return(as_sym(a))
   if (identical(cond, FALSE)) return(as_sym(b))
   Piecewise(list(as_sym(a), cond), list(as_sym(b), TRUE))
+}
+
+# names of the symbols of an expression (the placeholders of generated code)
+.free_names <- function(e) {
+  if (!is_sym(e)) return(character())
+  fs <- free_symbols(e)
+  if (!length(fs)) character() else vapply(fs, function(x) .name(x) %||% "", "")
+}
+
+.has_type <- function(e, ty) {
+  if (!is_sym(e)) return(FALSE)
+  if (.type(e) == ty) return(TRUE)
+  for (a in .args(e)) if (.has_type(a, ty)) return(TRUE)
+  FALSE
 }

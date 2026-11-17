@@ -128,6 +128,15 @@
 #'   `seed`, ...); the adjoint is solved with the same tolerances.
 #' @param sensealg A sensitivity algorithm; chosen automatically when
 #'   `NULL` (or taken from the problem's `sensealg` option).
+#' @param allow_failure By default a solve that does not succeed (a retcode
+#'   other than `Success` or `Terminated`, such as `MaxIters`) is an error;
+#'   `TRUE` differentiates the trajectory that was computed.
+#' @param loss_grad Optional derivative of the loss: a function of the
+#'   solution returning the derivative with respect to the saved values (a
+#'   matrix shaped as `as.matrix(sol)`, or a list with that matrix as `u`
+#'   and the derivative with respect to the final parameters as `p`). It
+#'   replaces the finite differences of the loss in the saved values, which
+#'   otherwise differentiate only the saved rows the loss reads.
 #' @return A list with the gradients `u0` and `p`, the loss value `value`
 #'   and the solution `sol`.
 #' @examples
@@ -138,22 +147,37 @@
 #'                      sensealg = GaussAdjoint())
 #' c(g1$p, g2$p)
 #' @export
-solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
+solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_failure = FALSE,
+                           loss_grad = NULL) {
   # a loss that interpolates sol(t): solve again saving those times (as
   # `saveat` when it is given, else as stops), hidden from the saved values
   # the loss sees
-  old <- list(.mtk$sens_interp_t, .mtk$sens_hide_t)
+  old <- list(.mtk$sens_interp_t, .mtk$sens_hide_t, .mtk$sens_loss_grad)
   on.exit({
     .mtk$sens_interp_t <- old[[1L]]
     .mtk$sens_hide_t <- old[[2L]]
+    .mtk$sens_loss_grad <- old[[3L]]
   })
+  if (!is.null(loss_grad) && !is.function(loss_grad)) stop("`loss_grad` must be a function of the solution", call. = FALSE)
+  .mtk$sens_loss_grad <- loss_grad
   dots <- list(...)
+  if (identical(dots$save_idxs_storage, "reduced"))
+    stop("solve_gradient() needs every state of the solution; use save_idxs_storage = \"full\"", call. = FALSE)
   base_saveat <- dots$saveat %||% prob$kwargs$saveat
   tq <- numeric()
   for (attempt in 1:4) {
     r <- tryCatch(.solve_gradient(loss, prob, alg, dots, sensealg),
                   sens_needs_times = function(e) e)
-    if (!inherits(r, "sens_needs_times")) return(r)
+    if (!inherits(r, "sens_needs_times")) {
+      # the derivative of a solve that stopped early (MaxIters, DtLessThanMin,
+      # Unstable, ...) is not the derivative of the loss over the time span
+      rc <- if (!is.null(r$sol)) r$sol$retcode
+      if (!is.null(rc) && !successful_retcode(rc) && !isTRUE(allow_failure))
+        stop("the solve ended with retcode ", rc, " before the end of the time span, so its gradient is not ",
+             "the gradient of the loss; pass allow_failure = TRUE to differentiate the partial trajectory",
+             call. = FALSE)
+      return(r)
+    }
     if (attempt == 4L) stop("the loss interpolates the solution at changing times", call. = FALSE)
     tq <- sort(unique(c(tq, as.numeric(r$times))))
     if (!is.null(base_saveat)) {
@@ -356,14 +380,52 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   }
   value <- ev(U0, p0)
   dU <- U0
-  for (k in seq_along(U0)) {
+  dU[] <- 0
+  lg <- .mtk$sens_loss_grad
+  if (!is.null(lg)) {
+    d <- data
+    if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
+    d$U <- U0[!hidden, , drop = FALSE]; d$t <- env$t[!hidden]
+    g <- lg(.new_solution(cls, d))
+    gu <- if (is.list(g)) g$u else g
+    gu <- as.matrix(gu)
+    if (!identical(dim(gu), dim(d$U))) stop("`loss_grad` must return a ", nrow(d$U), " by ", ncol(d$U),
+                                           " matrix, as as.matrix(sol)", call. = FALSE)
+    dU[!hidden, ] <- gu
+    gp <- if (is.list(g) && !is.null(g$p)) as.numeric(g$p) else numeric(length(p0))
+    if (length(gp) != length(p0)) stop("the `p` of `loss_grad` must have ", length(p0), " values", call. = FALSE)
+  }
+  # Only the saved rows the loss reads are differentiated entry by entry.
+  # They are found by group testing: a block of rows is shifted by +-h in a
+  # direction of distinct weights, and a loss whose value stays bitwise the
+  # same both ways does not read them. A terminal loss on 1001 saved times
+  # then costs a few dozen evaluations instead of two per saved value.
+  rows <- if (is.null(lg)) seq_len(nrow(U0)) else integer()
+  if (is.null(lg) && length(U0) > 64L) {
+    wts <- matrix(1 + 0.5 * sin(seq_along(U0) * 0.7548776662), nrow(U0))
+    hm <- matrix(vapply(U0, .sens_h, 0), nrow(U0)) * wts
+    reads <- function(rs) {
+      Up <- U0; Um <- U0
+      Up[rs, ] <- U0[rs, ] + hm[rs, ]
+      Um[rs, ] <- U0[rs, ] - hm[rs, ]
+      !identical(ev(Up, p0), value) || !identical(ev(Um, p0), value)
+    }
+    find <- function(rs) {
+      if (!length(rs) || !reads(rs)) return(integer())
+      if (length(rs) <= 2L) return(rs)
+      h <- length(rs) %/% 2L
+      c(find(rs[seq_len(h)]), find(rs[-seq_len(h)]))
+    }
+    rows <- find(rows)
+  }
+  for (k in which(row(U0) %in% rows)) {
     h <- .sens_h(U0[k])
     Up <- U0; Um <- U0
     Up[k] <- U0[k] + h
     Um[k] <- U0[k] - h
     dU[k] <- (ev(Up, p0) - ev(Um, p0)) / (2 * h)
   }
-  dp <- if (length(p0)) .sens_fd_grad(function(q) ev(U0, .sens_pvec(p0, q)), as.numeric(p0)) else numeric()
+  dp <- if (!is.null(lg)) gp else if (length(p0)) .sens_fd_grad(function(q) ev(U0, .sens_pvec(p0, q)), as.numeric(p0)) else numeric()
   dp_init <- if (split) .sens_fd_grad(function(q) ev(U0, p0, .sens_pvec(pinit, q)), as.numeric(pinit))
   if (!is.null(dp_init) && all(dp_init == 0)) dp_init <- NULL
   # the cotangent of the saved times (dgdt_discrete): it only matters for
@@ -634,7 +696,17 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL) {
   .sens_no_hist(ct)
   grad <- numeric(m)
   for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% matrix(U[r, n + seq_len(n * m)], n, m))
-  if (np) grad <- grad + as.numeric(ct$dp %*% Qof(U[nrow(U), ]))
+  if (np) {
+    Qend <- Qof(U[nrow(U), ])
+    # an event after the last saved time changes the final parameters
+    if (has_cb && length(rec$events)) {
+      tl <- aenv$t[nrow(U)]
+      dir <- sign(prob$tspan[2L] - prob$tspan[1L])
+      late <- which(vapply(rec$events, function(ev) dir * (ev$t - tl) > 1e-12 * max(1, abs(tl)), TRUE))
+      if (length(late)) Qend <- rec$events[[late[length(late)]]]$Q_right
+    }
+    grad <- grad + as.numeric(ct$dp %*% Qend)
+  }
   if (!is.null(ct$dp_init)) grad[n + seq_len(np)] <- grad[n + seq_len(np)] + ct$dp_init
   list(u0 = stats::setNames(grad[seq_len(n)], names(prob$u0)),
        p = stats::setNames(grad[n + seq_len(np)], names(prob$p)), value = ct$value, sol = sol)

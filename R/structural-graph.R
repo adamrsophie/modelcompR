@@ -127,24 +127,43 @@ print.BipartiteGraph <- function(x, ...) {
 # (adj = fadjlist) and variables to equations (adj = badjlist). `ok` is the
 # logical filter on the far side.
 .augment <- function(st, adj, vsrc, ok) {
-  if (!is.null(st$scolor)) st$scolor[vsrc] <- TRUE
-  nb <- adj[[vsrc]]
-  for (vdst in nb) {
-    if (ok[vdst] && st$m[vdst] == .UNASSIGNED) {
-      st$m[vdst] <- vsrc
-      return(TRUE)
+  # iterative depth first search; frame k tries the far side vertex dst[k]
+  # for the near side vertex src[k]
+  src <- vsrc; nbs <- list(adj[[vsrc]]); pos <- 0L; dst <- 0L
+  enter <- TRUE
+  repeat {
+    k <- length(src)
+    if (k == 0L) return(FALSE)
+    v <- src[k]; nb <- nbs[[k]]
+    if (enter) {
+      enter <- FALSE
+      if (!is.null(st$scolor)) st$scolor[v] <- TRUE
+      free <- nb[ok[nb] & st$m[nb] == .UNASSIGNED]
+      if (length(free)) {
+        st$m[free[1L]] <- v
+        # unwind: every frame below takes its tried far side vertex
+        for (q in seq_len(k - 1L)) st$m[dst[q]] <- src[q]
+        return(TRUE)
+      }
     }
-  }
-  for (vdst in nb) {
-    if (!ok[vdst] || st$dcolor[vdst]) next
-    st$dcolor[vdst] <- TRUE
-    msrc <- st$m[vdst]
-    if (msrc > 0L && .augment(st, adj, msrc, ok)) {
-      st$m[vdst] <- vsrc
-      return(TRUE)
+    found <- FALSE
+    while (pos[k] < length(nb)) {
+      pos[k] <- pos[k] + 1L
+      vdst <- nb[pos[k]]
+      if (!ok[vdst] || st$dcolor[vdst]) next
+      st$dcolor[vdst] <- TRUE
+      msrc <- st$m[vdst]
+      if (msrc > 0L) {
+        dst[k] <- vdst
+        src <- c(src, msrc); nbs[[k + 1L]] <- adj[[msrc]]; pos <- c(pos, 0L); dst <- c(dst, 0L)
+        enter <- TRUE
+        found <- TRUE
+        break
+      }
     }
+    if (found) next
+    src <- src[-k]; nbs[[k]] <- NULL; pos <- pos[-k]; dst <- dst[-k]
   }
-  FALSE
 }
 
 # maximal_matching(g; srcfilter, dstfilter): a matching of variables to
@@ -165,36 +184,52 @@ print.BipartiteGraph <- function(x, ...) {
 # Strongly connected components of a directed graph given by a successor
 # function, with Tarjan's algorithm. Components are returned in the order
 # they complete, which is reverse topological order.
-# ponytail: recursive depth first search, limited by R's expression depth
-# (chains of a few thousand vertices); make it iterative if that is reached.
+# The depth first search keeps an explicit call stack (vertex, its
+# successors, the next successor position), so long chains do not reach R's
+# expression depth; the order is that of the recursive algorithm.
 .tarjan_scc <- function(n, succ) {
   index <- integer(n); low <- integer(n); onstack <- logical(n)
   stack <- integer(n); sp <- 0L; counter <- 0L
   out <- list()
-  visit <- function(v) {
-    counter <<- counter + 1L
-    index[v] <<- counter; low[v] <<- counter
-    sp <<- sp + 1L; stack[sp] <<- v; onstack[v] <<- TRUE
-    for (w in succ(v)) {
-      if (index[w] == 0L) {
-        visit(w)
-        if (low[w] < low[v]) low[v] <<- low[w]
-      } else if (onstack[w] && index[w] < low[v]) {
-        low[v] <<- index[w]
+  cv <- integer(n); cs <- vector("list", n); cp <- integer(n); depth <- 0L
+  for (root in seq_len(n)) {
+    if (index[root] != 0L) next
+    counter <- counter + 1L
+    index[root] <- counter; low[root] <- counter
+    sp <- sp + 1L; stack[sp] <- root; onstack[root] <- TRUE
+    depth <- 1L; cv[1L] <- root; cs[[1L]] <- as.integer(succ(root)); cp[1L] <- 0L
+    while (depth > 0L) {
+      v <- cv[depth]
+      ws <- cs[[depth]]
+      k <- cp[depth] + 1L
+      if (k <= length(ws)) {
+        cp[depth] <- k
+        w <- ws[k]
+        if (index[w] == 0L) {
+          counter <- counter + 1L
+          index[w] <- counter; low[w] <- counter
+          sp <- sp + 1L; stack[sp] <- w; onstack[w] <- TRUE
+          depth <- depth + 1L; cv[depth] <- w; cs[[depth]] <- as.integer(succ(w)); cp[depth] <- 0L
+        } else if (onstack[w] && index[w] < low[v]) {
+          low[v] <- index[w]
+        }
+        next
       }
-    }
-    if (low[v] == index[v]) {
-      comp <- integer()
-      repeat {
-        w <- stack[sp]; sp <<- sp - 1L
-        onstack[w] <<- FALSE
-        comp <- c(comp, w)
-        if (w == v) break
+      if (low[v] == index[v]) {
+        top <- match(v, stack[seq_len(sp)])
+        comp <- rev(stack[top:sp])
+        onstack[comp] <- FALSE
+        sp <- top - 1L
+        out[[length(out) + 1L]] <- comp
       }
-      out[[length(out) + 1L]] <<- comp
+      cs[depth] <- list(NULL)
+      depth <- depth - 1L
+      if (depth > 0L) {
+        u <- cv[depth]
+        if (low[v] < low[u]) low[u] <- low[v]
+      }
     }
   }
-  for (v in seq_len(n)) if (index[v] == 0L) visit(v)
   out
 }
 

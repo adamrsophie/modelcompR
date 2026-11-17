@@ -204,6 +204,16 @@ ODEForwardSensitivityProblem <- function(f, u0 = NULL, tspan = NULL, p = NULL, s
   e$prob <- integ$prob
   e$terminate <- FALSE; e$u_modified <- FALSE
   e$sol_events <- list()
+  # the scheduling controls (set_proposed_dt, set_abstol, add_saveat, ...)
+  # change how the solver steps, not the values the reset maps to: on the
+  # stand-in they act on a scratch driver state. The real affect runs on
+  # the integrator, where they take effect.
+  I <- new.env(parent = emptyenv())
+  I$dt <- 0; I$dtnew <- NULL; I$tstops <- numeric(); I$stop_idx <- 1L
+  I$abstol <- 0; I$reltol <- 0; I$ctx <- list(); I$saveat <- numeric(); I$next_save <- 1L
+  I$tdir <- if (length(e$prob$tspan) == 2L && e$prob$tspan[2L] < e$prob$tspan[1L]) -1 else 1
+  I$ts <- numeric(); I$us <- list(); I$push_save <- function(...) invisible()
+  e$.I <- I
   e
 }
 

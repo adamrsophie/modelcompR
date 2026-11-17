@@ -59,7 +59,17 @@ test_that("QuasiMonteCarlo samplers, ranges and the analyses match Julia", {
   X <- matrix(R(1800), 3); Y <- R(600)
   expect_identical(X, qmc_sample(600, lb, ub, SobolSample()))
   r <- gsa(X, matrix(Y, 1), RegressionGSA(rank = TRUE))
-  near(r$pearson); near(r$standard_regression); near(r$partial_correlation)
+  near(r$pearson)
+  # the standardized coefficients of a fit with an intercept and partial
+  # correlations of residuals (Julia fits through the origin and inverts a
+  # possibly singular correlation matrix; its values are skipped)
+  R(3); R(3)
+  d <- data.frame(t(X), y = Y)
+  b <- stats::coef(stats::lm(y ~ ., d))[-1L]
+  expect_equal(as.numeric(r$standard_regression), unname(b * apply(X, 1, stats::sd) / stats::sd(Y)), tolerance = 1e-10)
+  pc <- vapply(1:3, function(i) stats::cor(stats::resid(stats::lm(t(X)[, i] ~ t(X)[, -i])),
+                                           stats::resid(stats::lm(Y ~ t(X)[, -i]))), 0)
+  expect_equal(as.numeric(r$partial_correlation), pc, tolerance = 1e-10)
   r <- gsa(X, Y, EASI()); near(r$S1); near(r$S1_Corr)
   r <- gsa(X, Y, EASI(dct_method = TRUE)); near(r$S1); near(r$S1_Corr)
   grid <- as.numeric(.jl_linrange(min(Y), max(Y), 2048))
@@ -152,6 +162,27 @@ test_that("the estimators are unbiased on known indices", {
   expect_true(is.na(gsa(f, DGSM(), list(univariate_distribution("norm"), d[[2]], d[[3]]), samples = 20)$tao[1]))
 })
 
+test_that("regression indices are invariant to shifts and the delta interval uses the bootstrap spread", {
+  X <- matrix(1:5, 1)
+  for (Y in list(1:5, 100 + 1:5, 3 * (1:5) - 7)) {
+    r <- gsa(X, matrix(Y, 1), RegressionGSA())
+    expect_equal(as.numeric(r$standard_regression), sign(Y[2] - Y[1]))
+    expect_equal(as.numeric(r$partial_correlation), sign(Y[2] - Y[1]))
+  }
+  # a constant input has no defined coefficient or partial correlation
+  r <- gsa(rbind(1:6, rep(2, 6)), matrix(c(2, 4, 5, 9, 9, 13), 1), RegressionGSA())
+  expect_true(is.na(r$partial_correlation[2]))
+  set.seed(4)
+  x <- runif(150); y <- x + rnorm(150, sd = 0.3)
+  set.seed(9); d <- gsa(matrix(x, 1), y, DeltaMoment(nboot = 40))
+  # the same resamples: the half width is z times their standard deviation
+  set.seed(9); r <- matrix(.qmc_int(NULL, 40 * 150, 1, 150), 40, 150)
+  M <- round(min(ceiling(150^(2 / (7 + tanh((1500 - 150) / 500)))), 48))
+  cuts <- as.numeric(.jl_linrange(0, 150, M + 1)); grid <- as.numeric(.jl_linrange(min(y), max(y), 2048))
+  bd <- vapply(1:40, function(i) .gsa_calc_delta(x[r[i, ]], y[r[i, ]], grid, cuts), 0)
+  expect_equal(d$adjusted_deltas_hi - d$adjusted_deltas_low, 2 * stats::qnorm(0.975) * stats::sd(bd))
+})
+
 test_that("randomized QMC keeps points in the unit cube", {
   set.seed(2)
   x <- qmc_sample(16, 2, SobolSample())
@@ -163,4 +194,19 @@ test_that("randomized QMC keeps points in the unit cube", {
   expect_equal(lengths(generate_design_matrices(16, c(0, 0), c(1, 1), SobolSample(R = OwenScramble(2)), 3)), rep(32L, 3))
   expect_equal(dim(qmc_sample(10, 3, LatinHypercubeSample())), c(3L, 10L))
   expect_equal(dim(qmc_sample(10, 3, RandomizedHaltonSample())), c(3L, 10L))
+})
+
+test_that("the DeltaMoment interval matches the sampling spread of the estimator", {
+  skip_on_cran()
+  # independent replications of the data: the bootstrap standard deviation
+  # estimates the standard deviation of the estimator over replications
+  set.seed(11)
+  est <- hw <- numeric(15)
+  for (k in 1:15) {
+    x <- runif(150); y <- x + rnorm(150, sd = 0.3)
+    d <- gsa(matrix(x, 1), y, DeltaMoment(nboot = 40))
+    est[k] <- d$deltas; hw[k] <- (d$adjusted_deltas_hi - d$adjusted_deltas_low) / 2
+  }
+  ratio <- mean(hw) / stats::qnorm(0.975) / stats::sd(est)
+  expect_gt(ratio, 0.6); expect_lt(ratio, 1.6)
 })

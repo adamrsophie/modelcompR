@@ -45,6 +45,7 @@
 # are added with rounding to odd, and the final sum rounds to nearest; this is
 # the correctly rounded a*b + c, ties included
 .ojl_fma <- function(a, b, c) {
+  if (.arith$native) return(a * b + c)
   n <- max(length(a), length(b), length(c))
   a <- rep_len(a, n); b <- rep_len(b, n); c <- rep_len(c, n)
   p <- a * b
@@ -88,7 +89,7 @@
 .ojl_dot <- function(x, y) {
   n <- length(x)
   if (!n) return(0)
-  if (n > 16L) return(sum(x * y))
+  if (n > 16L || .arith$native) return(sum(x * y))
   r <- x[1L] * y[1L]
   for (i in seq_len(n - 1L) + 1L) r <- .ojl_fma(x[i], y[i], r)
   r
@@ -99,6 +100,8 @@
 # with fused dot products, reciprocal pivot scaling and the axpy based
 # triangular solves of getrs), so the solution matches Julia bit for bit
 .ojl_backslash <- function(A, b) {
+  if (.arith$native) return(tryCatch(as.numeric(base::solve(A, b)), error = function(e)
+    stop("SingularException(", qr(A)$rank + 1L, ")", call. = FALSE)))
   n <- nrow(A)
   low <- all(A[upper.tri(A)] == 0)
   upp <- all(A[lower.tri(A)] == 0)
@@ -148,6 +151,7 @@
 .ojl_gemv <- function(A, x) {
   n <- ncol(A)
   if (!n) return(numeric(nrow(A)))
+  if (.arith$native) return(as.numeric(A %*% x))
   r <- A[, 1L] * x[1L]
   for (j in seq_len(n - 1L) + 1L) r <- .ojl_fma(A[, j], x[j], r)
   r

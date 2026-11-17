@@ -84,7 +84,7 @@
 # Evaluate a map of values (numbers or expressions of other entries) to
 # numbers by fixed point substitution. Returns a named list key -> value
 # (NA when unresolved).
-.evaluate_varmap <- function(m, extra_rule = NULL, maxiter = 50L) {
+.evaluate_varmap <- function(m, extra_rule = NULL) {
   vals <- list()
   pending <- list()
   for (k in names(m)) {
@@ -98,8 +98,9 @@
     }
   }
   vars <- lapply(m, `[[`, "var")
-  for (it in seq_len(maxiter)) {
-    if (!length(pending)) break
+  # each round resolves at least one value or stops, so chains of any
+  # length resolve; cycles and missing values stay NA
+  while (length(pending)) {
     known <- names(vals)[vapply(vals, function(z) is.numeric(z) && length(z) == 1L && !is.na(z), TRUE)]
     rule <- .rule(unname(vars[known]), lapply(known, function(k) as_sym(vals[[k]])))
     if (!is.null(extra_rule)) rule <- .rule_merge(rule, extra_rule)
@@ -122,6 +123,19 @@
       }
     }
     if (!progressed) break
+  }
+  # values that depend on each other in a cycle are an error; values that
+  # need a missing value stay NA for the caller to report
+  if (length(pending)) {
+    pk <- names(pending)
+    vk <- vapply(pk, function(k) .key(vars[[k]]), "")
+    deps <- lapply(pk, function(k) which(vk %in% .keys(.collect_vars(pending[[k]]))))
+    cyc <- Filter(function(cc) length(cc) > 1L || cc %in% deps[[cc]], .tarjan_scc(length(pk), function(v) deps[[v]]))
+    if (length(cyc)) {
+      ks <- pk[unlist(cyc)]
+      stop("cyclic definitions: ", paste(vapply(ks, function(k) paste(format(vars[[k]]), "~", format(m[[k]]$value)), ""),
+                                         collapse = ", "), call. = FALSE)
+    }
   }
   for (k in names(pending)) vals[[k]] <- NA_real_
   vals
@@ -310,9 +324,17 @@ varmap_to_vars <- function(varmap, vars, defaults = NULL) {
 ODEFunction <- function(sys, jac = FALSE, tgrad = FALSE, ...) {
   if (is.function(sys)) {
     dots <- list(...)
-    return(structure(list(f = sys, jac = dots$jac_fn %||% dots$jac_fun, tgrad = dots$tgrad_fn,
+    # jac and tgrad are the analytic functions of SciMLBase's ODEFunction
+    # here (jac_fn and tgrad_fn are older spellings)
+    if (!is.null(jac) && !is.logical(jac) && !is.function(jac)) stop("`jac` must be a function", call. = FALSE)
+    if (!is.null(tgrad) && !is.logical(tgrad) && !is.function(tgrad)) stop("`tgrad` must be a function", call. = FALSE)
+    jf <- if (is.function(jac)) jac else dots$jac_fn %||% dots$jac_fun
+    tf <- if (is.function(tgrad)) tgrad else dots$tgrad_fn
+    proto <- dots$jac_prototype
+    return(structure(list(f = sys, jac = jf, tgrad = tf,
                           mass_matrix = dots$mass_matrix, sys = NULL, observed = NULL,
-                          analytic = dots$analytic, paramjac = dots$paramjac, jvp = dots$jvp, vjp = dots$vjp),
+                          analytic = dots$analytic, paramjac = dots$paramjac, jvp = dots$jvp, vjp = dots$vjp,
+                          jac_prototype = proto, sparsity = dots$sparsity %||% proto),
                      class = c("ODEFunction", "SciMLFunction")))
   }
   .need_complete(sys, "ODEFunction")
@@ -403,7 +425,13 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
 }
 
 .new_problem <- function(type, ...) {
-  structure(list(...), class = c(type, "SciMLProblem"))
+  prob <- structure(list(...), class = c(type, "SciMLProblem"))
+  M <- if (is.list(prob$f)) prob$f$mass_matrix
+  if (!is.null(M)) {
+    n <- if ((is.numeric(prob$u0) || is.complex(prob$u0)) && length(prob$u0)) length(prob$u0)
+    prob$f$mass_matrix <- .as_mass(M, n)
+  }
+  prob
 }
 
 # Minimal consistency step used until the initialization module replaces it:

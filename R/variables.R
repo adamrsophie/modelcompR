@@ -345,7 +345,13 @@ discretes <- function(..., .meta = list(), .env = parent.frame()) {
   if (!is.null(m)) return(m)
   ent <- .mtk$vars[[.name(x) %||% ""]]
   if (is.null(ent)) return(list())
-  ent <- ent$forms[[.type(x)]] %||% ent
+  # a name declared in another form (the parameter R, then R(t) of an
+  # undeclared function) does not lend its metadata to this one
+  tp <- .type(x)
+  if (length(ent$forms) && tp %in% c("Symbol", "Function") && !(ent$kind %in% c("operator", "iv"))) {
+    ent <- ent$forms[[tp]]
+    if (is.null(ent)) return(list())
+  } else ent <- ent$forms[[tp]] %||% ent
   c(list(kind = ent$kind), ent$meta)
 }
 

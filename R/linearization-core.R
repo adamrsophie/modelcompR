@@ -332,9 +332,13 @@ print.LinearizationFunction <- function(x, ...) {
   gz <- tryCatch(qr(b$g_z), error = function(e) NULL)
   if (is.null(gz) || nrow(b$g_z) != nz || gz$rank < nz)
     stop("g_z not invertible, this indicates that the DAE is of index > 1.", call. = FALSE)
-  lsolve <- function(B) if (ncol(B)) solve(b$g_z, B) else matrix(0, nz, 0L)
-  gzgx <- -lsolve(b$g_x)
-  gzgu <- -lsolve(b$g_u)
+  # one factorization of g_z for both right-hand sides (LAPACK solves the
+  # columns independently, so the values are those of two solves)
+  nxg <- ncol(b$g_x)
+  rhs <- cbind(b$g_x, b$g_u)
+  sol <- if (ncol(rhs)) -solve(b$g_z, rhs) else matrix(0, nz, 0L)
+  gzgx <- sol[, seq_len(nxg), drop = FALSE]
+  gzgu <- sol[, nxg + seq_len(ncol(b$g_u)), drop = FALSE]
   if (eliminate) {
     return(list(A = b$f_x + b$f_z %*% gzgx, B = b$f_u + b$f_z %*% gzgu,
                 C = b$h_x + b$h_z %*% gzgx, D = b$h_u + b$h_z %*% gzgu))

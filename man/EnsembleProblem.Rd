@@ -42,7 +42,11 @@ EnsembleSolution(u, elapsed = 0, converged = TRUE)
   ...,
   trajectories,
   batch_size = trajectories,
-  seed = NULL
+  seed = NULL,
+  on_error = c("stop", "collect"),
+  retries = 0L,
+  rng_streams = c("session", "trajectory"),
+  checkpoint = NULL
 )
 }
 \arguments{
@@ -82,9 +86,34 @@ parallel ones give each trajectory its own L'Ecuyer-CMRG stream.}
 \item{batch_size}{Trajectories per reduction batch.}
 
 \item{seed}{Seed for the random number generator.}
+
+\item{on_error}{What a trajectory that throws an error does: \code{"stop"}
+(the default) stops the ensemble with the trajectory numbers and their
+messages; \code{"collect"} keeps the error object in place of the output and
+counts it in \code{failures}.}
+
+\item{retries}{How many times a trajectory that throws an error is run
+again (its \code{prob_func} sees the repeat number) before \code{on_error}
+applies.}
+
+\item{rng_streams}{\code{"session"} (the default): the streams described for
+\code{ensemblealg}. \code{"trajectory"}: trajectory \code{i} draws from the \code{i}th
+L'Ecuyer-CMRG stream of \code{seed}, so the results do not depend on the
+ensemble algorithm, the number of cores or \code{batch_size}.}
+
+\item{checkpoint}{Optional file: after each batch the reduced output,
+the retcodes and the random state are saved there, and a solve given
+an existing checkpoint resumes after its last batch.}
 }
 \value{
 An \code{EnsembleProblem}.
+
+An \code{EnsembleSolution}: the reduced output \code{u}, \code{elapsed},
+\code{converged} (whether the reduction stopped the ensemble or every batch
+ran), \code{retcodes} (the retcode of each trajectory's last solve, \code{"Error"}
+for a collected error), \code{failures} (the number of trajectories whose
+retcode is not successful) and \code{backend} (how the trajectories ran:
+the GPU names run on CPU workers).
 }
 \description{
 \code{EnsembleProblem(prob)} repeats a problem (usually stochastic) many times.

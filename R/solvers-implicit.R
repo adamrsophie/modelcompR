@@ -44,10 +44,22 @@
 # AutoForwardDiff(), the default of the OrdinaryDiffEq implicit methods.
 .ctx_autodiff <- function(ctx) ctx$autodiff %||% AutoForwardDiff()
 
-.calc_J <- function(ctx, u, t, f0 = NULL) {
-  if (!is.null(ctx$jac)) return(list(J = as.matrix(ctx$jac(u, ctx$p, t)), nf = 0L))
+# With sparse_ok (the Newton matrices of the implicit and Rosenbrock
+# methods) a sparse Jacobian stays sparse: the one of a jac that returns a
+# Matrix::sparseMatrix, and the colored finite differences of AutoSparse
+# with the sparsity (or jac_prototype) of the ODEFunction.
+.calc_J <- function(ctx, u, t, f0 = NULL, sparse_ok = FALSE) {
+  if (!is.null(ctx$jac)) {
+    J <- ctx$jac(u, ctx$p, t)
+    return(list(J = if (sparse_ok && inherits(J, "sparseMatrix")) J else as.matrix(J), nf = 0L))
+  }
   fn <- function(x) ctx$f(x, ctx$p, t)
   ad <- .ctx_autodiff(ctx)
+  if (inherits(ad, "AutoSparse") && sparse_ok && !is.null(ctx$sparsity) && !is.complex(u)) {
+    f0 <- f0 %||% fn(u)
+    return(.jac_colored(fn, u, f0, ctx$sparsity, central = !inherits(ad$dense_ad, "AutoFiniteDiff") ||
+                          !identical(ad$dense_ad$fdtype %||% "forward", "forward")))
+  }
   if (inherits(ad, "AutoSparse")) ad <- ad$dense_ad
   # AutoForwardDiff without a symbolic Jacobian differentiates f with dual
   # numbers (R/forwarddiff.R, ForwardDiff.jacobian; stats.nf counts one call
@@ -65,6 +77,28 @@
   extra <- is.null(f0)
   f0 <- f0 %||% fn(u)
   list(J = .jac_fd(fn, u, f0), nf = length(u) + extra)
+}
+
+# Finite differences along the colors of a column coloring: the columns of
+# one color share no row, so one (or, central, two) evaluations give all of
+# them. The result is a sparse matrix with the pattern of `sparsity`.
+.jac_colored <- function(fn, u, f0, sparsity, central = TRUE) {
+  n <- length(u)
+  Tm <- methods::as(methods::as(Matrix::Matrix(sparsity != 0, sparse = TRUE), "generalMatrix"), "TsparseMatrix")
+  i <- Tm@i + 1L; j <- Tm@j + 1L
+  colors <- column_coloring(sparsity)
+  x <- numeric(length(i))
+  nf <- 0L
+  for (cc in seq_len(max(colors, 0L))) {
+    cols <- which(colors == cc)
+    h <- numeric(n)
+    h[cols] <- if (central) .Machine$double.eps^(1 / 3) * pmax(1, abs(u[cols])) else
+      sqrt(.Machine$double.eps) * pmax(1, abs(u[cols]))
+    d <- if (central) { nf <- nf + 2L; (fn(u + h) - fn(u - h)) } else { nf <- nf + 1L; fn(u + h) - f0 }
+    k <- which(j %in% cols)
+    x[k] <- d[i[k]] / (if (central) 2 * h[j[k]] else h[j[k]])
+  }
+  list(J = Matrix::sparseMatrix(i = i, j = j, x = x, dims = c(n, n)), nf = nf)
 }
 
 .jac_central <- function(fn, u) {
@@ -205,7 +239,7 @@
   # out of place, calc_W computes J afresh whenever it forms W
   if (nj[1L] || (nj[2L] && is.null(dae))) {
     if (is.null(dae)) {
-      jj <- .calc_J(ctx, ju, jt)
+      jj <- .calc_J(ctx, ju, jt, sparse_ok = TRUE)
       nl$J <- jj$J
     } else {
       jj <- .calc_J_dae(ctx, if (is.null(ctx$jac)) dae$du_pred else ctx$du, uprev, t)
@@ -219,7 +253,8 @@
   nl$new_W <- nj[2L]
   if (nj[2L]) {
     W <- if (is.null(dae)) {
-      if (is.null(ctx$mass)) nl$J - diag(1 / gdt, nrow(nl$J)) else nl$J - ctx$mass / gdt
+      if (!is.null(ctx$mass)) nl$J - ctx$mass / gdt else if (inherits(nl$J, "sparseMatrix"))
+        nl$J - Matrix::Diagonal(nrow(nl$J), 1 / gdt) else nl$J - diag(1 / gdt, nrow(nl$J))
     } else nl$J + dae$cj * nl$Jdu
     nl$W <- .factorize(W)
     nl$Wmat <- W

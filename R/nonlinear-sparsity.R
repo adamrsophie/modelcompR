@@ -233,10 +233,24 @@ hessian_sparsity <- function(f, x, sd = NULL) {
 
 # column -> sorted rows of the nonzeros (a CSC pattern)
 .col_pattern <- function(M) {
-  P <- if (inherits(M, "Matrix")) as.matrix(M != 0) else (as.matrix(M) != 0)
-  P[is.na(P)] <- TRUE
-  list(cols = lapply(seq_len(ncol(P)), function(j) which(P[, j])),
-       rows = lapply(seq_len(nrow(P)), function(i) which(P[i, ])), m = nrow(P), n = ncol(P))
+  m <- nrow(M); n <- ncol(M)
+  if (inherits(M, "sparseMatrix")) {
+    # the stored entries of a sparse matrix, without a dense copy
+    Tm <- methods::as(M, "TsparseMatrix")
+    x <- if (methods::.hasSlot(Tm, "x") && length(Tm@x) == length(Tm@i)) Tm@x else rep(TRUE, length(Tm@i))
+    keep <- is.na(x) | x != 0
+    i <- Tm@i[keep] + 1L; j <- Tm@j[keep] + 1L
+  } else {
+    P <- as.matrix(M) != 0
+    P[is.na(P)] <- TRUE
+    w <- which(P, arr.ind = TRUE)
+    i <- w[, 1L]; j <- w[, 2L]
+  }
+  o <- order(j, i)
+  cols <- unname(split(i[o], factor(j[o], levels = seq_len(n))))
+  o <- order(i, j)
+  rows <- unname(split(j[o], factor(i[o], levels = seq_len(m))))
+  list(cols = lapply(cols, as.integer), rows = lapply(rows, as.integer), m = m, n = n)
 }
 
 .partial_distance2 <- function(own, other, nv) {

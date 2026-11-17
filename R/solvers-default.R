@@ -119,11 +119,12 @@ AutoVern9 <- function(alg, ...) AutoSwitch(Vern9(), alg, ...)
 .DEFAULT_SMALLSIZE <- 50L
 .DEFAULT_MEDIUMSIZE <- 500L
 
-.nonstiffchoice <- function(reltol) if (reltol < .DEFAULT_LOW_TOL) 2L else 1L
+# componentwise tolerances: the strictest component decides
+.nonstiffchoice <- function(reltol) if (min(reltol) < .DEFAULT_LOW_TOL) 2L else 1L
 
 .stiffchoice <- function(reltol, len, mass) {
   if (len > .DEFAULT_SMALLSIZE) return(5L)
-  if (reltol < .DEFAULT_LOW_TOL || !.is_identity_mass(mass)) 4L else 3L
+  if (min(reltol) < .DEFAULT_LOW_TOL || !.is_identity_mass(mass)) 4L else 3L
 }
 
 #' The default ODE algorithm

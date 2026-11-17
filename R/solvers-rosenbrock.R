@@ -111,8 +111,11 @@
 .rosen_W <- function(ctx, J, dtgamma) {
   M <- ctx$mass
   if (is.null(M)) {
-    W <- J
-    diag(W) <- diag(W) - 1 / dtgamma
+    W <- if (inherits(J, "sparseMatrix")) J - Matrix::Diagonal(nrow(J), 1 / dtgamma) else {
+      W <- J
+      diag(W) <- diag(W) - 1 / dtgamma
+      W
+    }
   } else W <- J - M * (1 / dtgamma)
   .rosen_lu(W)
 }
@@ -125,9 +128,23 @@
 # rounds differently). NULL when W is not finite or a pivot is exactly zero
 # (issuccess_W).
 .rosen_lu <- function(W) {
+  if (inherits(W, "sparseMatrix")) {
+    # a sparse LU of the Matrix package (UMFPACK and KLU in Julia)
+    if (!all(is.finite(W@x))) return(NULL)
+    W <- methods::as(methods::as(W, "generalMatrix"), "CsparseMatrix")
+    return(tryCatch({
+      F <- Matrix::lu(W, errSing = TRUE)
+      if (any(Matrix::diag(F@U) == 0)) NULL else F
+    }, error = function(e) NULL, warning = function(w) NULL))
+  }
   W <- as.matrix(W)
   if (!all(is.finite(W))) return(NULL)
   n <- nrow(W)
+  if (.arith$native) {
+    # a Householder QR of base R: no S4 dispatch on every solve
+    F <- qr(W)
+    return(if (F$rank < n) NULL else F)
+  }
   if (n > 16L) {
     F <- Matrix::lu(W, warnSing = FALSE)
     return(if (any(F@x[seq.int(1L, n * n, by = n + 1L)] == 0)) NULL else F)
@@ -137,6 +154,7 @@
 }
 
 .rosen_lusolve <- function(F, b) {
+  if (inherits(F, "qr")) return(as.numeric(qr.coef(F, b)))
   if (is.list(F)) .rosen_getrs(F, b) else .as_num(Matrix::solve(F, b))
 }
 
@@ -204,7 +222,7 @@
   out <- list(nf = 0L, njacs = 0L, nw = 1L, f0 = NULL, eigen_est = NULL)
   if (new_jac) {
     tg <- .rosen_tgrad(ctx, u, t)
-    jj <- .calc_J(ctx, u, t)
+    jj <- .calc_J(ctx, u, t, sparse_ok = TRUE)
     cache$J <- jj$J
     cache$dT <- tg$dT
     cache$pending_dtgamma <- dtgamma

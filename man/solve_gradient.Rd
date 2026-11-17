@@ -4,7 +4,15 @@
 \alias{solve_gradient}
 \title{Gradient of a loss of a solution}
 \usage{
-solve_gradient(loss, prob, alg = NULL, ..., sensealg = NULL)
+solve_gradient(
+  loss,
+  prob,
+  alg = NULL,
+  ...,
+  sensealg = NULL,
+  allow_failure = FALSE,
+  loss_grad = NULL
+)
 }
 \arguments{
 \item{loss}{A function of the solution returning a number.}
@@ -22,6 +30,17 @@ its events and every sensitivity method apply.}
 
 \item{sensealg}{A sensitivity algorithm; chosen automatically when
 \code{NULL} (or taken from the problem's \code{sensealg} option).}
+
+\item{allow_failure}{By default a solve that does not succeed (a retcode
+other than \code{Success} or \code{Terminated}, such as \code{MaxIters}) is an error;
+\code{TRUE} differentiates the trajectory that was computed.}
+
+\item{loss_grad}{Optional derivative of the loss: a function of the
+solution returning the derivative with respect to the saved values (a
+matrix shaped as \code{as.matrix(sol)}, or a list with that matrix as \code{u}
+and the derivative with respect to the final parameters as \code{p}). It
+replaces the finite differences of the loss in the saved values, which
+otherwise differentiate only the saved rows the loss reads.}
 }
 \value{
 A list with the gradients \code{u0} and \code{p}, the loss value \code{value}

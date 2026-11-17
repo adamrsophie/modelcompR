@@ -8,6 +8,8 @@
 .mtk <- new.env(parent = emptyenv())
 .mtk$vars <- new.env(parent = emptyenv())   # name -> list(kind, meta)
 .mtk$funs <- new.env(parent = emptyenv())   # registered symbolic functions
+.arith <- new.env(parent = emptyenv())       # arithmetic_mode(): native is TRUE in the native mode
+.arith$native <- FALSE
 .mtk$counter <- 0L
 .mtk$hooks <- new.env(parent = emptyenv())  # extension points between modules
 
@@ -165,8 +167,13 @@ print.mtk_symmap <- function(x, ...) {
   if (!is.null(k)) return(k)
   ent <- .mtk$vars[[.name(e)]]
   if (is.null(ent)) return(.undeclared_kind(e))
-  # a name can be both a symbol and a function (t and t(u)); see .register_var
-  (ent$forms[[ty]] %||% ent)$kind %||% .undeclared_kind(e)
+  # a name can be both a symbol and a function (t and t(u)); see
+  # .register_var. Operators (Pre, Initial) apply in any form; a variable
+  # form that was never declared (R(t) after a parameter R) is undeclared.
+  f <- ent$forms[[ty]]
+  if (!is.null(f)) return(f$kind %||% .undeclared_kind(e))
+  if (length(ent$forms) && !(ent$kind %in% c("operator", "iv"))) return(.undeclared_kind(e))
+  ent$kind %||% .undeclared_kind(e)
 }
 
 # Symbols and function applications made with symcompR directly, without
@@ -225,6 +232,12 @@ print.mtk_symmap <- function(x, ...) {
   walk <- function(z) {
     if (!is_sym(z)) return(invisible())
     k <- .key(z)
+    # names are limited to 10000 bytes: a longer (compound) node is walked
+    # without the memo, the variables it holds still are
+    if (nchar(k, "bytes") >= 10000L) {
+      for (a in .args(z)) walk(a)
+      return(invisible())
+    }
     if (!is.null(seen[[k]])) return(invisible())
     ty <- .type(z)
     if (ty == "Derivative" && .is_declared(.args(z)[[1L]])) {
@@ -263,7 +276,10 @@ print.mtk_symmap <- function(x, ...) {
   if (!length(rule)) return(e)
   env <- attr(rule, "env") %||% list2env(unclass(rule), parent = emptyenv())
   walk <- function(x) {
-    hit <- env[[.subset2(x, "key")]]
+    # R limits names to 10000 bytes; a rule (keys of variables and short
+    # expressions) never holds a longer key
+    k <- .subset2(x, "key")
+    hit <- if (nchar(k, "bytes") < 10000L) env[[k]]
     if (!is.null(hit)) return(hit)
     a <- .subset2(x, "args")
     if (!length(a)) return(x)
@@ -310,14 +326,17 @@ print.mtk_symmap <- function(x, ...) {
   .replace(e, rule)
 }
 
-# Fixed point substitution: apply until no more change (bounded).
-.subst_fixpoint <- function(e, rule, maxiter = 100L) {
+# Fixed point substitution: apply until no more change. An acyclic rule set
+# converges within length(rule) + 1 passes, so a longer run means a cyclic
+# definition, which is an error rather than a partly expanded result.
+.subst_fixpoint <- function(e, rule, maxiter = NULL) {
+  maxiter <- max(maxiter %||% 0L, length(rule) + 2L)
   for (i in seq_len(maxiter)) {
     e2 <- .subst(e, rule)
     if (identical(.key(e2), .key(e))) return(e2)
     e <- e2
   }
-  e
+  stop("cyclic substitution: the definitions of ", .fmt(e), " refer to themselves", call. = FALSE)
 }
 
 .fmt <- function(e) {
@@ -329,3 +348,58 @@ print.mtk_symmap <- function(x, ...) {
 
 .stopf <- function(...) stop(sprintf(...), call. = FALSE)
 .warnf <- function(...) warning(sprintf(...), call. = FALSE)
+
+#' Reference or native floating point arithmetic
+#'
+#' In the reference mode (the default) the solvers replay the floating point
+#' operations of the Julia packages: fused multiply adds are emulated
+#' exactly, and the norms, small LU factorizations, dot products and matrix
+#' vector products follow the operation order of OpenBLAS, so results match
+#' Julia bit for bit. In the native mode the same algorithms use R's
+#' arithmetic, `sum()`, `\%*\%` and LAPACK. The tolerances and the step
+#' size control are the same; results differ from the reference mode by
+#' rounding only, and the solves are faster (two to three times for
+#' ordinary differential equations, far more for dense optimizer kernels).
+#' The mode can also be set with `options(modelcompR.arithmetic = "native")`
+#' before the package loads.
+#'
+#' @param mode `"reference"` or `"native"`; missing returns the current mode.
+#' @return The previous mode, invisibly when `mode` is given.
+#' @examples
+#' old <- arithmetic_mode("native")
+#' sol <- solve(ODEProblem(function(u, p, t) -u, 1, c(0, 1)), Tsit5())
+#' arithmetic_mode(old)
+#' @export
+arithmetic_mode <- function(mode) {
+  old <- if (.arith$native) "native" else "reference"
+  if (missing(mode)) return(old)
+  mode <- match.arg(mode, c("reference", "native"))
+  .arith$native <- identical(mode, "native")
+  invisible(old)
+}
+
+#' Inspect or clear the caches of the package
+#'
+#' modelcompR keeps the symbolic Jacobians of systems it differentiated
+#' (up to 64 systems, then the cache starts again), the functions registered
+#' by [register_symbolic()] (including those of inline nonlinear solves,
+#' which compiled systems refer to by name) and the memo of the last inline
+#' linear solve. `cache_info()` reports their sizes; `clear = TRUE` empties
+#' the Jacobian cache and the memo (registered functions stay, as compiled
+#' systems need them).
+#'
+#' @param clear Empty the caches that can be rebuilt.
+#' @return A named integer vector of cache sizes (before clearing).
+#' @examples
+#' cache_info()
+#' @export
+cache_info <- function(clear = FALSE) {
+  out <- c(sensitivity_systems = length(.mtk$sens_cache %||% list()),
+           registered_functions = length(ls(.mtk$funs, all.names = TRUE)),
+           inline_linear_memo = as.integer(!is.null(.inline_linsolve_memo$args)))
+  if (isTRUE(clear)) {
+    .mtk$sens_cache <- NULL
+    rm(list = ls(.inline_linsolve_memo, all.names = TRUE), envir = .inline_linsolve_memo)
+  }
+  out
+}

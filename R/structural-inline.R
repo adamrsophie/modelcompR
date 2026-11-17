@@ -21,14 +21,15 @@
 # Extension (not in ModelingToolkit): with `inline_nonlinear_sccs = TRUE` a
 # torn block that is not linear becomes a nested Newton solve: its tearing
 # variables are observed through a generated function `inline_nlsolve_<n>`
-# that solves the block residuals for them, warm started from its last
-# solution, so the system compiles to an ODE. The block must have a locally
+# that solves the block residuals for them from their guesses, so the
+# system compiles to an ODE whose right-hand side depends on the state alone. The block must have a locally
 # unique solution with a nonsingular Jacobian; blocks that contain
 # derivatives stay residual equations.
 
 # A one entry memo: the N calls for the components of one block share a
 # single solve of A x = b. Arguments: component j, size n, A by columns, b.
 .inline_linsolve_memo <- new.env(parent = emptyenv())
+.inline_ws <- new.env(parent = emptyenv())   # workspace of the integrator stepping now
 
 .inline_linsolve_fn <- function(j, n, ...) {
   v <- c(...)
@@ -43,7 +44,25 @@
   .inline_linsolve_memo$x[as.integer(j)]
 }
 
-.INLINE_LINSOLVE <- register_symbolic("inline_linsolve", .inline_linsolve_fn)
+# The derivative with respect to argument i, by the implicit function
+# theorem from the same factorization: dx/db_r = A^-1 e_r and dx/dA_rc =
+# -A^-1 e_r x_c, so component j needs row j of A^-1 (one transposed solve).
+.inline_linsolve_deriv <- function(i, j, n, ...) {
+  if (i <= 2L) return(0)
+  x <- .inline_linsolve_fn(j, n, ...)
+  n <- as.integer(n); j <- as.integer(j)
+  m <- .inline_linsolve_memo
+  if (!identical(m$wargs, list(m$args, j))) {
+    A <- matrix(m$args[seq_len(n * n)], n, n)
+    e <- numeric(n); e[j] <- 1
+    m$w <- tryCatch(solve(t(A), e), error = function(err) rep(NaN, n))
+    m$wargs <- list(m$args, j)
+  }
+  k <- i - 2L
+  if (k <= n * n) -m$w[(k - 1L) %% n + 1L] * m$x[(k - 1L) %/% n + 1L] else m$w[k - n * n]
+}
+
+.INLINE_LINSOLVE <- register_symbolic("inline_linsolve", .inline_linsolve_fn, derivatives = .inline_linsolve_deriv)
 
 # Symbolic Gaussian elimination with pivoting on entries that are not zero
 # (sym_lu followed by a solve). NULL when no pivot is found.
@@ -219,28 +238,48 @@
     gv <- smap_get(gs, z)
     if (is.numeric(gv) && length(gv) == 1L && is.finite(gv)) gv else 0
   }, 0)
-  # ponytail: the warm start belongs to the compiled system and is shared by
-  # every problem built from it; a block with several roots can then follow
-  # the branch of an earlier solve. Per integrator state needs the integrator
-  # passed to generated functions.
-  st <- new.env(parent = emptyenv())
-  st$z <- z0
-  st$q <- NULL; st$valid <- FALSE
-  fn <- function(j, ...) {
-    q <- as.numeric(c(...))
-    if (!st$valid || !identical(q, st$q)) {
-      sol <- .newton_solve(function(z) F(z, q), st$z, tol = 1e-13)
-      if (!sol$converged || any(!is.finite(sol$x))) {
-        sol <- .newton_solve(function(z) F(z, q), z0, tol = 1e-13)
-        if (!sol$converged) stop("the inline nonlinear solve of ", paste(vapply(Z, format, ""), collapse = ", "),
-                                 " did not converge", call. = FALSE)
-      }
-      st$q <- q; st$z <- sol$x; st$valid <- TRUE
-    }
-    st$z[as.integer(j)]
-  }
+  # Inside a step of an integrator, Newton's method starts from the last
+  # root that integrator found, so a trajectory follows its branch as the
+  # nonlinear solver cache of an integrator does in ModelingToolkit. Each
+  # integrator has its own workspace (.inline_ws$cur, set by
+  # .integ_step()), so integrators of one compiled system never see each
+  # other's history. Outside an integrator the solve starts from the
+  # guesses and is a function of its inputs alone. The one entry memo
+  # shares a solve among the components of the block.
   .mtk$inline_nl_counter <- .mtk$inline_nl_counter + 1L
-  head <- register_symbolic(paste0("inline_nlsolve_", .mtk$inline_nl_counter), fn)
+  id <- paste0("nl", .mtk$inline_nl_counter)
+  st <- new.env(parent = emptyenv())
+  # the root for the inputs q, in the workspace m of the current integrator
+  root <- function(q) {
+    ws <- .inline_ws$cur
+    m <- if (is.null(ws)) st else (ws[[id]] %||% (ws[[id]] <- new.env(parent = emptyenv())))
+    if (is.null(m$q) || !identical(q, m$q)) {
+      start <- if (is.null(ws)) z0 else m$z %||% z0
+      sol <- .newton_solve(function(z) F(z, q), start, tol = 1e-13)
+      if ((!sol$converged || any(!is.finite(sol$x))) && !identical(start, z0))
+        sol <- .newton_solve(function(z) F(z, q), z0, tol = 1e-13)
+      if (!sol$converged || any(!is.finite(sol$x)))
+        stop("the inline nonlinear solve of ", paste(vapply(Z, format, ""), collapse = ", "),
+             " did not converge", call. = FALSE)
+      m$q <- q; m$z <- sol$x; m$dz <- NULL
+    }
+    m
+  }
+  fn <- function(j, ...) root(as.numeric(c(...)))$z[as.integer(j)]
+  # dz/dq = -F_z^-1 F_q at the root (the implicit function theorem): one
+  # linear solve for all components and inputs, kept with the root
+  deriv <- function(i, j, ...) {
+    if (i <= 1L) return(0)
+    q <- as.numeric(c(...))
+    m <- root(q)
+    if (is.null(m$dz)) {
+      jz <- .ad_try_jacobian(function(z) F(z, q), m$z)$jacobian %||% .jac_central(function(z) F(z, q), m$z)
+      jq <- .ad_try_jacobian(function(v) F(m$z, v), q)$jacobian %||% .jac_central(function(v) F(m$z, v), q)
+      m$dz <- tryCatch(-solve(jz, jq), error = function(e) matrix(NaN, length(m$z), length(q)))
+    }
+    m$dz[as.integer(j), i - 1L]
+  }
+  head <- register_symbolic(paste0("inline_nlsolve_", .mtk$inline_nl_counter), fn, derivatives = deriv)
   sol <- lapply(seq_along(Z), function(j) do.call(head, c(list(j), inputs)))
   list(eqs = escc[ri], vars = vscc[zi], sol = sol)
 }

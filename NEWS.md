@@ -24,3 +24,21 @@
   losses that read `sol$t`, interpolate `sol(t)` or read parameters before
   an event changed them, and decreasing time spans with events and
   checkpointing.
+* Numerical contracts are checked against their definitions: mass
+  matrices in every representation, observed and parameter chains of any
+  length, dual numbers that follow base R, linear solves of sparse and low
+  rank operators, residual based retcodes of the eigensolvers, integer
+  domains and the objective sense of the optimizers, failure accounting
+  of ensembles, and refusal of gradients of failed solves. Regression
+  coefficients and partial correlations of `gsa()` are invariant to
+  shifts, and the DeltaMoment interval uses the bootstrap spread.
+* `arithmetic_mode("native")` runs the solvers with R arithmetic and LAPACK
+  instead of the bit exact replay of Julia's floating point operations.
+* Sparse Jacobians (`jac` returning a sparse matrix, or `AutoSparse()` with
+  a `sparsity` pattern) stay sparse through the implicit and Rosenbrock
+  methods; `ODEFunction(f, jac = J)` now uses J.
+* Inline linear and nonlinear solves follow the branch of each integrator
+  and have implicit derivatives.
+* New options: `loss_grad` of `solve_gradient()`, `save_idxs_storage` of
+  `solve()`, and `retries`, `rng_streams` and `checkpoint` of ensembles;
+  `cache_info()` reports the caches.
