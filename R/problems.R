@@ -436,6 +436,12 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
   prob <- structure(list(...), class = c(type, "SciMLProblem"))
   # the registrations its code was generated with (see .registry_snapshot)
   if (!is.null(prob$sys) && is.null(prob$registry)) prob$registry <- .mtk$reg_active %||% .registry_snapshot()
+  .normalize_mass(prob)
+}
+
+# The mass matrix of a problem in its normal form: a constant matrix, or a
+# changing operator folded into the right hand side (.changing_mass).
+.normalize_mass <- function(prob) {
   M <- if (is.list(prob$f)) prob$f$mass_matrix
   if (!is.null(M)) {
     n <- if ((is.numeric(prob$u0) || is.complex(prob$u0)) && length(prob$u0)) length(prob$u0)
@@ -451,22 +457,33 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
 # and the sensitivities see the changing operator. A singular changing
 # mass matrix (a DAE whose algebraic part moves) is not supported.
 .changing_mass <- function(prob, M, n) {
-  M0 <- .as_mass(M, n)
+  # the operator is checked where the solve starts, M(u0, p, t0), when the
+  # problem gives that point; the placeholder matrix otherwise
+  at0 <- is.numeric(prob$u0) && length(prob$u0) && length(prob$tspan) &&
+    is.function(M$update)
+  M0 <- if (at0) tryCatch(.as_mass(M$update(prob$u0, prob$p, prob$tspan[1L]), n), error = function(e) NULL)
+  M0 <- M0 %||% .as_mass(M, n)
   if (rcond(M0) <= .Machine$double.eps)
     stop("a mass operator that changes with (u, p, t) must be nonsingular (it is solved as ",
          "u' = M(u, p, t)^-1 f(u, p, t)); a singular changing mass matrix, a DAE with a moving algebraic ",
          "part, is not supported", call. = FALSE)
-  f0 <- prob$f$f
-  prob$f$f <- function(u, p, t) {
-    Mt <- .as_mass(M$update(u, p, t), length(u))
-    if (rcond(Mt) <= .Machine$double.eps)
-      stop("the mass operator became singular at t = ", format(t), call. = FALSE)
-    .as_num(base::solve(Mt, f0(u, p, t)))
+  solve_by <- function(f0) {
+    force(f0)
+    function(u, p, t) {
+      Mt <- .as_mass(M$update(u, p, t), length(u))
+      if (rcond(Mt) <= .Machine$double.eps)
+        stop("the mass operator became singular at t = ", format(t), call. = FALSE)
+      .as_num(base::solve(Mt, f0(u, p, t)))
+    }
   }
-  # the Jacobian and the pattern of f are not those of M^-1 f
-  prob$f$jac <- NULL
+  prob$f$f <- solve_by(prob$f$f)
+  # the parts of a split function: M^-1 (f1 + f2) = M^-1 f1 + M^-1 f2
+  for (nm in c("f1", "f2")) if (is.function(prob$f[[nm]])) prob$f[[nm]] <- solve_by(prob$f[[nm]])
+  # the derivatives and the pattern of f are not those of M^-1 f
+  prob$f$jac <- prob$f$jac1 <- NULL
   prob$f$jac_prototype <- NULL
   prob$f$sparsity <- NULL
+  prob$f$tgrad <- prob$f$Wfact <- prob$f$Wfact_t <- NULL
   prob$f$paramjac <- prob$f$jvp <- prob$f$vjp <- NULL
   prob$f$mass_matrix <- NULL
   prob$f$mass_operator <- M
@@ -624,6 +641,8 @@ remake <- function(prob, u0 = NULL, p = NULL, tspan = NULL, ..., check_initializ
     else prob$kwargs[n] <- list(dots[[n]])
   }
   if (inherits(prob, "DAEProblem") && length(prob$du0) == length(prob$u0)) names(prob$du0) <- names(prob$u0)
+  # a new function or mass matrix goes through the construction of the mass
+  if (any(c("f", "mass_matrix") %in% names(dots))) prob <- .normalize_mass(prob)
   if (!is.null(sys)) {
     h <- .mtk$hooks$initialize_problem
     if (!is.null(h)) prob <- h(prob, NULL, check = check_initialization)

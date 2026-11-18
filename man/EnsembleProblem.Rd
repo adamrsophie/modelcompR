@@ -105,15 +105,18 @@ ensemble algorithm, the number of cores or \code{batch_size}.}
 \item{checkpoint}{Optional file: after each batch the reduced output,
 the retcodes and the random state are saved there (written to a
 temporary file and renamed, so an interrupted write leaves the previous
-checkpoint), and a solve given an existing checkpoint resumes after its
-last batch. The checkpoint records its format version, the
-configuration (trajectories, batch size, streams, seed, error policy)
-and an identity of the run; a checkpoint of a different run is an
-error, not a result.}
+checkpoint; where a rename cannot replace a file the old one is kept as
+\verb{<checkpoint>.bak} until the new one is in place), and a solve given an
+existing checkpoint resumes after its last batch. The checkpoint
+records its format version, the configuration (trajectories, batch
+size, streams, seed, error policy, ensemble algorithm and cores) and an
+identity of the run; a checkpoint of a different run is an error, not a
+result.}
 
 \item{run_id}{Optional stable identity of the run for \code{checkpoint}.
-Without it the identity is a fingerprint of the problem, the functions
-(by their source text), the algorithm and the options; give a \code{run_id}
+Without it the identity is the serialized description of the problem,
+the functions (by their source text), the algorithm and the options,
+compared exactly; give a \code{run_id}
 when that text does not identify the run (functions that read changing
 global data, say).}
 }

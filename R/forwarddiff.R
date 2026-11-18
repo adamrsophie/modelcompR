@@ -170,7 +170,8 @@ median.fdual <- function(x, na.rm = FALSE, ...) {
   if (n == 0L) return(NA_real_)
   x <- .ad_sorted(x)
   h <- (n + 1L) %/% 2L
-  if (n %% 2L == 1L) x[h] else (x[h] + x[h + 1L]) / 2
+  # base R takes mean() of the two middle values, which stays finite
+  if (n %% 2L == 1L) x[h] else .ad_mean(x[c(h, h + 1L)])
 }
 
 #' @export

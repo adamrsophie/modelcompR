@@ -109,7 +109,13 @@
 #' * pathwise forward sensitivities for `SDEProblem` (with a fixed step
 #'   method, a `dt` and a `seed`, the derivative of the sampled path), or
 #'   for `SDEProblem` and `RODEProblem` the adjoints [BacksolveAdjoint()]
-#'   and [InterpolatingAdjoint()] of [SDEAdjointProblem()].
+#'   and [InterpolatingAdjoint()] of [SDEAdjointProblem()],
+#' * forward sensitivities of the method of steps for `DDEProblem` (the
+#'   sensitivity DDE, whose history is the sensitivity at the delayed
+#'   times and dh/dp before the start).
+#'
+#' A complex initial state is solved as the real system of its real and
+#' imaginary parts; the gradient in `u0` is `dL/dRe(u0) + i dL/dIm(u0)`.
 #'
 #' Events are differentiated, including the dependence of event times on
 #' the parameters. When the problem was built from a System whose initial
@@ -117,7 +123,7 @@
 #' with respect to `p` includes that dependence.
 #'
 #' @param loss A function of the solution returning a number.
-#' @param prob An `ODEProblem`, `DAEProblem`, `NonlinearProblem`,
+#' @param prob An `ODEProblem`, `DAEProblem`, `DDEProblem`, `NonlinearProblem`,
 #'   `SteadyStateProblem`, `OptimizationProblem`, `SDEProblem` or
 #'   `RODEProblem`. A `DAEProblem` `F(du, u, p, t) = 0` of index 1 is solved
 #'   and differentiated as the mass matrix problem `u_d' = w, 0 = F(w, u, p,
@@ -165,6 +171,8 @@
 #' @export
 solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_failure = FALSE,
                            loss_grad = NULL, loss_rows = NULL) {
+  if (inherits(prob, "ODEProblem") && is.complex(prob$u0))
+    return(.sens_complex_gradient(loss, prob, alg, list(...), sensealg, allow_failure, loss_grad, loss_rows))
   # a loss that interpolates sol(t): solve again saving those times (as
   # `saveat` when it is given, else as stops), hidden from the saved values
   # the loss sees
@@ -222,7 +230,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
       sv <- if (length(base_saveat) == 1L) c(seq(prob$tspan[1L], prob$tspan[2L], by = base_saveat *
                                                    sign(prob$tspan[2L] - prob$tspan[1L])), prob$tspan[2L]) else base_saveat
       dots$saveat <- sort(unique(c(sv, tq)), decreasing = prob$tspan[2L] < prob$tspan[1L])
-      .mtk$sens_hide_t <- tq[!vapply(tq, function(x) any(abs(sv - x) <= 1e-12 * max(1, abs(x))), TRUE)]
+      .mtk$sens_hide_t <- tq[!(tq %in% sv)]
     } else {
       dots$tstops <- sort(unique(c(dots$tstops, tq)))
       .mtk$sens_hide_t <- tq
@@ -242,8 +250,9 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
     return(.sens_stochastic_gradient(loss, prob, alg, dots, sensealg))
   if (inherits(prob, "SDEProblem")) return(.sens_sde_gradient(loss, prob, alg, dots, sensealg))
   if (inherits(prob, "DAEProblem")) return(.sens_dae_gradient(loss, prob, alg, dots, sensealg))
+  if (inherits(prob, "DDEProblem")) return(.sens_dde_gradient(loss, prob, alg, dots, sensealg))
   if (!inherits(prob, "ODEProblem"))
-    stop("solve_gradient() supports ODE, DAE, nonlinear, steady state, optimization and SDE problems, and RODE problems ",
+    stop("solve_gradient() supports ODE, DAE, DDE, nonlinear, steady state, optimization and SDE problems, and RODE problems ",
          "with BacksolveAdjoint() or InterpolatingAdjoint()", call. = FALSE)
   if (.is_sensealg(sensealg, "ShadowingSensitivityAlgorithm"))
     stop("shadowing methods differentiate long time averages: use ForwardLSSProblem(), NILSSProblem(), ",
@@ -261,6 +270,16 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
     S0 <- cbind(diag(1, n), ini$du0)
     Q0 <- cbind(matrix(0, np, n), ini$dp)
     fprob <- .sens_forward_problem(prob, S0, Q0, sensealg)
+    # per state tolerances: the sensitivities of a state take its tolerance,
+    # the tracked parameter sensitivities the smallest
+    naug <- length(fprob$u0)
+    for (nm in c("abstol", "reltol")) {
+      tv <- dots[[nm]] %||% prob$kwargs[[nm]]
+      if (length(tv) == n && n > 1L) {
+        nq <- naug - n * (1L + n + np)
+        dots[[nm]] <- c(rep(as.numeric(tv), 1L + n + np), rep(min(tv), nq))
+      }
+    }
     fsol <- do.call(solve, c(list(fprob, alg), dots))
     fenv <- .sol_env(fsol)
     m <- n + np
@@ -269,6 +288,9 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
                              retcode = fenv$retcode, stats = fenv$stats, p = fenv$p_final)
     senv <- .sol_env(sol)
     if (!is.null(fenv$param_history)) senv$param_history <- fenv$param_history
+    # the loss observes inline blocks on the branch of the forward solve
+    senv$inline_hist <- fenv$inline_hist
+    senv$end_state <- if (!is.null(fenv$end_state)) list(t = fenv$end_state$t, u = fenv$end_state$u[seq_len(n)])
     ct <- .sens_loss_cotangent(loss, sol)
     grad <- numeric(m)
     Ss <- lapply(seq_len(nrow(U)), function(r) matrix(U[r, n + seq_len(n * m)], n, m))
@@ -296,7 +318,8 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
       if (length(evs_all)) {
         tl <- fenv$t[nrow(U)]
         dir <- sign(prob$tspan[2L] - prob$tspan[1L])
-        late <- which(vapply(evs_all, function(ev) dir * (ev$t - tl) > 1e-12 * max(1, abs(tl)), TRUE))
+        # (an event at the last saved time too: that row may be its left side)
+        late <- which(vapply(evs_all, function(ev) dir * (ev$t - tl) >= -1e-12 * max(1, abs(tl)), TRUE))
         if (length(late)) Qend <- evs_all[[late[length(late)]]]$Q_right
       }
       grad <- grad + as.numeric(ct$dp %*% Qend)
@@ -339,7 +362,10 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
   }
   # the final parameters enter at the end time (after any event there)
   tfin <- if (identical(env$retcode, "Terminated")) env$t[nt] else prob$tspan[2L]
-  if (!isTRUE(abs(env$t[nt] - tfin) <= 1e-12 * max(1, abs(tfin)))) {
+  # an event at the end time: the final parameters enter after it, as a
+  # sample of their own on its right side (the saved row may be its left)
+  ev_end <- any(vapply(.sens_events_of(sol), function(e) abs(e$t - tfin) <= 1e-12 * max(1, abs(tfin)), TRUE))
+  if (ev_end || !isTRUE(abs(env$t[nt] - tfin) <= 1e-12 * max(1, abs(tfin)))) {
     tsave <- c(tsave, tfin)
     fixed <- c(fixed, TRUE)
     last <- length(tsave)
@@ -386,25 +412,30 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
   cls <- setdiff(class(sol), c("SciMLSolution", "function"))
   U0 <- env$U
   p0 <- env$p_final
-  # rows saved only for the interpolation of the loss (solve_gradient())
+  # rows saved only for the interpolation of the loss (solve_gradient()):
+  # the saved times are the requested ones exactly
   hide <- .mtk$sens_hide_t
-  hidden <- if (length(hide)) vapply(env$t, function(x) any(abs(hide - x) <= 1e-12 * max(1, abs(x))), TRUE) else
-    logical(length(env$t))
+  hidden <- if (length(hide)) env$t %in% hide else logical(length(env$t))
+  # the samples read through sol(t) are a matrix of their own (Ui0), with
+  # their own cotangent: a time read both as a saved row and through sol(t)
+  # gets both contributions
   itimes <- .mtk$sens_interp_t
   irows <- if (length(itimes)) vapply(itimes, function(x) {
-    i <- which(abs(env$t - x) <= 1e-12 * max(1, abs(x)))
+    i <- which(env$t == x)
     if (length(i)) i[length(i)] else NA_integer_
   }, 0L) else integer()
+  has_interp <- length(irows) && !anyNA(irows)
+  Ui0 <- if (has_interp) U0[irows, , drop = FALSE]
   # sol$prob$p holds the initial parameters: when events change them it gets
   # its own cotangent (dp_init), which belongs to p directly
   pinit <- data$prob$p
   hh <- data$param_history
   split <- length(p0) && !is.null(pinit) &&
     ((!is.null(hh) && nrow(hh$p) > 1L) || !identical(as.numeric(pinit), as.numeric(p0)))
-  ev <- function(U, p, pi = NULL) {
+  ev <- function(U, p, pi = NULL, Ui = Ui0) {
     d <- data
     if (!is.null(pi)) d$prob$p <- pi
-    if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U[irows, , drop = FALSE])
+    if (has_interp) d$sens_interp <- list(t = itimes, U = Ui)
     d$U <- U[!hidden, , drop = FALSE]
     d$t <- env$t[!hidden]
     d$p_final <- p
@@ -412,52 +443,73 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
       d$param_history$p[nrow(d$param_history$p), ] <- p
     }
     if (!split && !identical(p, p0) && !is.null(d$prob)) d$prob$p <- p
+    # the objective value of an optimization solution follows its point
+    # and parameters
+    if (!is.null(d$objective) && inherits(d$prob, "OptimizationProblem"))
+      d$objective <- .opt_objective_at(d$prob, d$U[1L, ], d$prob$p) %||% d$objective
     v <- loss(.new_solution(cls, d))
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v)) stop("the loss must return a finite number", call. = FALSE)
     v
   }
-  value <- ev(U0, p0)
+  # the first evaluation collects every time the loss interpolates
+  .mtk$sens_pending_t <- NULL
+  .mtk$sens_collecting <- TRUE
+  value <- tryCatch(ev(U0, p0), error = function(e) e, finally = .mtk$sens_collecting <- FALSE)
+  if (length(.mtk$sens_pending_t)) {
+    pend <- unique(.mtk$sens_pending_t)
+    .mtk$sens_pending_t <- NULL
+    stop(structure(class = c("sens_needs_times", "error", "condition"),
+                   list(message = "the loss interpolates the solution", call = NULL, times = pend)))
+  }
+  if (inherits(value, "error")) stop(value)
   dU <- U0
   dU[] <- 0
   lg <- .mtk$sens_loss_grad
   if (!is.null(lg)) {
     d <- data
-    if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
+    if (has_interp) d$sens_interp <- list(t = itimes, U = Ui0)
     d$U <- U0[!hidden, , drop = FALSE]; d$t <- env$t[!hidden]
     g <- lg(.new_solution(cls, d))
     gu <- if (is.list(g)) g$u else g
     gu <- as.matrix(gu)
-    # the cotangent is in the view of the loss, the saved components
+    # the cotangent is in the view of the loss, the saved components; a
+    # state shown in several columns gets the sum of their cotangents
     cols <- env$save_idxs %||% seq_len(ncol(d$U))
     if (!identical(dim(gu), c(nrow(d$U), length(cols)))) stop("`loss_grad` must return a ", nrow(d$U), " by ",
                                                              length(cols), " matrix, as as.matrix(sol)", call. = FALSE)
-    dU[!hidden, cols] <- gu
+    for (j in seq_along(cols)) dU[!hidden, cols[j]] <- dU[!hidden, cols[j]] + gu[, j]
     gp <- if (is.list(g) && !is.null(g$p)) as.numeric(g$p) else numeric(length(p0))
     if (length(gp) != length(p0)) stop("the `p` of `loss_grad` must have ", length(p0), " values", call. = FALSE)
   }
   # Every saved value is differentiated unless the caller declares which
   # saved rows the loss reads (loss_rows of solve_gradient(), rows of the
-  # visible solution); a black box probe cannot prove that a loss ignores
-  # a value.
-  # loss_grad covers the saved values: the rows saved only for sol(t) are
-  # still differentiated
-  rows <- if (!is.null(lg)) which(hidden) else seq_len(nrow(U0))
+  # visible solution) or gives loss_grad; a black box probe cannot prove
+  # that a loss ignores a value. Every state is differentiated, not only
+  # the save_idxs view: with full storage the loss can index any of them.
+  vis <- which(!hidden)
+  rows <- if (!is.null(lg)) integer() else vis
   lr <- .mtk$sens_loss_rows
   if (is.null(lg) && !is.null(lr)) {
-    vis <- which(!hidden)
     lr <- if (identical(lr, "last")) length(vis) else as.integer(lr)
     if (anyNA(lr) || any(lr < 1L | lr > length(vis)))
       stop("`loss_rows` must index the ", length(vis), " saved rows", call. = FALSE)
-    # the rows saved for interpolation only are read through sol(t)
-    rows <- c(vis[lr], which(hidden))
+    rows <- vis[lr]
   }
-  scols <- env$save_idxs %||% seq_len(ncol(U0))
-  for (k in which(row(U0) %in% rows & col(U0) %in% scols)) {
+  for (k in which(row(U0) %in% rows)) {
     h <- .sens_h(U0[k])
     Up <- U0; Um <- U0
     Up[k] <- U0[k] + h
     Um[k] <- U0[k] - h
     dU[k] <- (ev(Up, p0) - ev(Um, p0)) / (2 * h)
+  }
+  # the samples read through sol(t), always differenced
+  if (has_interp) for (k in seq_along(Ui0)) {
+    h <- .sens_h(Ui0[k])
+    Up <- Ui0; Um <- Ui0
+    Up[k] <- Ui0[k] + h
+    Um[k] <- Ui0[k] - h
+    r <- irows[(k - 1L) %% nrow(Ui0) + 1L]; c <- (k - 1L) %/% nrow(Ui0) + 1L
+    dU[r, c] <- dU[r, c] + (ev(U0, p0, Ui = Up) - ev(U0, p0, Ui = Um)) / (2 * h)
   }
   dp <- if (!is.null(lg)) gp else if (length(p0)) .sens_fd_grad(function(q) ev(U0, .sens_pvec(p0, q)), as.numeric(p0)) else numeric()
   dp_init <- if (split) .sens_fd_grad(function(q) ev(U0, p0, .sens_pvec(pinit, q)), as.numeric(pinit))
@@ -470,7 +522,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
   ev_t <- function(tv) {
     d <- data
     d$sens_param_idx <- pidx
-    if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
+    if (has_interp) d$sens_interp <- list(t = itimes, U = Ui0)
     d$U <- U0[!hidden, , drop = FALSE]
     d$t <- tv
     loss(.new_solution(cls, d))
@@ -495,7 +547,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
     K <- nrow(h$p) - 1L
     dp_hist <- t(vapply(seq_len(K), function(k) .sens_fd_grad(function(q) {
       d <- data
-      if (length(irows) && !anyNA(irows)) d$sens_interp <- list(t = itimes, U = U0[irows, , drop = FALSE])
+      if (has_interp) d$sens_interp <- list(t = itimes, U = Ui0)
       d$U <- U0[!hidden, , drop = FALSE]
       d$t <- env$t[!hidden]
       d$param_history$p[k, ] <- d$param_history$p[k, ] + q
@@ -796,4 +848,129 @@ second_order_sensitivity_product <- function(loss, v, prob, alg, ..., sensealg =
     do.call(solve_gradient, c(list(loss, pr, alg), dots, list(sensealg = sensealg$adjalg)))$p
   }
   (gr(h) - gr(-h)) / (2 * h)
+}
+
+# The gradient of a real loss of a complex state: the problem is solved as
+# the real system of the real and imaginary parts, z = (Re u, Im u), with
+# f(z) = (Re f(u), Im f(u)); the loss sees the complex solution. The
+# gradient in u0 is dL/dRe(u0) + i dL/dIm(u0) (the convention of Zygote).
+.sens_complex_gradient <- function(loss, prob, alg, dots, sensealg, allow_failure, loss_grad, loss_rows) {
+  if (is.complex(prob$p)) stop("solve_gradient() differentiates real parameters only", call. = FALSE)
+  if (!is.null(loss_grad)) stop("`loss_grad` is not supported for a complex state", call. = FALSE)
+  n <- length(prob$u0)
+  d <- dim(prob$u0)
+  f0 <- .shape_f(prob$f$f, d)
+  cplx <- function(z) complex(real = z[seq_len(n)], imaginary = z[n + seq_len(n)])
+  M <- prob$f$mass_matrix
+  if (!is.null(M) && !.is_identity_mass(M)) stop("a complex state with a mass matrix is not supported by solve_gradient()",
+                                                call. = FALSE)
+  fr <- function(u, p, t) { v <- f0(cplx(u), p, t); c(Re(v), Im(v)) }
+  pr <- prob
+  pr$f <- ODEFunction(fr)
+  pr$u0 <- c(Re(as.vector(prob$u0)), Im(as.vector(prob$u0)))
+  pr$sys <- NULL
+  if (!is.null(dots$save_idxs) || !is.null(pr$kwargs$save_idxs))
+    stop("save_idxs is not supported by solve_gradient() for a complex state", call. = FALSE)
+  as_complex_sol <- function(s) {
+    env <- .sol_env(s)
+    dd <- mget(setdiff(ls(env, all.names = TRUE), "obs_cache"), envir = env)
+    tocx <- function(U) U[, seq_len(n), drop = FALSE] + 1i * U[, n + seq_len(n), drop = FALSE]
+    dd$U <- tocx(env$U)
+    colnames(dd$U) <- names(prob$u0)
+    if (!is.null(dd$sens_interp)) dd$sens_interp$U <- tocx(dd$sens_interp$U)
+    if (!is.null(dd$end_state)) dd$end_state$u <- cplx(dd$end_state$u)
+    dd$steps <- NULL
+    dd$prob <- prob
+    .new_solution(setdiff(class(s), c("SciMLSolution", "function")), dd)
+  }
+  g <- do.call(solve_gradient, c(list(function(s) loss(as_complex_sol(s)), pr, alg), dots,
+                                 list(sensealg = sensealg, allow_failure = allow_failure, loss_rows = loss_rows)))
+  du <- g$u0
+  u0g <- complex(real = du[seq_len(n)], imaginary = du[n + seq_len(n)])
+  names(u0g) <- names(prob$u0)
+  list(u0 = u0g, p = g$p, value = g$value, sol = as_complex_sol(g$sol))
+}
+
+# The gradient of a loss of a DDE solution by forward sensitivities. The
+# sensitivities S = du/dtheta, theta = (u0, p), solve the DDE
+#   S' = d/de f(u + e S, h + e S_h, p + e dp, t) at e = 0,
+# whose history S_h is the sensitivity of the solution at the delayed times
+# (and of the prehistory, dh/dp, before t0). The directional derivatives are
+# central differences of f, so f and its delays may be any R function; the
+# augmented problem (u, S) is solved by the same method of steps.
+.sens_dde_gradient <- function(loss, prob, alg, dots, sensealg) {
+  if (!is.null(prob$kwargs$callback) || !is.null(dots$callback))
+    stop("solve_gradient() of a DDE with callbacks is not supported", call. = FALSE)
+  M <- prob$f$mass_matrix
+  if (!is.null(M) && !.is_identity_mass(M)) stop("solve_gradient() of a DDE with a mass matrix is not supported",
+                                                call. = FALSE)
+  if (is.complex(prob$u0)) stop("solve_gradient() of a DDE differentiates real states only", call. = FALSE)
+  f <- prob$f$f
+  h <- prob$h
+  n <- length(prob$u0); np <- length(prob$p); m <- n + np
+  p0 <- prob$p
+  hdep <- "deriv" %in% names(formals(h))
+  hcall <- function(pp, s, deriv = 0L) .as_num(if (deriv > 0L) h(pp, s, deriv = deriv) else h(pp, s))
+  # the prehistory and its parameter derivative, (h, dh/du0 = 0, dh/dp)
+  haug <- function(pp, s, deriv = 0L) {
+    v <- hcall(pp, s, deriv)
+    dh <- matrix(0, n, m)
+    if (np) dh[, n + seq_len(np)] <- .sens_fd_jac(function(q) hcall(.sens_pvec(pp, q), s, deriv), as.numeric(pp))
+    c(v, as.numeric(dh))
+  }
+  if (!hdep) formals(haug)$deriv <- NULL
+  if (!hdep) body(haug) <- quote({
+    v <- hcall(pp, s)
+    dh <- matrix(0, n, m)
+    if (np) dh[, n + seq_len(np)] <- .sens_fd_jac(function(q) hcall(.sens_pvec(pp, q), s), as.numeric(pp))
+    c(v, as.numeric(dh))
+  })
+  iu <- seq_len(n)
+  faug <- function(z, H, p, t) {
+    u <- z[iu]
+    S <- matrix(z[-iu], n, m)
+    Hu <- function(pp, s, ...) H(p, s, ...)[iu]
+    out <- .as_num(f(u, Hu, p, t))
+    dS <- matrix(0, n, m)
+    for (j in seq_len(m)) {
+      cols <- n + (j - 1L) * n + iu
+      du <- S[, j]
+      dp <- numeric(np)
+      if (j > n) dp[j - n] <- 1
+      e <- 1e-6 * max(1, sqrt(sum(u^2))) / max(1, sqrt(sum(du^2)) + sqrt(sum(dp^2)))
+      side <- function(sg) {
+        Hs <- function(pp, s, ...) { v <- H(p, s, ...); v[iu] + sg * e * v[cols] }
+        .as_num(f(u + sg * e * du, Hs, if (np) .sens_pvec(p, as.numeric(p) + sg * e * dp) else p, t))
+      }
+      dS[, j] <- (side(1) - side(-1)) / (2 * e)
+    }
+    c(out, as.numeric(dS))
+  }
+  dl <- lapply(prob$dependent_lags %||% list(), function(lg) { force(lg); function(z, p, t) lg(z[iu], p, t) })
+  z0 <- c(as.numeric(prob$u0), as.numeric(cbind(diag(1, n), matrix(0, n, np))))
+  aprob <- .new_problem("DDEProblem", f = DDEFunction(faug), u0 = z0, h = haug, tspan = prob$tspan, p = p0,
+                        sys = NULL, constant_lags = prob$constant_lags, dependent_lags = dl,
+                        neutral = prob$neutral, order_discontinuity_t0 = prob$order_discontinuity_t0,
+                        noise_type = NULL, kwargs = prob$kwargs)
+  for (nm in c("abstol", "reltol")) {
+    tv <- dots[[nm]] %||% prob$kwargs[[nm]]
+    if (length(tv) == n && n > 1L) dots[[nm]] <- rep(as.numeric(tv), 1L + m)
+  }
+  if (!is.null(dots$save_idxs)) {
+    .mtk$sens_save_idxs <- get_save_idxs_and_saved_subsystem(prob, dots$save_idxs)$save_idxs
+    dots$save_idxs <- NULL
+  }
+  fsol <- do.call(solve, c(list(aprob, alg), dots))
+  fenv <- .sol_env(fsol)
+  U <- fenv$U
+  Uu <- U[, iu, drop = FALSE]
+  colnames(Uu) <- names(prob$u0)
+  sol <- .new_ode_solution(t = fenv$t, u = Uu, prob = prob, alg = fenv$alg,
+                           retcode = fenv$retcode, stats = fenv$stats, p = p0)
+  ct <- .sens_loss_cotangent(loss, sol)
+  grad <- numeric(m)
+  for (r in seq_len(nrow(U))) grad <- grad + as.numeric(ct$dU[r, ] %*% matrix(U[r, -iu], n, m))
+  if (np) grad[n + seq_len(np)] <- grad[n + seq_len(np)] + ct$dp
+  list(u0 = stats::setNames(grad[iu], names(prob$u0)), p = stats::setNames(grad[n + seq_len(np)], names(prob$p)),
+       value = ct$value, sol = sol)
 }

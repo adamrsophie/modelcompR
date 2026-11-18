@@ -144,6 +144,14 @@ OptimizationAdjoint <- function(chunk_size = 0, autodiff = NULL, diff_type = "fo
 # OptimizationAdjointProblem).
 .sens_opt_dp <- function(prob, x, p, du, sensealg) {
   fns <- .sens_opt_fns(prob, sensealg)
+  # a maximization is the minimization of -f, which the solver ran: the
+  # KKT conditions (and the signs of the multipliers) are those of -f
+  if (identical(unclass(prob$sense %||% MinSense), "MaxSense")) {
+    g0 <- fns$grad; h0 <- fns$hess; q0 <- fns$gq
+    fns$grad <- function(u, p) -g0(u, p)
+    fns$hess <- function(u, p) -h0(u, p)
+    fns$gq <- function(u, p) -q0(u, p)
+  }
   n <- length(x)
   np <- length(p)
   if (!np)
@@ -259,4 +267,14 @@ OptimizationAdjoint <- function(chunk_size = 0, autodiff = NULL, diff_type = "fo
   dp <- .sens_opt_dp(prob, x, prob$p, as.numeric(ct$dU[1L, ]), sensealg) + ct$dp
   list(u0 = stats::setNames(numeric(length(x)), names(prob$u0)), p = stats::setNames(dp, names(prob$p)),
        value = ct$value, sol = sol)
+}
+
+# The objective of an optimization problem at x for the parameters p (in
+# the user's sense), for the copies of a solution a loss is differentiated
+# on; NULL leaves the stored value.
+.opt_objective_at <- function(prob, x, p) {
+  f <- prob$f$f %||% prob$f
+  if (!is.function(f)) return(NULL)
+  v <- tryCatch(as.numeric(f(x, p))[1L], error = function(e) NULL)
+  v
 }

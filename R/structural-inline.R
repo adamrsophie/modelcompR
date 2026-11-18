@@ -93,11 +93,21 @@
   ids <- .inline_ids(ws)
   if (!length(ids)) return(invisible())
   snap <- lapply(stats::setNames(ids, ids), function(id) get(id, envir = ws)$zc)
-  nh <- length(ws$.hist_t)
-  if (nh && ws$.hist_t[nh] == t) ws$.hist[[nh]] <- snap else {
-    ws$.hist_t <- c(ws$.hist_t, t)
-    ws$.hist[[nh + 1L]] <- snap
+  # an event found inside a step moves t back: commits past it are void
+  ht <- ws$.hist_t
+  if (length(ht) > 1L) {
+    dir <- sign(ht[length(ht)] - ht[1L])
+    if (dir != 0) {
+      keep <- dir * (ht - t) <= 0
+      if (!all(keep)) { ws$.hist_t <- ht[keep]; ws$.hist <- ws$.hist[keep] }
+    }
   }
+  # one entry per accepted state: the two sides of an event at the same
+  # time keep two entries (left first)
+  nh <- length(ws$.hist_t)
+  if (nh && ws$.hist_t[nh] == t && identical(ws$.hist[[nh]], snap)) return(invisible())
+  ws$.hist_t <- c(ws$.hist_t, t)
+  ws$.hist[[nh + 1L]] <- snap
   invisible()
 }
 
@@ -109,11 +119,13 @@
 }
 
 # a read only workspace seeded with the history roots at the last accepted
-# time at or before t (in the direction of the history)
-.inline_replay_ws <- function(hist, t) {
+# time at or before t (in the direction of the history); left = TRUE takes
+# the first entry at t, the left side of an event there
+.inline_replay_ws <- function(hist, t, left = FALSE) {
   ht <- hist$t
   k <- if (length(ht) > 1L && ht[length(ht)] < ht[1L]) findInterval(-t, -ht) else findInterval(t, ht)
   k <- max(1L, min(length(ht), k))
+  if (left && ht[k] == t) k <- match(t, ht)
   key <- as.character(k)
   ws <- hist$cache[[key]]
   if (is.null(ws)) {
@@ -141,6 +153,33 @@
     on.exit(.inline_ws$cur <- old)
     fn(...)
   }
+}
+
+# Damped Newton for an inline block. Convergence is judged by the full
+# Newton correction relative to the state, which does not change when an
+# equation is multiplied by a constant (a residual threshold would accept
+# any point of a rescaled equation), and an exact zero residual.
+.inline_newton <- function(F, x0, tol = 1e-12, maxiter = 100L) {
+  x <- as.numeric(x0)
+  fx <- F(x)
+  for (it in seq_len(maxiter)) {
+    if (!all(is.finite(fx))) break
+    if (all(fx == 0)) return(list(x = x, converged = TRUE, iter = it))
+    dx <- solve(.fd_jacobian(F, x, fx), -fx)
+    if (!all(is.finite(dx))) break
+    if (max(abs(dx)) <= tol * (1 + max(abs(x)))) return(list(x = x + dx, converged = TRUE, iter = it))
+    lam <- 1
+    nf <- sqrt(sum(fx^2))
+    repeat {
+      xn <- x + lam * dx
+      fn <- F(xn)
+      if (all(is.finite(fn)) && sqrt(sum(fn^2)) <= (1 - 1e-4 * lam) * nf) break
+      lam <- lam / 2
+      if (lam < 1e-10) break
+    }
+    x <- xn; fx <- fn
+  }
+  list(x = x, converged = FALSE, iter = maxiter)
 }
 
 .inline_linsolve_fn <- function(j, n, ...) {
@@ -371,7 +410,7 @@
     start <- if (is.null(ws)) z0 else m$zc %||% z0
     if (is.null(m$q) || !identical(q, m$q) || !identical(start, m$start)) {
       # a singular Newton system (at a fold) counts as no convergence
-      newton <- function(x0) tryCatch(.newton_solve(function(z) F(z, q), x0, tol = 1e-13),
+      newton <- function(x0) tryCatch(.inline_newton(function(z) F(z, q), x0),
                                        error = function(e) list(x = x0 * NaN, converged = FALSE))
       sol <- newton(start)
       if ((!sol$converged || any(!is.finite(sol$x))) && !identical(start, z0)) sol <- newton(z0)

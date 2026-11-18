@@ -368,7 +368,22 @@ print.DDEAlgorithm <- function(x, ...) {
 
 # History h(p, s) during integration.
 .dde_H <- function(hs) {
-  function(p, s) {
+  function(p, s, deriv = 0L) {
+    # derivatives of the history (neutral DDEs): of the prehistory, or of
+    # the interpolant of the accepted step that holds s
+    if (deriv > 0L) {
+      if (s <= hs$t0) return(.as_num(hs$h(p, s, deriv = deriv)))
+      n <- length(hs$starts)
+      st <- if (n && s <= hs$ends[n] + 1e-12 * max(1, abs(s))) hs$steps[[max(1L, findInterval(s, hs$starts))]] else
+        hs$current
+      if (is.null(st)) {
+        # a query ahead of the accepted steps, as for the values
+        hs$inside <- TRUE
+        if (!n) return(.as_num(hs$h(p, hs$t0, deriv = deriv)))
+        st <- hs$steps[[n]]
+      }
+      return(.step_deriv(st, s, deriv, st$tend %||% (st$t0 + st$dt) - st$t0))
+    }
     if (s <= hs$t0) return(.as_num(hs$h(p, s)))
     n <- length(hs$starts)
     if (n && s <= hs$ends[n] + 1e-12 * max(1, abs(s))) {

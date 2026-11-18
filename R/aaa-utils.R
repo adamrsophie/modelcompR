@@ -293,13 +293,16 @@ print.mtk_symmap <- function(x, ...) {
 # xreplace needs the left-hand expressions, so the rule carries them in an
 # attribute; build rules with .rule() rather than by hand.
 .rule <- function(from, to) {
-  out <- list()
-  lhs <- list()
-  for (i in seq_along(from)) {
-    k <- .key(from[[i]])
-    out[[k]] <- as_sym(to[[i]])
-    lhs[[k]] <- from[[i]]
-  }
+  # one entry per key, in the order keys first appear, with the last value
+  # given for it (built at once: growing a named list is quadratic)
+  keys <- .keys(from)
+  u <- unique(keys)
+  last <- length(keys) + 1L - match(u, rev(keys))
+  out <- lapply(to[last], as_sym)
+  names(out) <- u
+  lhs <- from[last]
+  names(lhs) <- u
+  if (!length(u)) { out <- list(); lhs <- list() }
   attr(out, "lhs") <- lhs
   attr(out, "env") <- list2env(out, parent = emptyenv())
   out

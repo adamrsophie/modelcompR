@@ -94,8 +94,16 @@ SplitODEProblem <- function(f1, f2 = NULL, u0, tspan, p = numeric(), ...) {
     return(SplitODEProblem(f1, NULL, f2, u0, if (missing(tspan)) numeric() else tspan, ...))
   }
   prob <- ODEProblem(fn$f, u0, tspan, p, ...)
+  op <- prob$f$mass_operator
   for (nm in c("f1", "f2", "jac1")) prob$f[[nm]] <- fn[[nm]]
   class(prob$f) <- unique(c("SplitFunction", class(prob$f)))
+  # a changing mass matrix applies to each part
+  if (!is.null(op)) {
+    prob$f$f <- fn$f
+    prob$f$mass_matrix <- op
+    prob$f$mass_operator <- NULL
+    prob <- .changing_mass(prob, op, length(prob$u0))
+  }
   .with_class(prob, "SplitODEProblem")
 }
 

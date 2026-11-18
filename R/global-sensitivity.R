@@ -489,14 +489,26 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 # Each row of inputs and outputs is centered and scaled to unit standard
 # deviation first, so every statistic is invariant to shifts and positive
 # changes of units, and the decompositions work on well scaled columns.
-# A row with no variation (relative to its magnitude) is a constant: its
-# statistics are NA, and it is left out of the designs of the others.
+# A row whose samples are all equal is a constant: its statistics are NA,
+# and it is left out of the designs of the others. The differences from the
+# first sample are taken in the original units (exact for close values, so
+# a large offset keeps the variation) and scaled by their largest size
+# before the variance, which neither underflows nor overflows.
 .gsa_standardize <- function(M) {
-  mu <- rowMeans(M)
-  s <- .gsa_rowsd(M)
-  const <- !is.finite(s) | s <= 64 * .Machine$double.eps * pmax(abs(mu), .Machine$double.xmin)
-  Z <- (M - mu) / ifelse(const, 1, s)
-  Z[const, ] <- 0
+  M <- as.matrix(M)
+  const <- logical(nrow(M))
+  Z <- matrix(0, nrow(M), ncol(M))
+  for (i in seq_len(nrow(M))) {
+    x <- M[i, ]
+    if (!all(is.finite(x)) || all(x == x[1L])) { const[i] <- TRUE; next }
+    d <- x - x[1L]
+    if (!all(is.finite(d))) { c0 <- max(abs(x)); d <- x / c0 - x[1L] / c0 }
+    d <- d / max(abs(d))
+    d <- d - mean(d)
+    s <- stats::sd(d)
+    if (!is.finite(s) || s == 0) { const[i] <- TRUE; next }
+    Z[i, ] <- d / s
+  }
   list(Z = Z, const = const)
 }
 
@@ -509,6 +521,19 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
   if (!length(keep)) return(out)
   q <- qr(t(Sx$Z[keep, , drop = FALSE]), tol = 1e-10)
   beta <- qr.coef(q, t(Sy$Z))
+  # a coefficient is determined only when it does not move along the null
+  # space of the design: in an exactly collinear pair neither one is (the
+  # pivoted QR would report the one it kept)
+  k <- length(keep); r <- q$rank
+  if (r < k) {
+    R <- qr.R(q)
+    N <- matrix(0, k, k - r)
+    N[q$pivot[seq_len(r)], ] <- -backsolve(R[seq_len(r), seq_len(r), drop = FALSE],
+                                           R[seq_len(r), r + seq_len(k - r), drop = FALSE])
+    N[q$pivot[r + seq_len(k - r)], ] <- diag(1, k - r)
+    N <- qr.Q(qr(N))
+    beta[sqrt(rowSums(N^2)) > 1e-8, ] <- NA
+  }
   beta[, Sy$const] <- NA
   out[, keep] <- t(beta)
   out
@@ -984,12 +1009,17 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     assign(".Random.seed", user, envir = globalenv())
     out
   })
+  # R's Box-Muller normals cache a value outside .Random.seed: it is
+  # cleared at each switch of stream, so neither stream sees the other's
+  bm_clear <- function() if (identical(RNGkind()[2L], "Box-Muller")) RNGkind(normal.kind = "Box-Muller")
   draw_block <- function(ip) {
     user <- get(".Random.seed", envir = globalenv())
     assign(".Random.seed", design_seed, envir = globalenv())
+    bm_clear()
     on.exit({
       design_seed <<- get(".Random.seed", envir = globalenv())
       assign(".Random.seed", user, envir = globalenv())
+      bm_clear()
     })
     perm_block(ip)
   }

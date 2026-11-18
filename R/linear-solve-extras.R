@@ -83,7 +83,12 @@ PartitionedSolversAlgorithm <- function(solver = NULL, ...) {
 }
 
 # The operator handed to the solver: SciMLOperators as matrices.
-.lin_prepare_A <- function(A, opts, cache) {
+.lin_prepare_A <- function(A, opts, cache, alg = NULL) {
+  # the Krylov methods that only multiply by A apply an operator directly,
+  # matrix free; the least squares methods also need A'
+  if (inherits(A, "AbstractSciMLOperator") && identical(alg$method, "krylov") &&
+      !alg$krylov %in% c("lsmr", "craigmr") && is.function(A$apply))
+    return(function(x) as.numeric(A$apply(x)))
   if (inherits(A, "AbstractSciMLOperator")) A <- concretize(A)
   A
 }

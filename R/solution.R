@@ -150,7 +150,8 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
     pp <- if (is.matrix(p)) p[i, ] else p
     if (!is.null(hist)) {
       old <- .inline_ws$cur
-      .inline_ws$cur <- .inline_replay_ws(hist, ts[i])
+      # the first of two rows at one time is the left side of an event
+      .inline_ws$cur <- .inline_replay_ws(hist, ts[i], left = i < length(ts) && ts[i + 1L] == ts[i])
       on.exit(.inline_ws$cur <- old)
     }
     if (has_t) fn(U[i, ], pp, ts[i]) else fn(U[i, ], pp)
@@ -228,16 +229,27 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
     # interpolates, so they are differentiated like the other saved values;
     # an unknown time asks solve_gradient() to save it and solve again
     tab <- env$sens_interp
-    k <- if (is.null(tab)) NA_integer_ else
-      vapply(tq, function(x) { i <- which(abs(tab$t - x) <= 1e-12 * max(1, abs(x))); if (length(i)) i[1L] else NA_integer_ }, 0L)
+    # the saved times are the query times exactly
+    k <- if (is.null(tab)) rep(NA_integer_, length(tq)) else match(tq, tab$t)
     if (anyNA(k)) {
-      cond <- structure(class = c("sens_needs_times", "error", "condition"),
-                        list(message = "the loss interpolates the solution", call = NULL, times = tq))
-      stop(cond)
-    }
+      # every unknown time of one evaluation of the loss is collected (the
+      # values returned meanwhile are placeholders), then solve_gradient()
+      # saves them all and solves again
+      .mtk$sens_pending_t <- c(.mtk$sens_pending_t, tq[is.na(k)])
+      if (!isTRUE(.mtk$sens_collecting)) {
+        cond <- structure(class = c("sens_needs_times", "error", "condition"),
+                          list(message = "the loss interpolates the solution", call = NULL, times = tq))
+        stop(cond)
+      }
+      n <- ncol(env$U)
+      U <- matrix(0, length(tq), n)
+      if (!is.null(tab)) U[!is.na(k), ] <- tab$U[k[!is.na(k)], , drop = FALSE]
+      if (deriv > 0L) stop("the loss of solve_gradient() may interpolate values sol(t) but not derivatives", call. = FALSE)
+    } else {
     if (deriv > 0L)
       stop("the loss of solve_gradient() may interpolate values sol(t) but not derivatives", call. = FALSE)
     U <- tab$U[k, , drop = FALSE]
+    }
   } else U <- .interp_states(env, tq, deriv)
   if (deriv > 0L && !is.null(idxs)) {
     # error_if_observed_derivative of SciMLBase
@@ -311,6 +323,12 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
       return(out)
     }
     out[] <- .linear_states(env$t, env$U, tq, deriv)
+    # the end state after the events at the end, whether or not it is saved
+    es <- env$end_state
+    if (deriv == 0L && !is.null(es) && length(es$u) >= n && is.null(env$reduced_idxs)) {
+      at_end <- tq == es$t
+      if (any(at_end)) out[at_end, ] <- rep(.as_num(es$u)[seq_len(n)], each = sum(at_end))
+    }
     return(out)
   }
   starts <- vapply(steps, `[[`, 0, "t0")
@@ -328,8 +346,8 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
       if (nt && tt == env$t[nt]) { out[q, ] <- env$U[nt, seq_len(n)]; next }
     }
     # starts increase forward in time and decrease for backward solves
-    i <- if (fwd) findInterval(tt, starts, rightmost.closed = TRUE) else
-      findInterval(-tt, -starts, rightmost.closed = TRUE)
+    # the step that starts at tt: the right side of an event there
+    i <- if (fwd) findInterval(tt, starts) else findInterval(-tt, -starts)
     i <- max(1L, min(length(steps), i))
     # after an event, prefer the step that starts at the event time
     dti <- if (isTRUE(steps[[i]]$truncated)) steps[[i]]$dt else ends[i] - starts[i]
@@ -658,7 +676,9 @@ plot.SciMLSolution <- function(x, idxs = NULL, n = 500L, xlab = NULL, ylab = NUL
   n <- length(ts)
   if (deriv > 1L) .deriv_order_error()
   tdir <- if (ts[n] < ts[1L]) -1 else 1
-  i <- findInterval(tdir * tq, tdir * ts, left.open = TRUE)
+  # values: at a time saved twice (the two sides of an event) the right
+  # side, as the dense interpolation gives; slopes keep the interval before
+  i <- findInterval(tdir * tq, tdir * ts, left.open = deriv == 1L)
   lo <- pmin(pmax(i, 1L), n - 1L)
   hi <- lo + 1L
   dt <- ts[hi] - ts[lo]

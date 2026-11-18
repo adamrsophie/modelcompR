@@ -911,7 +911,13 @@ get_updated_symbolic_problem <- function(prob, u0 = NULL, p = NULL, ...) remake(
 #' @export
 get_save_idxs_and_saved_subsystem <- function(prob, save_idxs) {
   if (is.null(save_idxs)) return(list(save_idxs = NULL, saved_subsystem = NULL))
-  if (is.numeric(save_idxs) && !is_sym(save_idxs)) return(list(save_idxs = as.integer(save_idxs), saved_subsystem = NULL))
+  if (is.numeric(save_idxs) && !is_sym(save_idxs)) {
+    n <- length(prob$u0)
+    if (!length(save_idxs) || anyNA(save_idxs) || any(save_idxs != round(save_idxs)) ||
+        (n && any(save_idxs < 1 | save_idxs > n)))
+      stop("save_idxs must be whole numbers between 1 and ", n, ", the number of states", call. = FALSE)
+    return(list(save_idxs = as.integer(save_idxs), saved_subsystem = NULL))
+  }
   vs <- if (is_sym(save_idxs)) list(save_idxs) else save_idxs
   us <- if (!is.null(prob$sys)) unknowns(prob$sys) else list()
   keys <- .keys(us)
@@ -933,11 +939,16 @@ SavedSubsystemWithFallback <- function(saved_subsystem, fallback = NULL)
   structure(list(saved_subsystem = saved_subsystem, fallback = fallback), class = "SavedSubsystemWithFallback")
 #' @rdname scimlbase_initialization
 #' @export
-get_saved_state_idxs <- function(x) if (inherits(x, "SavedSubsystem")) x$indexp else .sol_env(x)$save_idxs
+get_saved_state_idxs <- function(x) {
+  if (inherits(x, "SavedSubsystem")) return(x$indexp)
+  # reduced storage keeps the original state indices apart from the columns
+  env <- .sol_env(x)
+  env$reduced_idxs %||% env$save_idxs
+}
 #' @rdname scimlbase_initialization
 #' @export
 get_saved_subsystem <- function(sol) {
-  idx <- .sol_env(sol)$save_idxs
+  idx <- get_saved_state_idxs(sol)
   if (is.null(idx)) NULL else SavedSubsystem(idx)
 }
 #' @rdname scimlbase_initialization

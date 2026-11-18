@@ -613,11 +613,12 @@ IntervalNonlinearProblem <- function(sys, uspan, parammap = list(), ..., p = NUL
 #' solve(prob)$u
 #' @export
 LinearProblem <- function(sys, op = list(), ..., check_length = TRUE) {
-  if ((is.matrix(sys) && is.numeric(sys)) || inherits(sys, c("LowRankUpdatedMatrix", "AbstractSciMLOperator", "Matrix")) ||
-      is.function(sys)) {
+  if ((is.matrix(sys) && (is.numeric(sys) || is.complex(sys))) ||
+      inherits(sys, c("LowRankUpdatedMatrix", "AbstractSciMLOperator", "Matrix")) || is.function(sys)) {
     prob <- .new_problem("LinearProblem", f = NULL, u0 = NULL, p = numeric(), sys = NULL, kwargs = list(...))
     prob$A <- sys
-    prob$b <- as.numeric(unlist(op))
+    # a complex right hand side stays complex
+    prob$b <- .as_num(unlist(op))
     return(prob)
   }
   .nl_check_system(sys, "LinearProblem")

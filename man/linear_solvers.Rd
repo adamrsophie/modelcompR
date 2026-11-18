@@ -360,7 +360,9 @@ Krylov methods (implemented in R; \code{abstol}, \code{reltol}, \code{maxiters},
 \code{restart} and the preconditioners \code{Pl}, \code{Pr} are options of \code{solve()}):
 \code{KrylovJL_GMRES()}, \code{KrylovJL_FGMRES()} (restarted GMRES with right
 preconditioning), \code{KrylovJL_CG()} (conjugate gradients), \code{KrylovJL_MINRES()}
-and \code{KrylovJL_MINARES()} (symmetric indefinite), \code{KrylovJL_BICGSTAB()},
+(symmetric indefinite, minimal residual by the recurrences of Paige and
+Saunders) and \code{KrylovJL_MINARES()} (symmetric, minimal |A r|; with \code{Pl} or
+\code{Pr} both run preconditioned GMRES), \code{KrylovJL_BICGSTAB()},
 \code{KrylovJL_LSMR()} (least squares, by CGLS) and \code{KrylovJL_CRAIGMR()}
 (minimum norm, by CGNE); \code{KrylovJL(method)} chooses among them, and the
 wrappers \verb{IterativeSolversJL(_CG, _GMRES, _BICGSTAB, _MINRES, _IDRS)},

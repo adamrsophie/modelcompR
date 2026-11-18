@@ -315,10 +315,14 @@ ThetaTrapezoidalTauLeaping <- function(theta = 0.5) .new_leaping_alg("ThetaTrape
     if (!is.null(rj$mark_dist)) stop("Mark distributions are currently not supported in SimpleTauLeaping", call. = FALSE)
     nsteps <- as.integer((tf - t0) / dt) + 1L
     si <- 1L
-    for (i in seq_len(nsteps - 1L) + 1L) {
-      tprev <- t0 + (i - 2L) * dt
-      tnew <- tprev + dt
-      counts <- .leap_counts(rate(u, p, tprev) * dt)
+    # the whole steps of JumpProcesses, then a final partial step to tf
+    # (upstream stops at the last whole step and holds that state at tf)
+    grid <- t0 + (seq_len(nsteps) - 1L) * dt
+    if (grid[nsteps] < tf) grid <- c(grid, tf)
+    for (i in seq_along(grid)[-1L]) {
+      tprev <- grid[i - 1L]
+      tnew <- grid[i]
+      counts <- .leap_counts(rate(u, p, tprev) * (tnew - tprev))
       u <- u + apply_counts(u, tprev, counts)
       if (!length(sv$times)) save(tnew, u) else {
         while (si <= length(sv$times) && tnew >= sv$times[si]) {
@@ -334,6 +338,7 @@ ThetaTrapezoidalTauLeaping <- function(theta = 0.5) .new_leaping_alg("ThetaTrape
     t <- t0
     si <- 1L
     tau_cap <- Inf
+    leap_rc <- "Success"
     while (t < tf) {
       rates <- rate(u, p, t)
       if (all(rates <= 0)) break
@@ -367,7 +372,13 @@ ThetaTrapezoidalTauLeaping <- function(theta = 0.5) .new_leaping_alg("ThetaTrape
         # a negative population rejects the step. The implicit loops halve
         # tau; the explicit loop of JumpProcesses halves a tau that the next
         # pass recomputes, so it resamples the counts with the same step.
-        if (alg$name != "SimpleExplicitTauLeaping" && tau <= dtmin) break
+        # a step at dtmin that is still rejected ends the solve before tf
+        if (alg$name != "SimpleExplicitTauLeaping" && tau <= dtmin) {
+          leap_rc <- "DtLessThanMin"
+          warning(alg$name, " rejected a step at the smallest permitted step dtmin = ", format(dtmin),
+                  " at t = ", format(t), call. = FALSE)
+          break
+        }
         if (use_implicit) tau_cap <- tau / 2
         next
       }
@@ -381,7 +392,10 @@ ThetaTrapezoidalTauLeaping <- function(theta = 0.5) .new_leaping_alg("ThetaTrape
       tau_cap <- Inf
     }
   }
-  if (sv$end && (!length(ts) || ts[length(ts)] != tf)) save(tf, u)
+  rc <- if (exists("leap_rc", inherits = FALSE)) leap_rc else "Success"
+  # a solve that stopped early saves its last state at the time it reached
+  tlast <- if (rc == "Success") tf else t
+  if (sv$end && (!length(ts) || ts[length(ts)] != tlast)) save(tlast, u)
   U <- if (length(us)) do.call(rbind, us) else matrix(numeric(), 0L, length(u))
   colnames(U) <- names(prob$u0)
   const <- function(theta, dt, y0, y1, k) y0
@@ -389,7 +403,7 @@ ThetaTrapezoidalTauLeaping <- function(theta = 0.5) .new_leaping_alg("ThetaTrape
     te <- if (i < length(ts)) ts[i + 1L] else ts[i]
     list(t0 = ts[i], dt = max(te - ts[i], 0), tend = te, y0 = U[i, ], y1 = U[i, ], k = NULL, interp = const)
   })
-  .new_ode_solution(t = ts, u = U, prob = prob, alg = alg, retcode = "Success", steps = steps, p = p,
+  .new_ode_solution(t = ts, u = U, prob = prob, alg = alg, retcode = rc, steps = steps, p = p,
                     dense = TRUE)
 }
 

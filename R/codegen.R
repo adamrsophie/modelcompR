@@ -34,6 +34,20 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
   Function(name)
 }
 
+# The values of a generated sparse matrix in its compiled pattern. The
+# Matrix package has no complex sparse class: complex values give a base R
+# complex matrix with the same entries.
+.cg_sparse_fill <- function(tmpl, v) {
+  if (is.complex(v)) {
+    S <- methods::as(tmpl, "TsparseMatrix")
+    M <- matrix(0 + 0i, nrow(tmpl), ncol(tmpl))
+    M[cbind(S@i + 1L, S@j + 1L)] <- v
+    return(M)
+  }
+  tmpl@x <- as.numeric(v)
+  tmpl
+}
+
 .is_registered_fun <- function(e) .type(e) == "Function" && !is.null(.reg_get(.name(e)))
 
 # Registration snapshots: a problem keeps the registrations in force when it
@@ -45,11 +59,10 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
   list(version = .mtk$fun_version %||% 0L, funs = as.list(.mtk$funs, all.names = TRUE))
 }
 .reg_get <- function(nm) {
+  # an active snapshot is authoritative: a name registered after it (cos,
+  # say) stays the built in function for the problem
   snap <- .mtk$reg_active
-  if (!is.null(snap)) {
-    r <- snap$funs[[nm]]
-    if (!is.null(r)) return(r)
-  }
+  if (!is.null(snap)) return(snap$funs[[nm]])
   get0(nm, envir = .mtk$funs, inherits = FALSE)
 }
 .with_registry <- function(snap, expr) {
@@ -290,20 +303,38 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
 .toposort_observed <- function(obs) {
   if (length(obs) <= 1L) return(obs)
   lhs <- vapply(obs, function(o) .key(o$lhs), "")
-  deps <- lapply(obs, function(o) intersect(.keys(.collect_vars(o$rhs)), lhs))
-  done <- character()
-  out <- list()
-  remaining <- seq_along(obs)
-  while (length(remaining)) {
-    ready <- remaining[vapply(remaining, function(i) all(deps[[i]] %in% c(done, lhs[i])), TRUE)]
-    if (!length(ready)) stop("observed equations are cyclic", call. = FALSE)
-    for (i in ready) {
-      out[[length(out) + 1L]] <- obs[[i]]
-      done <- c(done, lhs[i])
+  # the waves of Kahn's algorithm: each wave is every equation whose
+  # dependencies are computed, in index order; in-degrees are counted, so
+  # the sort is linear in the equations and dependencies
+  deps <- lapply(seq_along(obs), function(i) setdiff(unique(.keys(.collect_vars(obs[[i]]$rhs))), lhs[i]))
+  lenv <- list2env(stats::setNames(as.list(rep(TRUE, length(lhs))), lhs), parent = emptyenv())
+  deps <- lapply(deps, function(d) d[vapply(d, function(k) !is.null(lenv[[k]]), TRUE)])
+  users <- new.env(parent = emptyenv())
+  for (i in seq_along(deps)) for (k in deps[[i]]) users[[k]] <- c(users[[k]], i)
+  indeg <- lengths(deps)
+  done <- new.env(parent = emptyenv())
+  order_ <- vector("list", length(obs))
+  w <- 0L
+  wave <- which(indeg == 0L)
+  while (length(wave)) {
+    w <- w + 1L
+    order_[[w]] <- wave
+    nxt <- vector("list", length(wave))
+    for (a in seq_along(wave)) {
+      k <- lhs[wave[a]]
+      if (!is.null(done[[k]])) next
+      done[[k]] <- TRUE
+      js <- users[[k]]
+      if (length(js)) {
+        indeg[js] <- indeg[js] - 1L
+        nxt[[a]] <- js[indeg[js] == 0L]
+      }
     }
-    remaining <- setdiff(remaining, ready)
+    wave <- sort(unique(unlist(nxt, use.names = FALSE)))
   }
-  out
+  idx <- unlist(order_[seq_len(w)], use.names = FALSE)
+  if (length(idx) < length(obs)) stop("observed equations are cyclic", call. = FALSE)
+  obs[idx]
 }
 
 # c() for generated functions: the names go from plain numeric results only, so
@@ -422,11 +453,7 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
       tmpl <- Matrix::sparseMatrix(i = if (is.null(ir)) as.integer((k - 1L) %% dims[1L] + 1L) else ir$i[k],
                                    j = if (is.null(ir)) as.integer((k - 1L) %/% dims[1L] + 1L) else ir$j[k],
                                    x = rep(1, length(k)), dims = as.integer(dims))
-      as.call(list(as.name("{"),
-                   call("<-", as.name(".J"), tmpl),
-                   call("<-", call("@", as.name(".J"), as.name("x")),
-                        call("as.numeric", as.call(c(list(as.name(".cg_c")), calls[k])))),
-                   as.name(".J")))
+      as.call(list(as.name(".cg_sparse_fill"), tmpl, as.call(c(list(as.name(".cg_c")), calls[k]))))
     } else {
       body <- list(call("<-", as.name(".J"), call("matrix", 0, dims[1L], dims[2L])))
       for (k in which(nz)) {
@@ -497,16 +524,21 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
   back <- .rule(ph, hold)
   wph <- ph[seq_along(wrt)]
   wkeys <- .keys(wph)
-  ii <- integer(); jj <- integer(); xx <- list()
+  # the column of a placeholder key by hashed lookup (a match() against all
+  # keys per row would be quadratic)
+  wenv <- list2env(stats::setNames(as.list(seq_along(wkeys)), wkeys), parent = emptyenv())
+  rows <- vector("list", length(exprs))
   for (r in seq_along(exprs)) {
     e <- .subst(exprs[[r]], rule)
-    for (c in sort(match(intersect(.keys(free_symbols(e)), wkeys), wkeys))) {
-      ii[length(ii) + 1L] <- r; jj[length(jj) + 1L] <- c
-      xx[[length(xx) + 1L]] <- .subst(diff(e, wph[[c]]), back)
-    }
+    cols <- sort(unlist(mget(unique(.keys(free_symbols(e))), envir = wenv, ifnotfound = list(NULL)), use.names = FALSE))
+    rows[[r]] <- list(j = cols, x = lapply(cols, function(c) .subst(diff(e, wph[[c]]), back)))
   }
+  ii <- rep(seq_along(exprs), vapply(rows, function(z) length(z$j), 0L))
+  jj <- unlist(lapply(rows, `[[`, "j"), use.names = FALSE) %||% integer()
+  xx <- unlist(lapply(rows, `[[`, "x"), recursive = FALSE) %||% list()
   o <- order(jj, ii)
-  structure(list(i = ii[o], j = jj[o], x = xx[o], dims = c(length(exprs), length(wrt))), class = "mtk_sparse_ir")
+  structure(list(i = ii[o], j = as.integer(jj[o]), x = xx[o], dims = c(length(exprs), length(wrt))),
+            class = "mtk_sparse_ir")
 }
 
 .as_symmatrix <- function(lm) {

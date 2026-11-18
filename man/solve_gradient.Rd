@@ -18,7 +18,7 @@ solve_gradient(
 \arguments{
 \item{loss}{A function of the solution returning a number.}
 
-\item{prob}{An \code{ODEProblem}, \code{DAEProblem}, \code{NonlinearProblem},
+\item{prob}{An \code{ODEProblem}, \code{DAEProblem}, \code{DDEProblem}, \code{NonlinearProblem},
 \code{SteadyStateProblem}, \code{OptimizationProblem}, \code{SDEProblem} or
 \code{RODEProblem}. A \code{DAEProblem} \code{F(du, u, p, t) = 0} of index 1 is solved
 and differentiated as the mass matrix problem \verb{u_d' = w, 0 = F(w, u, p, t)} (with \code{\link[=FBDF]{FBDF()}} for \code{\link[=DFBDF]{DFBDF()}}, \code{\link[=Rodas5P]{Rodas5P()}} for other DAE methods), so
@@ -86,8 +86,14 @@ problems), \code{\link[=GaussKronrodAdjoint]{GaussKronrodAdjoint()}}) through \c
 \item pathwise forward sensitivities for \code{SDEProblem} (with a fixed step
 method, a \code{dt} and a \code{seed}, the derivative of the sampled path), or
 for \code{SDEProblem} and \code{RODEProblem} the adjoints \code{\link[=BacksolveAdjoint]{BacksolveAdjoint()}}
-and \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}} of \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}}.
+and \code{\link[=InterpolatingAdjoint]{InterpolatingAdjoint()}} of \code{\link[=SDEAdjointProblem]{SDEAdjointProblem()}},
+\item forward sensitivities of the method of steps for \code{DDEProblem} (the
+sensitivity DDE, whose history is the sensitivity at the delayed
+times and dh/dp before the start).
 }
+
+A complex initial state is solved as the real system of its real and
+imaginary parts; the gradient in \code{u0} is \verb{dL/dRe(u0) + i dL/dIm(u0)}.
 
 Events are differentiated, including the dependence of event times on
 the parameters. When the problem was built from a System whose initial

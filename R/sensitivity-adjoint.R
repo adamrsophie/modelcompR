@@ -98,6 +98,27 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
       inherits(sensealg, "SteadyStateAdjoint"))
     return(.sens_steady_adjoint(sol, sensealg %||% SteadyStateAdjoint(), dgdu = dgdu, dgdp = dgdp, g = g))
   sensealg <- sensealg %||% InterpolatingAdjoint()
+  # the forward solution must cover the times of the cost: a failed or
+  # truncated solve would be extrapolated
+  fwd_rc <- env$retcode
+  if (!isTRUE(.mtk$sens_allow_failure)) {
+    if (!is.null(fwd_rc) && !successful_retcode(fwd_rc))
+      .sens_stage_fail("forward", fwd_rc, env$t[length(env$t)],
+                       paste0("the forward solve ended with retcode ", fwd_rc, " at t = ",
+                              format(env$t[length(env$t)], digits = 15)))
+    # where the integration ended (the saved times may stop earlier)
+    st <- env$steps
+    tl <- env$end_state$t %||% (if (length(st)) { s <- st[[length(st)]]; s$tend %||% (s$t0 + s$dt) }) %||%
+      env$t[length(env$t)]
+    if (identical(fwd_rc, "Success") && !length(st) && is.null(env$end_state)) tl <- prob$tspan[2L]
+    dir <- sign(prob$tspan[2L] - prob$tspan[1L])
+    # a running cost ends where a callback terminated the solve
+    tc <- c(t, if ((!is.null(g) || !is.null(dgdu_continuous)) && !identical(fwd_rc, "Terminated")) prob$tspan[2L])
+    if (length(tc) && length(tl) && any(dir * (tc - tl) > 1e-12 * max(1, abs(tl))))
+      .sens_stage_fail("forward", fwd_rc %||% "Terminated", tl,
+                       paste0("the forward solution ends at t = ", format(tl, digits = 15),
+                              " before the cost time ", format(max(dir * tc) * dir, digits = 15)))
+  }
   if (inherits(sensealg, "QuadratureAdjoint") && missing(abstol)) abstol <- sensealg$abstol
   if (inherits(sensealg, "QuadratureAdjoint") && missing(reltol)) reltol <- sensealg$reltol
   # fully implicit DAEs (R/sensitivity-dae.R)
@@ -105,7 +126,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
     ap <- DAEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                             dgdp_continuous, g, callback = callback, no_start = no_start,
                             abstol = abstol, reltol = reltol)
-    return(ap$finish(.sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint")))
+    return(ap$finish(.sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint", ap$tspan[2L])))
   }
   # SDEs and RODEs, solved on the forward grid (R/sensitivity-sde.R)
   if (inherits(prob, c("SDEProblem", "RODEProblem"))) {
@@ -126,7 +147,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
       dots$abstol <- abstol
       dots$reltol <- reltol
     }
-    return(ap$finish(.sens_stage_ok(do.call(solve, c(list(ap, ap$alg), dots)), "backward adjoint")))
+    return(ap$finish(.sens_stage_ok(do.call(solve, c(list(ap, ap$alg), dots)), "backward adjoint", ap$tspan[2L])))
   }
   if (!inherits(prob, "ODEProblem"))
     stop("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE/DAE problems.", call. = FALSE)
@@ -135,7 +156,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
   ap <- ODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                           dgdp_continuous, g, checkpoints = checkpoints, callback = callback,
                           no_start = no_start, abstol = abstol, reltol = reltol, dgdt_discrete = dgdt_discrete)
-  adj <- .sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint")
+  adj <- .sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint", ap$tspan[2L])
   ap$finish(adj)
 }
 
@@ -211,7 +232,8 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     })
     pseg <- c(lapply(events, `[[`, "p"), list(env$p_final %||% prob$p))
     .sens_trajectory(sol, ev_t, checkpoint = list(times = cps, states = states, prob = prob, alg = env$alg,
-                                                  pseg = pseg, opts = list(abstol = abstol, reltol = reltol),
+                                                  pseg = pseg,
+                                                  opts = c(list(abstol = abstol, reltol = reltol), env$step_opts),
                                                   inline_hist = env$inline_hist))
   } else .sens_trajectory(sol, ev_t)
 
@@ -504,17 +526,26 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
 # a backward solve or a checkpoint replay that stops early leaves a partial
 # adjoint, which is not the gradient. The error carries the stage, its
 # retcode and the time where it stopped.
-.sens_stage_ok <- function(sol, stage) {
+.sens_stage_ok <- function(sol, stage, tend = NULL) {
   env <- .sol_env(sol)
   rc <- env$retcode
-  if (!is.null(rc) && !successful_retcode(rc) && !isTRUE(.mtk$sens_allow_failure)) {
-    tt <- env$t[length(env$t)]
-    cond <- structure(class = c("sens_stage_failure", "error", "condition"),
-                      list(message = paste0("the ", stage, " solve ended with retcode ", rc, " at t = ",
-                                            format(tt, digits = 15), ", so the gradient is not available; ",
-                                            "raise its budget (maxiters, dtmin) or pass allow_failure = TRUE"),
-                           call = NULL, stage = stage, retcode = rc, t = tt))
-    stop(cond)
-  }
+  tt <- env$t[length(env$t)]
+  if (isTRUE(.mtk$sens_allow_failure)) return(sol)
+  if (!is.null(rc) && !successful_retcode(rc))
+    .sens_stage_fail(stage, rc, tt, paste0("the ", stage, " solve ended with retcode ", rc, " at t = ",
+                                           format(tt, digits = 15)))
+  # a solve that stops early with a successful retcode (Terminated by a
+  # callback) does not give the derivative over the whole interval either
+  if (!is.null(tend) && length(tt) && abs(tt - tend) > 1e-12 * max(1, abs(tend)))
+    .sens_stage_fail(stage, rc %||% "Terminated", tt, paste0("the ", stage, " solve stopped at t = ",
+                                                             format(tt, digits = 15), " before t = ",
+                                                             format(tend, digits = 15)))
   sol
+}
+
+.sens_stage_fail <- function(stage, rc, t, what, ...) {
+  stop(structure(class = c("sens_stage_failure", "error", "condition"),
+                 list(message = paste0(what, ", so the gradient is not available; raise its budget ",
+                                       "(maxiters, dtmin) or pass allow_failure = TRUE"),
+                      call = NULL, stage = stage, retcode = rc, t = t, ...)))
 }

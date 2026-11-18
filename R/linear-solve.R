@@ -65,7 +65,9 @@ print.LinearAlgorithm <- function(x, ...) {
 #' `restart` and the preconditioners `Pl`, `Pr` are options of `solve()`):
 #' `KrylovJL_GMRES()`, `KrylovJL_FGMRES()` (restarted GMRES with right
 #' preconditioning), `KrylovJL_CG()` (conjugate gradients), `KrylovJL_MINRES()`
-#' and `KrylovJL_MINARES()` (symmetric indefinite), `KrylovJL_BICGSTAB()`,
+#' (symmetric indefinite, minimal residual by the recurrences of Paige and
+#' Saunders) and `KrylovJL_MINARES()` (symmetric, minimal |A r|; with `Pl` or
+#' `Pr` both run preconditioned GMRES), `KrylovJL_BICGSTAB()`,
 #' `KrylovJL_LSMR()` (least squares, by CGLS) and `KrylovJL_CRAIGMR()`
 #' (minimum norm, by CGNE); `KrylovJL(method)` chooses among them, and the
 #' wrappers `IterativeSolversJL(_CG, _GMRES, _BICGSTAB, _MINRES, _IDRS)`,
@@ -318,7 +320,7 @@ KrylovJL_CG <- .kry("KrylovJL_CG", "cg")
 KrylovJL_MINRES <- .kry("KrylovJL_MINRES", "minres")
 #' @rdname linear_solvers
 #' @export
-KrylovJL_MINARES <- .kry("KrylovJL_MINARES", "minres")
+KrylovJL_MINARES <- .kry("KrylovJL_MINARES", "minares")
 #' @rdname linear_solvers
 #' @export
 KrylovJL_BICGSTAB <- .kry("KrylovJL_BICGSTAB", "bicgstab")
@@ -514,6 +516,8 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     r <- .krylov_scaled(A, b / s, method, opts)
     r$u <- r$u * s
     r$resid <- r$resid * s
+    # the solution in the original units may not be representable
+    if (!all(is.finite(r$u)) || !all(is.finite(r$resid))) r$retcode <- "Failure"
     r$stats$residual_norm <- r$stats$residual_norm * s
     r$stats$preconditioned_residual_norm <- r$stats$preconditioned_residual_norm * s
     r$stats$tolerance <- r$stats$tolerance * s
@@ -564,9 +568,96 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       it <- it + 1L
     }
     solved <- nrm(r) <= tol
-  } else if (method %in% c("gmres", "fgmres", "minres")) {
-    # restarted GMRES on Pl A Pr y = Pl b, x = Pr y (MINRES, for symmetric
-    # A, reaches the same minimal residual iterate); the Arnoldi process
+  } else if (method == "minres" && is.null(opts$Pl) && is.null(opts$Pr)) {
+    # MINRES of Paige and Saunders for symmetric A: the Lanczos process with
+    # Givens rotations of the tridiagonal matrix and three term recurrences
+    # for the directions, so the memory is a few vectors; |eta| is the
+    # residual norm
+    r0 <- b - mv(x); eta <- nrm(r0)
+    if (eta > tol && eta > 0) {
+      v_prev <- numeric(n); v <- r0 / eta; b_prev <- 0
+      c1 <- 1; s1 <- 0; c2 <- 1; s2 <- 0
+      w1 <- w2 <- numeric(n)
+      while (it < maxit) {
+        Av <- mv(v)
+        alpha <- sum(v * Av)
+        vn <- Av - alpha * v - b_prev * v_prev
+        bn <- nrm(vn)
+        # the column (b_prev, alpha, bn) of the tridiagonal matrix through
+        # the two previous rotations and a new one
+        e <- s2 * b_prev
+        h1 <- c2 * b_prev
+        d <- c1 * h1 + s1 * alpha
+        gam <- -s1 * h1 + c1 * alpha
+        hm <- max(abs(gam), abs(bn))
+        den <- if (hm == 0) 0 else hm * sqrt((gam / hm)^2 + (bn / hm)^2)
+        if (den == 0) break
+        ck <- gam / den; sk <- bn / den
+        wk <- (v - d * w1 - e * w2) / den
+        x <- x + ck * eta * wk
+        eta <- -sk * eta
+        it <- it + 1L
+        w2 <- w1; w1 <- wk; c2 <- c1; s2 <- s1; c1 <- ck; s1 <- sk
+        if (abs(eta) <= tol || !(bn > 0)) break
+        v_prev <- v; v <- vn / bn; b_prev <- bn
+      }
+    }
+    pl_res <- abs(eta)
+    solved <- nrm(b - mv(x)) <= tol
+  } else if (method == "minares" && is.null(opts$Pl) && is.null(opts$Pr)) {
+    # MINARES (Montoison, Orban and Saunders) for symmetric A: the iterate of
+    # the Krylov space K_k(A, b) that minimizes |A r|. With the Lanczos
+    # relation A V_k = V_(k+1) T_k, A r = V_(k+2) (beta T_(k+1) e1 - T_(k+1) T_k y),
+    # a small least squares problem per step.
+    # ponytail: keeps the Lanczos basis (n x k) and solves the small problem
+    # densely each step; the short recurrences of Krylov.jl if k gets large
+    r0 <- b - mv(x); beta <- nrm(r0)
+    if (beta > tol && beta > 0) {
+      x0 <- x
+      kmax <- min(maxit, n)
+      V <- matrix(0, n, kmax + 2L)
+      al <- numeric(kmax + 1L); bt <- numeric(kmax + 1L)
+      # one Lanczos step from column k (full reorthogonalization keeps the
+      # basis orthonormal)
+      lanczos <- function(k) {
+        w <- mv(V[, k])
+        al[k] <<- sum(V[, k] * w)
+        w <- w - al[k] * V[, k] - (if (k > 1L) bt[k - 1L] * V[, k - 1L] else 0)
+        w <- w - V[, seq_len(k), drop = FALSE] %*% crossprod(V[, seq_len(k), drop = FALSE], w)
+        bt[k] <<- nrm(w)
+        if (bt[k] > 0) V[, k + 1L] <<- w / bt[k]
+      }
+      Tm <- function(m) {
+        T <- matrix(0, m + 1L, m)
+        for (j in seq_len(m)) {
+          T[j, j] <- al[j]; T[j + 1L, j] <- bt[j]
+          if (j > 1L) T[j - 1L, j] <- bt[j - 1L]
+        }
+        T
+      }
+      V[, 1L] <- r0 / beta
+      lanczos(1L)
+      scale <- function(m) max(abs(c(al[seq_len(m)], bt[seq_len(m)])))
+      for (k in seq_len(kmax)) {
+        Tk <- Tm(k)
+        inv <- !(bt[k] > 1e-14 * scale(k)) || k == n
+        # the next column completes T_(k+1) (its matrix product is the
+        # next step's Lanczos product); an iteration is one Krylov dimension
+        if (!inv) lanczos(k + 1L)
+        it <- k
+        y <- if (inv) qr.coef(qr(Tk[seq_len(k), , drop = FALSE]), c(beta, numeric(k - 1L))) else
+          qr.coef(qr(Tm(k + 1L) %*% Tk), beta * Tm(k + 1L)[, 1L])
+        y[is.na(y)] <- 0
+        x <- x0 + as.numeric(V[, seq_len(k), drop = FALSE] %*% y)
+        rr <- c(beta, numeric(k)) - as.numeric(Tk %*% y)
+        if (inv || sqrt(sum(rr^2)) <= tol || it >= maxit) break
+      }
+    }
+    solved <- nrm(b - mv(x)) <= tol
+  } else if (method %in% c("gmres", "fgmres", "minres", "minares")) {
+    # restarted GMRES on Pl A Pr y = Pl b, x = Pr y (a preconditioned MINRES
+    # or MINARES, for symmetric A, runs here: it needs a symmetric positive
+    # definite preconditioner the solver cannot check); the Arnoldi process
     # minimizes the left preconditioned residual and each restart checks
     # the residual of the original system
     restart <- opts$restart %||% min(n, 50L)
@@ -631,16 +722,22 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       x <- x + as.numeric(Z[, seq_len(k_used), drop = FALSE] %*% y)
     }
   } else if (method == "lsmr") {
-    # least squares by CGLS
+    # least squares by CGLS. Converged when the residual meets the
+    # tolerance (a consistent system) or the normal equations do relative
+    # to |A| |r| (the backward error test of LSMR), so the test does not
+    # depend on the scale of A
+    anorm <- if (inherits(A, "sparseMatrix")) sqrt(sum(methods::as(A, "generalMatrix")@x^2)) else sqrt(sum(A^2))
+    lstol <- opts$reltol %||% sqrt(.Machine$double.eps)
+    done_ls <- function(r, g) { nr <- nrm(r); nr <= tol || sqrt(g) <= lstol * anorm * nr }
     r <- b - mv(x); s <- as.numeric(crossprod(A, r)); p <- s; g <- sum(s^2)
-    while (sqrt(g) > tol * 1e-3 && it < maxit) {
+    while (!done_ls(r, g) && it < maxit && g > 0) {
       q <- mv(p); a <- g / sum(q^2)
       x <- x + a * p; r <- r - a * q
       s <- as.numeric(crossprod(A, r)); g2 <- sum(s^2)
       p <- s + (g2 / g) * p; g <- g2
       it <- it + 1L
     }
-    solved <- sqrt(g) <= tol * 1e-3
+    solved <- done_ls(r, g)
   } else if (method == "craigmr") {
     # minimum norm solution by CGNE: x = A' y with A A' y = b
     y <- numeric(n)
@@ -668,7 +765,16 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
 }
 
 .lin_solve <- function(prob, alg, opts, cache = new.env(parent = emptyenv())) {
-  A <- prob$A; b <- as.numeric(prob$b)
+  A <- prob$A; b <- .as_num(prob$b)
+  # a complex system: base R's complex LU (LAPACK zgesv) or least squares QR
+  if ((is.complex(b) || (is.matrix(A) && is.complex(A))) && (is.matrix(A) || inherits(A, "Matrix"))) {
+    A <- as.matrix(A)
+    u <- tryCatch(if (nrow(A) == ncol(A)) as.vector(base::solve(A, b)) else as.vector(qr.coef(qr(A), b)),
+                  error = function(e) rep(NaN, ncol(A)))
+    r <- if (all(is.finite(u))) as.vector(A %*% u - b) else rep(NaN, length(b))
+    return(list(u = u, resid = r, iters = 1L,
+                alg = alg %||% if (nrow(A) == ncol(A)) LUFactorization() else QRFactorization()))
+  }
   if (inherits(A, "LowRankUpdatedMatrix")) {
     # Woodbury without the inverse of C: with z = A^-1 b and W = A^-1 U,
     # x = z - W (I + C V' W)^-1 C V' z, from one factorization of A; the
@@ -702,8 +808,15 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   if (inherits(A, "Matrix")) {
     sparse_algs <- c("KLUFactorization", "PureKLUFactorization", "UMFPACKFactorization",
                      "PureUMFPACKFactorization", "SparspakFactorization", "CHOLMODFactorization")
+    # a rectangular matrix is a least squares problem: the sparse QR
+    if (is.null(alg) && nrow(A) != ncol(A)) {
+      u <- tryCatch(as.numeric(Matrix::qr.coef(Matrix::qr(methods::as(A, "CsparseMatrix")), b)),
+                    error = function(e) rep(NaN, ncol(A)))
+      r <- if (all(is.finite(u))) as.numeric(A %*% u - b) else rep(NaN, length(b))
+      return(list(u = u, resid = r, iters = 1L, alg = QRFactorization()))
+    }
     if (is.null(alg) || alg$name %in% sparse_algs) {
-      u <- tryCatch(as.numeric(Matrix::solve(A, b)), error = function(e) rep(NaN, length(b)))
+      u <- tryCatch(as.numeric(Matrix::solve(A, b)), error = function(e) rep(NaN, ncol(A)))
       r <- if (all(is.finite(u))) as.numeric(A %*% u - b) else rep(NaN, length(b))
       return(list(u = u, resid = r, iters = 1L, alg = alg %||% KLUFactorization()))
     }
@@ -712,7 +825,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   }
   # SciMLOpFactorization (R/solvers-amf.R) factorizes the operator part by part
   if (identical(alg$method, "sciml_op")) return(.amf_lin_solve(A, b, alg, cache))
-  A <- .lin_prepare_A(A, opts, cache)
+  A <- .lin_prepare_A(A, opts, cache, alg)
   if (!is.matrix(A) && !is.function(A) && !inherits(A, "Matrix")) A <- matrix(A, nrow = length(b))
   alg <- alg %||% .lin_default(A, opts$assumptions %||% OperatorAssumptions())
   if (identical(alg$method, "function")) {

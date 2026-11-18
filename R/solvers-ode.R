@@ -577,7 +577,14 @@ RK4 <- function() {
 # representation never stands for the identity.
 .as_mass <- function(M, n = NULL) {
   if (is.null(M)) return(NULL)
-  # a sparse mass keeps its structure as the attribute "sparse" of the dense
+  # a scalar operator is the scalar times the identity of the state size
+  if (inherits(M, "ScalarOperator")) M <- as.numeric(M$value)
+  # a pattern matrix has structural ones
+  if (inherits(M, "nMatrix")) M <- methods::as(M, "dMatrix")
+  # ponytail: a sparse mass is also stored densely (n^2 doubles), since
+  # every method reads the base R matrix; a sparse canonical form needs each
+  # consumer (initialization, DAE splits, sensitivities) to take Matrix
+  # objects. A sparse mass keeps its structure as the attribute "sparse" of the dense
   # matrix: the products of each step and the Newton matrices of a sparse
   # Jacobian use it (.mass_mul, .mass_sub), every other routine sees the
   # base R matrix
@@ -602,8 +609,18 @@ RK4 <- function() {
 
 .is_identity_mass <- function(M) {
   if (is.null(M)) return(TRUE)
+  # a sparse mass is checked on its nonzeros, without a dense identity
+  S <- attr(M, "sparse") %||% if (inherits(M, "sparseMatrix") && !inherits(M, "nMatrix") && !is.complex(M@x))
+    methods::as(methods::as(M, "generalMatrix"), "CsparseMatrix")
+  if (!is.null(S)) {
+    if (nrow(S) != ncol(S)) return(FALSE)
+    T <- methods::as(S, "TsparseMatrix")
+    nz <- T@x != 0
+    return(sum(nz) == nrow(S) && all(T@i[nz] == T@j[nz]) && all(T@x[nz] == 1))
+  }
   M <- .as_mass(M)
-  all(M == diag(nrow(M)))
+  # the diagonal is one and nothing else is nonzero
+  all(diag(M) == 1) && sum(M != 0) == nrow(M)
 }
 
 #' Solve a problem
@@ -878,6 +895,9 @@ solve.ODEProblem <- function(a, b, ...) {
                              events = integ$sol_events, dense = dense)
     env <- .sol_env(sol)
     ctx$lazy_nf$sol_env <- env
+    # the stepping options, for replays of the solve (checkpointed adjoints)
+    env$step_opts <- opts[intersect(names(opts), c("dt", "adaptive", "dtmin", "dtmax", "maxiters", "qmin", "qmax",
+                                                   "gamma", "controller", "internalnorm"))]
     # an array state: sol$u and sol(t) give the arrays (SciMLBase keeps u0's shape)
     if (length(dim(prob$u0)) > 1L && ncol(U) == length(prob$u0)) env$u_dim <- dim(prob$u0)
     if (!is.null(opts$save_idxs)) env$save_idxs <- get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
@@ -959,8 +979,9 @@ solve.ODEProblem <- function(a, b, ...) {
   # first saved value on (no full matrix is built)
   if (!identical(opts$save_idxs_storage %||% "full", "full") && !identical(opts$save_idxs_storage, "reduced"))
     stop("`save_idxs_storage` must be \"full\" or \"reduced\"", call. = FALSE)
-  red_idx <- if (identical(opts$save_idxs_storage, "reduced") && !is.null(opts$save_idxs))
-    get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
+  # the selector is checked before the solve, for either storage
+  sel_idx <- if (!is.null(opts$save_idxs)) get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
+  red_idx <- if (identical(opts$save_idxs_storage, "reduced")) sel_idx
   push_save <- function(t, u) {
     ts[length(ts) + 1L] <<- t
     us[[length(us) + 1L]] <<- if (is.null(red_idx)) u else u[red_idx]
@@ -1091,9 +1112,10 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     if (done) break
     # commit the branch roots at the accepted state before the next attempt
     if (!is_dae && exists("inline_ws", inherits = FALSE) &&
-        !(identical(inline_ws$.cu, integ$u) && identical(inline_ws$.ct, integ$t))) {
+        !(identical(inline_ws$.cu, integ$u) && identical(inline_ws$.ct, integ$t) &&
+          identical(inline_ws$.cp, integ$p))) {
       .inline_commit(inline_ws, ctx$f, integ$u, integ$p, integ$t)
-      inline_ws$.cu <- integ$u; inline_ws$.ct <- integ$t
+      inline_ws$.cu <- integ$u; inline_ws$.ct <- integ$t; inline_ws$.cp <- integ$p
     }
     if (!(tdir * integ$t < tdir * tf && !integ$terminate)) {
       done <- TRUE
@@ -1199,6 +1221,15 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     if (isTRUE(res$disco_used)) is_disco_step <- FALSE
     if (!is.null(res$eigen_est)) eigen_est <- res$eigen_est
     if (is.environment(res$cache)) caches[[cur]] <- res$cache
+    # a singular Newton matrix of a Rosenbrock step (EEst = 2, the state
+    # unchanged): OrdinaryDiffEq accepts that step when it is not adaptive,
+    # advancing the time with the old state; it is a failure here
+    if (isTRUE(res$singular) && !adaptive) {
+      retcode <- "ConvergenceFailure"
+      warning("the Newton matrix is singular at t = ", integ$t, call. = FALSE)
+      done <- TRUE
+      break
+    }
     if (isTRUE(res$fail)) {
       # Newton failure (force_stepfail): post_newton_controller!
       if (!adaptive) {
@@ -1331,6 +1362,12 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     if (is_dae) integ$du <- res$du
     integ$last_step <- step
     if (!is.environment(res$cache)) caches[[cur]] <- res$cache
+    # the roots at the accepted end of the step, before callbacks change it
+    # (the left side of an event at the end of the step)
+    if (!is_dae && exists("inline_ws", inherits = FALSE) && length(.inline_ids(inline_ws))) {
+      .inline_commit(inline_ws, ctx$f, integ$u, integ$p, integ$t)
+      inline_ws$.cu <- integ$u; inline_ws$.ct <- integ$t; inline_ws$.cp <- integ$p
+    }
     # callbacks may move t back to an event time and change u
     ev <- .apply_callbacks(cbs, integ, step, ctx)
     step <- integ$last_step

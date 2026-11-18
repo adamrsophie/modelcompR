@@ -39,6 +39,13 @@
 
 .sens_fns_impl <- function(prob, sensealg = NULL) {
   f <- prob$f$f
+  # an array state reaches the user functions in its shape, as in solve()
+  d <- dim(prob$u0)
+  shaped <- function(g) if (!is.function(g) || length(d) < 2L) g else {
+    force(g)
+    function(u, p, t, ...) g(array(u, d), p, t, ...)
+  }
+  f <- .shape_f(f, d)
   sys <- prob$sys
   M <- prob$f$mass_matrix
   if (!is.matrix(M) || .is_identity_mass(M)) M <- NULL
@@ -58,11 +65,11 @@
     }
     return(out)
   }
-  ujac <- prob$f$jac
+  ujac <- shaped(prob$f$jac)
   out$jac <- if (is.function(ujac)) function(u, p, t) as.matrix(ujac(u, p, t)) else
     function(u, p, t) .sens_fd_jac(function(z) f(z, p, t), u)
   # the parameter Jacobian `paramjac` of the problem function when given
-  upjac <- prob$f$paramjac
+  upjac <- shaped(prob$f$paramjac)
   out$pjac <- function(u, p, t) {
     if (!np) return(matrix(0, n, 0L))
     if (is.function(upjac)) return(as.matrix(upjac(u, p, t)))
@@ -75,7 +82,10 @@
   }
   # a vjp(v, u, p, t) of the problem function (SciMLBase: J' v by the
   # state) gives the state part; a list(u, p) result gives both
-  uvjp <- prob$f$vjp
+  uvjp <- if (is.function(prob$f$vjp) && length(d) >= 2L) {
+    v0 <- prob$f$vjp
+    function(l, u, p, t) v0(l, array(u, d), p, t)
+  } else prob$f$vjp
   out$vjp <- function(l, u, p, t) {
     if (is.function(uvjp)) {
       r <- uvjp(l, u, p, t)
@@ -203,7 +213,7 @@
       # the replay starts on the branch of the forward solve
       if (!is.null(ck$inline_hist)) pr$inline_seed <- .inline_seed_at(ck$inline_hist, ck$times[k])
       s <- .sens_stage_ok(.integrate(pr, ck$alg, c(ck$opts, list(dense = TRUE, save_everystep = TRUE))),
-                          "checkpoint replay")
+                          "checkpoint replay", pr$tspan[2L])
       tr$cache <- list(k = k, steps = .sol_env(s)$steps)
       tr$cache$starts <- vapply(tr$cache$steps, `[[`, 0, "t0")
     }
@@ -251,16 +261,32 @@
 }
 
 # Adaptive Gauss-Kronrod quadrature of a vector valued function, as QuadGK.
-.sens_quadgk <- function(fn, a, b, abstol = 1e-6, reltol = 1e-3, maxdepth = 30L) {
+# The worst segment that can still be split is split (an interval at the
+# resolution of doubles cannot); when none can, or after maxsegs segments,
+# the integral misses its tolerance and the stage fails.
+.sens_quadgk <- function(fn, a, b, abstol = 1e-6, reltol = 1e-3, maxdepth = 200L, maxsegs = 20000L) {
   if (a == b) return(0 * fn(a))
   segs <- list(c(.sens_gk15(fn, a, b), list(a = a, b = b, depth = 0L)))
   repeat {
     total <- Reduce(`+`, lapply(segs, `[[`, "value"))
-    err <- sum(vapply(segs, `[[`, 0, "err"))
-    if (err <= max(abstol, reltol * max(abs(total)))) return(total)
-    i <- which.max(vapply(segs, `[[`, 0, "err"))
+    errs <- vapply(segs, `[[`, 0, "err")
+    err <- sum(errs)
+    tol <- max(abstol, reltol * max(abs(total)))
+    if (err <= tol) return(total)
+    split_ok <- vapply(segs, function(s) {
+      m <- (s$a + s$b) / 2
+      s$depth < maxdepth && m != s$a && m != s$b
+    }, TRUE)
+    if (!any(split_ok) || length(segs) >= maxsegs) {
+      if (isTRUE(.mtk$sens_allow_failure)) return(total)
+      .sens_stage_fail("quadrature", "MaxIters", c(a, b),
+                       paste0("the adjoint quadrature over [", format(a), ", ", format(b),
+                              "] has error estimate ", format(err, digits = 3), " above its tolerance ",
+                              format(tol, digits = 3)), error = err)
+    }
+    errs[!split_ok] <- -Inf
+    i <- which.max(errs)
     s <- segs[[i]]
-    if (s$depth >= maxdepth) return(total)
     m <- (s$a + s$b) / 2
     segs[[i]] <- c(.sens_gk15(fn, s$a, m), list(a = s$a, b = m, depth = s$depth + 1L))
     segs[[length(segs) + 1L]] <- c(.sens_gk15(fn, m, s$b), list(a = m, b = s$b, depth = s$depth + 1L))

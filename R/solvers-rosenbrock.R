@@ -142,10 +142,11 @@
   n <- nrow(W)
   if (.arith$native) {
     # a Householder QR of base R (real or complex): no S4 dispatch on every
-    # solve. Singular means an exact zero on the diagonal of R, as the zero
-    # pivot of the reference LU, not QR's rank tolerance.
+    # solve. Rounding leaves a small nonzero diagonal of R for a singular W,
+    # so singular means a diagonal below n eps times the largest one
     F <- qr(W, tol = 0)
-    return(if (any(diag(qr.R(F)) == 0)) NULL else F)
+    d <- abs(diag(qr.R(F)))
+    return(if (!length(d) || min(d) <= n * .Machine$double.eps * max(d)) NULL else F)
   }
   if (n > 16L) {
     F <- Matrix::lu(W, warnSing = FALSE)
@@ -335,7 +336,7 @@
                 cache = cache)
     W <- dw$W
     if (is.null(W))
-      return(c(out, list(u = u, EEst = 2, k = rep(list(numeric(n)), max(nH, 2L)))))
+      return(c(out, list(u = u, EEst = 2, singular = TRUE, k = rep(list(numeric(n)), max(nH, 2L)))))
     dT <- dw$dT
     du <- dw$f0 %||% f(u, p, t)
     out$nf <- out$nf + 1L
@@ -421,7 +422,7 @@
     if (is.null(W)) {
       # a fixed step is accepted all the same
       if (!ctx$adaptive) cache$reeval_fsal <- TRUE
-      return(c(out, list(u = u, EEst = 2, k = list(numeric(length(u)), numeric(length(u))))))
+      return(c(out, list(u = u, EEst = 2, singular = TRUE, k = list(numeric(length(u)), numeric(length(u))))))
     }
     dT <- dw$dT
     fsalfirst <- cache$fsal

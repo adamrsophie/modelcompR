@@ -904,7 +904,11 @@ NLsolveJL <- function(method = "trust_region", autodiff = NULL, linesearch = NUL
     stop("During the resolution of the non-linear system, the evaluation of the following equation(s) ",
          "resulted in a non-finite number: [", paste(which(!is.finite(v)), collapse = ", "), "]", call. = FALSE)
   out <- function(x, it, conv, gc = df$jc)
-    .wr_out(x, as.numeric(F(x)), if (any(conv)) "Success" else "Failure", it, df$fc, gc, gc, gc,
+    # NLsolve's converged() is x_converged || f_converged; a step that only
+    # stopped moving x (below the spacing of doubles, say) does not certify
+    # a root, so it is Stalled unless the residual meets ftol
+    .wr_out(x, as.numeric(F(x)), if (isTRUE(conv[2])) "Success" else if (isTRUE(conv[1])) "Stalled" else "Failure",
+            it, df$fc, gc, gc, gc,
             original = list(x_converged = conv[1], f_converged = conv[2]))
   if (a$method == "trust_region") {
     df$vj2(x); r <- df$F; fin(r)

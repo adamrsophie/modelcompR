@@ -72,3 +72,42 @@
   sensitivities, observed values and the integrator interface replay it;
   problems keep the function registrations they were built with.
 * `native` arithmetic keeps complex states in the implicit methods.
+* A singular Rosenbrock or implicit stage on a fixed step ends the solve
+  with `ConvergenceFailure` in both arithmetic modes; inline roots are
+  accepted by the size of the Newton step, so rescaling an equation does
+  not change the branch, and gradients replay the branch at events.
+* Ensemble checkpoints (format version 2) compare the exact description
+  of the run, record the backend and its cores, never overwrite the old
+  file in place, and resume exactly under Box-Muller normals; Shapley
+  effects keep Box-Muller draws apart from the model as well.
+* Adjoints fail on unfinished quadrature, on failed or truncated forward
+  solves and on backward solves that stop early; checkpoint replays use
+  the step options of the forward solve.
+* The loss cotangent differences every state (not only the `save_idxs`
+  view), adds the cotangents of repeated columns, keeps the reads of
+  `sol(t)` at saved times, collects every interpolation time in one pass
+  and matches saved times exactly. Optimization gradients follow the
+  objective and the sense of the problem. Terminal parameter resets are
+  differentiated after the event, array states keep their shape, and per
+  state tolerances apply to the forward sensitivities.
+* `sol(t)` gives the value after an event in dense and linear output.
+* Changing masses survive `remake()` and split problems and drop `tgrad`;
+  pattern sparse masses and scalar operators are accepted; the identity
+  test of a sparse mass reads only its nonzeros.
+* Krylov: LSMR stops on a scale free backward error, rescaled solutions
+  must be finite, MINRES and MINARES are their own methods, and operators
+  are applied matrix free. Rectangular sparse systems are solved by least
+  squares, complex systems keep their values, and sparse generated
+  Jacobians keep complex entries.
+* Tau leaping takes the final partial step, and a leap rejected at
+  `dtmin` ends with `DtLessThanMin`; NLsolve reports `Stalled` when only
+  the iterate stopped moving.
+* Regression sensitivity standardizes in a range safe way and gives NA to
+  coefficients the design does not determine.
+* `save_idxs` is validated before the solve and `get_saved_state_idxs()`
+  reports the original states of reduced storage.
+* Registration snapshots are authoritative; the observed sort and sparse
+  partials are linear in size.
+* `solve_gradient()` differentiates DDEs (forward sensitivities of the
+  method of steps) and complex states; neutral DDEs query the derivative
+  of the history.
