@@ -105,7 +105,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
     ap <- DAEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                             dgdp_continuous, g, callback = callback, no_start = no_start,
                             abstol = abstol, reltol = reltol)
-    return(ap$finish(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...)))
+    return(ap$finish(.sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint")))
   }
   # SDEs and RODEs, solved on the forward grid (R/sensitivity-sde.R)
   if (inherits(prob, c("SDEProblem", "RODEProblem"))) {
@@ -126,7 +126,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
       dots$abstol <- abstol
       dots$reltol <- reltol
     }
-    return(ap$finish(do.call(solve, c(list(ap, ap$alg), dots))))
+    return(ap$finish(.sens_stage_ok(do.call(solve, c(list(ap, ap$alg), dots)), "backward adjoint")))
   }
   if (!inherits(prob, "ODEProblem"))
     stop("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE/DAE problems.", call. = FALSE)
@@ -135,7 +135,7 @@ adjoint_sensitivities <- function(sol, alg = NULL, t = NULL, dgdu_discrete = NUL
   ap <- ODEAdjointProblem(sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete, dgdu_continuous,
                           dgdp_continuous, g, checkpoints = checkpoints, callback = callback,
                           no_start = no_start, abstol = abstol, reltol = reltol, dgdt_discrete = dgdt_discrete)
-  adj <- solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...)
+  adj <- .sens_stage_ok(solve(ap, ap$alg, abstol = abstol, reltol = reltol, ...), "backward adjoint")
   ap$finish(adj)
 }
 
@@ -159,6 +159,9 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
   ckpt <- isTRUE(sensealg$checkpointing) && !backsolve
   alg <- alg %||% env$alg %||% Tsit5()
   fns <- .sens_fns(prob, sensealg)
+  # the forward functions follow the branch history of the forward solve
+  if (!is.null(env$inline_hist))
+    for (nm in c("f", "jac", "pjac", "vjp")) fns[[nm]] <- .inline_replay_fn(fns[[nm]], env$inline_hist)
   n <- fns$n; np <- fns$np
   ms <- .sens_mass_structure(fns$mass, n)
   events <- .sens_events_of(sol)
@@ -208,7 +211,8 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     })
     pseg <- c(lapply(events, `[[`, "p"), list(env$p_final %||% prob$p))
     .sens_trajectory(sol, ev_t, checkpoint = list(times = cps, states = states, prob = prob, alg = env$alg,
-                                                  pseg = pseg, opts = list(abstol = abstol, reltol = reltol)))
+                                                  pseg = pseg, opts = list(abstol = abstol, reltol = reltol),
+                                                  inline_hist = env$inline_hist))
   } else .sens_trajectory(sol, ev_t)
 
   # costs
@@ -494,4 +498,23 @@ ODEAdjointProblem <- function(sol, sensealg = InterpolatingAdjoint(), alg = NULL
     }
   }
   mu
+}
+
+# Every numerical stage of a gradient is checked before its output is used:
+# a backward solve or a checkpoint replay that stops early leaves a partial
+# adjoint, which is not the gradient. The error carries the stage, its
+# retcode and the time where it stopped.
+.sens_stage_ok <- function(sol, stage) {
+  env <- .sol_env(sol)
+  rc <- env$retcode
+  if (!is.null(rc) && !successful_retcode(rc) && !isTRUE(.mtk$sens_allow_failure)) {
+    tt <- env$t[length(env$t)]
+    cond <- structure(class = c("sens_stage_failure", "error", "condition"),
+                      list(message = paste0("the ", stage, " solve ended with retcode ", rc, " at t = ",
+                                            format(tt, digits = 15), ", so the gradient is not available; ",
+                                            "raise its budget (maxiters, dtmin) or pass allow_failure = TRUE"),
+                           call = NULL, stage = stage, retcode = rc, t = tt))
+    stop(cond)
+  }
+  sol
 }

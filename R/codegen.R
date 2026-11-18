@@ -34,7 +34,33 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
   Function(name)
 }
 
-.is_registered_fun <- function(e) .type(e) == "Function" && exists(.name(e), envir = .mtk$funs, inherits = FALSE)
+.is_registered_fun <- function(e) .type(e) == "Function" && !is.null(.reg_get(.name(e)))
+
+# Registration snapshots: a problem keeps the registrations in force when it
+# was built (prob$registry), and every later code generation for it (its
+# Jacobians, sensitivities and observed values) reads them, so its right
+# hand side and its derivatives describe the same functions after a name is
+# registered again. A newly built problem takes the current registrations.
+.registry_snapshot <- function() {
+  list(version = .mtk$fun_version %||% 0L, funs = as.list(.mtk$funs, all.names = TRUE))
+}
+.reg_get <- function(nm) {
+  snap <- .mtk$reg_active
+  if (!is.null(snap)) {
+    r <- snap$funs[[nm]]
+    if (!is.null(r)) return(r)
+  }
+  get0(nm, envir = .mtk$funs, inherits = FALSE)
+}
+.with_registry <- function(snap, expr) {
+  if (is.null(snap)) return(expr)
+  old <- .mtk$reg_active
+  .mtk$reg_active <- snap
+  on.exit(.mtk$reg_active <- old)
+  expr
+}
+# the registration identity of the code being generated (for cache keys)
+.reg_version <- function() (.mtk$reg_active$version %||% .mtk$fun_version) %||% 0L
 
 # Numeric partial derivative of a registered function.
 .fd_partial <- function(fn, i, args) {
@@ -116,10 +142,8 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
 .fun_rcall <- function(e, names) {
   nm <- .name(e)
   args <- lapply(.args(e), .to_rcall, names = names)
-  if (exists(nm, envir = .mtk$funs, inherits = FALSE)) {
-    fn <- get(nm, envir = .mtk$funs)$fn
-    return(as.call(c(list(fn), args)))
-  }
+  reg <- .reg_get(nm)
+  if (!is.null(reg)) return(as.call(c(list(reg$fn), args)))
   r <- .R_MATH[nm]
   if (!is.na(r)) return(as.call(c(list(as.name(r)), args)))
   switch(nm,
@@ -143,9 +167,8 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
 # with the user's derivative.
 .registered_derivative_rcall <- function(e, names) {
   inner <- .args(e)[[1L]]
-  if (.type(inner) != "Function" || !exists(.name(inner), envir = .mtk$funs, inherits = FALSE))
-    .cg_error(e)
-  reg <- get(.name(inner), envir = .mtk$funs)
+  reg <- if (.type(inner) == "Function") .reg_get(.name(inner))
+  if (is.null(reg)) .cg_error(e)
   out <- NULL
   fargs <- .args(inner)
   for (spec in .args(e)[-1L]) {
@@ -226,6 +249,43 @@ register_symbolic <- function(name, fn, derivatives = NULL) {
   .toposort_observed(obs[need])
 }
 
+# The topological order that always takes the smallest ready index (the
+# first ready assignment in the original order), in O((V + E) log V): the
+# indegrees and successor lists are built once and the ready indices kept in
+# a binary min heap. deps[[i]] are the indices i depends on.
+.lex_toposort <- function(deps) {
+  n <- length(deps)
+  deps <- lapply(seq_len(n), function(i) unique(setdiff(deps[[i]], i)))
+  indeg <- lengths(deps)
+  succ <- split(rep.int(seq_len(n), indeg), factor(unlist(deps), levels = seq_len(n)))
+  heap <- integer(n); hn <- 0L
+  push <- function(x) {
+    hn <<- hn + 1L; i <- hn; heap[i] <<- x
+    while (i > 1L && heap[i %/% 2L] > heap[i]) {
+      j <- i %/% 2L; tmp <- heap[j]; heap[j] <<- heap[i]; heap[i] <<- tmp; i <- j
+    }
+  }
+  pop <- function() {
+    top <- heap[1L]; heap[1L] <<- heap[hn]; hn <<- hn - 1L; i <- 1L
+    repeat {
+      l <- 2L * i; r <- l + 1L; m <- i
+      if (l <= hn && heap[l] < heap[m]) m <- l
+      if (r <= hn && heap[r] < heap[m]) m <- r
+      if (m == i) break
+      tmp <- heap[m]; heap[m] <<- heap[i]; heap[i] <<- tmp; i <- m
+    }
+    top
+  }
+  for (i in which(indeg == 0L)) push(i)
+  out <- integer(n); no <- 0L
+  while (hn > 0L) {
+    k <- pop(); no <- no + 1L; out[no] <- k
+    for (s in succ[[k]]) { indeg[s] <- indeg[s] - 1L; if (indeg[s] == 0L) push(s) }
+  }
+  if (no < n) stop("cyclic assignments in generated code", call. = FALSE)
+  out
+}
+
 # Sort observed equations so each lhs is defined before it is used.
 .toposort_observed <- function(obs) {
   if (length(obs) <= 1L) return(obs)
@@ -293,10 +353,12 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
 .build_closure <- function(exprs, args, observed = list(), cse = TRUE, expression = FALSE,
                            out = c("auto", "vector", "matrix", "scalar"), sparse_matrix = FALSE) {
   out <- match.arg(out)
-  is_mat <- is.matrix(exprs) || inherits(exprs, "symmatrix")
+  ir <- if (inherits(exprs, "mtk_sparse_ir")) exprs
+  if (!is.null(ir)) { exprs <- ir$x; sparse_matrix <- TRUE }
+  is_mat <- is.matrix(exprs) || inherits(exprs, "symmatrix") || !is.null(ir)
   if (inherits(exprs, "symmatrix")) exprs <- .symmatrix_to_list_matrix(exprs)
-  dims <- if (is_mat) dim(exprs) else NULL
-  scalar <- is_sym(exprs) || is.numeric(exprs)
+  dims <- if (!is.null(ir)) ir$dims else if (is_mat) dim(exprs) else NULL
+  scalar <- is.null(ir) && (is_sym(exprs) || is.numeric(exprs))
   flat <- if (scalar) list(as_sym(exprs)) else lapply(unclass(exprs), as_sym)
   if (out == "auto") out <- if (is_mat) "matrix" else if (scalar) "scalar" else "vector"
 
@@ -340,15 +402,9 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
   stmts <- list()
   if (length(defs)) {
     dn <- vapply(defs, `[[`, "", "ph")
-    deps <- lapply(defs, function(d) intersect(.free_names(d$rhs), dn))
-    done <- character()
-    while (length(done) < length(dn)) {
-      ready <- which(!(dn %in% done) & vapply(deps, function(x) all(x %in% done), TRUE))
-      if (!length(ready)) stop("cyclic assignments in generated code", call. = FALSE)
-      k <- ready[1L]
+    deps <- lapply(defs, function(d) match(intersect(.free_names(d$rhs), dn), dn))
+    for (k in .lex_toposort(deps))
       stmts[[length(stmts) + 1L]] <- call("<-", as.name(dn[k]), .to_rcall(defs[[k]]$rhs, names))
-      done <- c(done, dn[k])
-    }
   }
   calls <- lapply(lowered, .to_rcall, names = names)
   result <- switch(out,
@@ -363,8 +419,8 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
       # template (column major order is the CSC order), keeping structural
       # entries whose current value is zero.
       k <- which(nz)
-      tmpl <- Matrix::sparseMatrix(i = as.integer((k - 1L) %% dims[1L] + 1L),
-                                   j = as.integer((k - 1L) %/% dims[1L] + 1L),
+      tmpl <- Matrix::sparseMatrix(i = if (is.null(ir)) as.integer((k - 1L) %% dims[1L] + 1L) else ir$i[k],
+                                   j = if (is.null(ir)) as.integer((k - 1L) %/% dims[1L] + 1L) else ir$j[k],
                                    x = rep(1, length(k)), dims = as.integer(dims))
       as.call(list(as.name("{"),
                    call("<-", as.name(".J"), tmpl),
@@ -430,6 +486,27 @@ build_function <- function(exprs, ..., observed = list(), cse = TRUE, expression
     if (!(wkeys[j] %in% present[[i]])) return(zero)
     .subst(diff(low[[i]], wph[[j]]), back)
   })
+}
+
+# The structural nonzeros of the Jacobian only, as rows, columns and
+# expressions in column major (CSC) order: no n x n intermediate.
+.partials_sparse <- function(exprs, wrt, others = list()) {
+  hold <- c(wrt, others)
+  ph <- lapply(seq_along(hold), function(i) Symbol(paste0(".h", i)))
+  rule <- .rule(hold, ph)
+  back <- .rule(ph, hold)
+  wph <- ph[seq_along(wrt)]
+  wkeys <- .keys(wph)
+  ii <- integer(); jj <- integer(); xx <- list()
+  for (r in seq_along(exprs)) {
+    e <- .subst(exprs[[r]], rule)
+    for (c in sort(match(intersect(.keys(free_symbols(e)), wkeys), wkeys))) {
+      ii[length(ii) + 1L] <- r; jj[length(jj) + 1L] <- c
+      xx[[length(xx) + 1L]] <- .subst(diff(e, wph[[c]]), back)
+    }
+  }
+  o <- order(jj, ii)
+  structure(list(i = ii[o], j = jj[o], x = xx[o], dims = c(length(exprs), length(wrt))), class = "mtk_sparse_ir")
 }
 
 .as_symmatrix <- function(lm) {
@@ -559,6 +636,10 @@ generate_rhs <- function(sys, ...) {
 #' @rdname calculate_jacobian
 #' @export
 generate_jacobian <- function(sys, sparse = FALSE, ...) {
+  if (isTRUE(sparse))
+    return(.build_closure(.partials_sparse(.ode_rhs_exprs(sys), unknowns(sys),
+                                           c(.parameters_of(sys, TRUE), independent_variables(sys))),
+                          .sys_args(sys), out = "matrix", ...))
   J <- calculate_jacobian(sys)
   .build_closure(.symmatrix_to_list_matrix(J), .sys_args(sys), out = "matrix", sparse_matrix = sparse, ...)
 }

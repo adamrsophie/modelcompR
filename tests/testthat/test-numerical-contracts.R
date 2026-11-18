@@ -175,9 +175,13 @@ test_that("sparsity patterns and loss cotangents avoid dense work", {
   expect_equal(column_coloring(Matrix::Matrix(A, sparse = TRUE)), column_coloring(A))
   sol <- solve(ODEProblem(function(u, p, t) -u, rep(1, 10), c(0, 1)), Tsit5(), saveat = seq(0, 1, length.out = 1001),
                dense = FALSE)
+  # a declared terminal loss is differentiated in its row alone
   calls <- 0L
+  old <- .mtk$sens_loss_rows
+  .mtk$sens_loss_rows <- "last"
   ct <- .sens_loss_cotangent(function(s) { calls <<- calls + 1L; sum(tail(as.matrix(s), 1)^2) }, sol)
-  expect_lt(calls, 200L)
+  .mtk$sens_loss_rows <- old
+  expect_lt(calls, 30L)
   expect_equal(ct$dU[1001, ], 2 * unname(tail(as.matrix(sol), 1)[1, ]), tolerance = 1e-8)
   expect_equal(sum(abs(ct$dU[-1001, ])), 0)
   # a loss reading every row still gets every entry
@@ -331,4 +335,312 @@ test_that("loss derivatives, reduced storage, ensembles and caches", {
   expect_true(all(c("sensitivity_systems", "registered_functions") %in% names(cache_info())))
   expect_equal(.simplex_compositions(3, 2), unname(as.matrix(subset(expand.grid(0:3, 0:3), Var1 + Var2 <= 3))),
                ignore_attr = TRUE)
+})
+
+test_that("loss gradients keep every coordinate and the public solution view", {
+  # a weighted cancellation that a probe of the rows would miss (65 rows)
+  prob <- ODEProblem(function(u, p, t) p[1] + 0 * u, 0, c(0, 1), p = 0)
+  h0 <- .Machine$double.eps^(1 / 3)
+  hm <- h0 * (1 + 0.5 * sin(1:65 * 0.7548776662))
+  loss <- function(sol) { U <- as.matrix(sol); (hm[2] * U[1, 1] - hm[1] * U[2, 1]) / h0 }
+  for (ns in c(64, 65)) {
+    tt <- seq(0, 1, length.out = ns)
+    for (sa in list(ForwardSensitivity(), InterpolatingAdjoint())) {
+      g <- solve_gradient(loss, prob, Tsit5(), saveat = tt, sensealg = sa, reltol = 1e-10, abstol = 1e-12)
+      expect_equal(unname(g$p), -hm[1] / h0 / (ns - 1), tolerance = 1e-8)
+      expect_equal(unname(g$u0), (hm[2] - hm[1]) / h0, tolerance = 1e-8)
+    }
+  }
+  # loss_rows declares a terminal loss; a wrong declaration is rejected
+  p2 <- ODEProblem(function(u, p, t) -p[1] * u, c(1, 2), c(0, 1), p = 1)
+  tl <- function(sol) sum(tail(as.matrix(sol), 1))
+  a <- solve_gradient(tl, p2, Tsit5(), saveat = 0.01, reltol = 1e-10, abstol = 1e-12)
+  b <- solve_gradient(tl, p2, Tsit5(), saveat = 0.01, reltol = 1e-10, abstol = 1e-12, loss_rows = "last")
+  expect_equal(b$p, a$p, tolerance = 1e-8)
+  expect_error(solve_gradient(tl, p2, Tsit5(), saveat = 0.5, loss_rows = 9), "loss_rows")
+  # save_idxs: the loss and loss_grad see the saved component, the gradient
+  # is that of the visible objective
+  lg <- function(sol) { U <- as.matrix(sol); U[] <- 0; U[nrow(U), ] <- 1; U }
+  for (sa in list(ForwardSensitivity(), InterpolatingAdjoint())) for (use_lg in c(FALSE, TRUE)) {
+    g <- solve_gradient(tl, p2, Tsit5(), save_idxs = 2, saveat = c(0, 1), sensealg = sa, reltol = 1e-10,
+                        abstol = 1e-12, loss_grad = if (use_lg) lg)
+    expect_equal(dim(as.matrix(g$sol)), c(2L, 1L))
+    expect_equal(g$value, 2 * exp(-1), tolerance = 1e-8)
+    expect_equal(unname(g$p), -2 * exp(-1), tolerance = 1e-7)
+    expect_equal(unname(g$u0), c(0, exp(-1)), tolerance = 1e-7)
+  }
+  # reordered selection of two outputs
+  g <- solve_gradient(function(sol) { U <- as.matrix(sol); U[2, 1] + 10 * U[2, 2] }, p2, Tsit5(),
+                      save_idxs = c(2, 1), saveat = c(0, 1), reltol = 1e-10, abstol = 1e-12)
+  expect_equal(unname(g$u0), c(10, 1) * exp(-1), tolerance = 1e-7)
+  # reduced storage given through the problem is rejected too
+  pr <- ODEProblem(function(u, p, t) -p[1] * u, c(1, 2), c(0, 1), p = 1, save_idxs = 2, save_idxs_storage = "reduced")
+  expect_error(solve_gradient(tl, pr, Tsit5(), saveat = c(0, 1)), "every state")
+  # loss_grad still differences the samples read by interpolation
+  p3 <- ODEProblem(function(u, p, t) p[1] + 0 * u, 0, c(0, 1), p = 2)
+  g <- solve_gradient(function(sol) sum(sol(0.5)), p3, Tsit5(), saveat = c(0, 1), sensealg = ForwardSensitivity(),
+                      loss_grad = function(sol) 0 * as.matrix(sol))
+  expect_equal(c(unname(g$p), unname(g$u0)), c(0.5, 1), tolerance = 1e-8)
+})
+
+test_that("every numerical stage of a gradient is checked", {
+  prob <- ODEProblem(function(u, p, t) p[1] * u, 1, c(0, 1), p = 20)
+  loss <- function(sol) tail(as.matrix(sol)[, 1], 1)
+  e <- tryCatch(suppressWarnings(solve_gradient(loss, prob, Tsit5(), saveat = c(0, 1), sensealg = InterpolatingAdjoint(),
+                                                dt = 0.1, maxiters = 5, reltol = 1e-9, abstol = 1e-11)),
+                error = function(e) e)
+  expect_s3_class(e, "sens_stage_failure")
+  expect_equal(e$stage, "backward adjoint")
+  expect_equal(e$retcode, "MaxIters")
+  expect_lt(e$t, 1)
+  g <- solve_gradient(loss, prob, Tsit5(), saveat = c(0, 1), sensealg = InterpolatingAdjoint(), reltol = 1e-9,
+                      abstol = 1e-11)
+  expect_equal(unname(g$u0) / exp(20), 1, tolerance = 1e-6)
+  # a failure while replaying a checkpoint
+  bad <- new.env(); bad$on <- FALSE
+  pc <- ODEProblem(function(u, p, t) if (bad$on && t < 0.5) NaN * u else -p[1] * u, 1, c(0, 1), p = 1)
+  sa <- InterpolatingAdjoint(checkpointing = TRUE)
+  sol <- solve(pc, Tsit5(), saveat = c(0, 0.5, 1), sensealg = sa)
+  bad$on <- TRUE
+  e2 <- tryCatch(suppressWarnings(adjoint_sensitivities(sol, Tsit5(), t = 1, sensealg = sa,
+                                                        dgdu_discrete = function(u, p, t, i) 1)), error = function(e) e)
+  expect_s3_class(e2, "sens_stage_failure")
+  expect_equal(e2$stage, "checkpoint replay")
+})
+
+test_that("reduced storage maps original states to stored columns everywhere", {
+  prob <- ODEProblem(function(u, p, t) c(0, 0, 0), c(10, 20, 30), c(0, 1))
+  s <- solve(prob, Tsit5(), saveat = c(0, 1), save_idxs = c(3, 2), save_idxs_storage = "reduced")
+  expect_equal(s[2], c(20, 20))
+  expect_equal(s(0.5, idxs = 2), 20)
+  expect_equal(s(0.5, idxs = 3), 30)
+  expect_equal(unname(s(0.5, idxs = list(2, 3))), c(20, 30))
+  expect_error(s[1], "not saved")
+  expect_error(s(0.5, idxs = 1), "not saved")
+})
+
+test_that("sparse prototypes, masks and Matrix storage give the same Jacobian", {
+  n <- 3L
+  A <- matrix(c(-100, 0, 1, 0, -2, 0, 0, 3, -1), 3)
+  f <- function(u, p, t) as.numeric(A %*% u)
+  alg <- Rodas5P(autodiff = AutoSparse(AutoFiniteDiff()))
+  protos <- list(Matrix::sparseMatrix(i = c(1, 2, 3, 2, 3), j = c(1, 2, 1, 3, 3), x = 0, dims = c(3, 3)),
+                 Matrix::Matrix(A, sparse = TRUE), A * 0)
+  ref <- solve(ODEProblem(f, rep(1, n), c(0, 0.1)), Rodas5P(), dt = 0.02, adaptive = FALSE)
+  for (pr in protos) {
+    sp <- ODEFunction(f, jac_prototype = pr)
+    ctx <- list(f = f, p = numeric(), autodiff = alg$autodiff, sparsity = sp$sparsity)
+    J <- .calc_J(ctx, rep(1, n), 0, f(rep(1, n), numeric(), 0), sparse_ok = TRUE)$J
+    expect_equal(as.matrix(J), A, tolerance = 1e-6, ignore_attr = TRUE)
+    s <- solve(ODEProblem(sp, rep(1, n), c(0, 0.1)), alg, dt = 0.02, adaptive = FALSE)
+    expect_equal(tail(as.matrix(s), 1), tail(as.matrix(ref), 1), tolerance = 1e-6, ignore_attr = TRUE)
+  }
+  # mirrored and implicit unit diagonal entries take part in the coloring
+  valid <- function(M, cl) { D <- as.matrix(M) != 0
+    all(vapply(seq_len(nrow(D)), function(i) !anyDuplicated(cl[D[i, ]]), TRUE)) }
+  S <- Matrix::bandSparse(5, k = c(0, 1), diagonals = list(rep(2, 5), rep(1, 4)), symmetric = TRUE)
+  Tu <- methods::as(Matrix::bandSparse(4, k = 1, diagonals = list(rep(1, 3))), "dtCMatrix"); Tu@diag <- "U"
+  for (M in list(S, Tu, Matrix::t(S), methods::as(S, "generalMatrix"), as.matrix(S) != 0))
+    expect_true(valid(M, column_coloring(M)))
+  fs <- function(u) as.numeric(S %*% u)
+  expect_equal(as.matrix(.jac_colored(fs, rep(1, 5), fs(rep(1, 5)), S)$J), as.matrix(S), tolerance = 1e-6,
+               ignore_attr = TRUE)
+})
+
+test_that("native arithmetic keeps complex states in the implicit methods", {
+  p <- ODEProblem(ODEFunction(function(u, p, t) 1i * u, jac_fn = function(u, p, t) matrix(1i, 1, 1),
+                              tgrad_fn = function(u, p, t) 0i * u), 1 + 0i, c(0, 1))
+  old <- arithmetic_mode(); on.exit(arithmetic_mode(old))
+  for (alg in list(Rodas5P(), Rosenbrock23(), RadauIIA5(), ImplicitEuler(), FBDF(), KenCarp4())) {
+    arithmetic_mode("reference")
+    r <- tail(as.matrix(solve(p, alg, reltol = 1e-8, abstol = 1e-10)), 1)
+    arithmetic_mode("native")
+    nv <- tail(as.matrix(solve(p, alg, reltol = 1e-8, abstol = 1e-10)), 1)
+    expect_true(is.complex(nv))
+    expect_equal(nv, r, tolerance = 1e-6, ignore_attr = TRUE)
+  }
+})
+
+test_that("inline nonlinear branches commit only accepted states and replay with the solution", {
+  t <- t_nounits; D <- D_nounits
+  x <- Variable("bc_x", t); y <- Variable("bc_y", t); z <- Variable("bc_z", t, guess = 1)
+  cs <- mtkcompile(System(list(D(x) ~ -100 * x, D(y) ~ z, 0 ~ z^3 - z - x), t, name = "bc_rej"),
+                   inline_nonlinear_sccs = TRUE)
+  p <- ODEProblem(cs, list(x ~ 0.1, y ~ 0), c(0, 0.1))
+  a <- solve(p, BS3(), dt = 0.08, reltol = 1e-6, abstol = 1e-8, maxiters = 3000)
+  b <- solve(p, BS3(), dt = 1e-5, reltol = 1e-6, abstol = 1e-8, maxiters = 3000)
+  expect_gt(a$stats$nreject, 0L)
+  expect_gt(a(0.1, idxs = y), 0.1)
+  expect_equal(a(0.1, idxs = y), b(0.1, idxs = y), tolerance = 1e-5)
+  # the branch of z^3 - z = t - 1 that starts at the only root at t = 0
+  w <- Variable("bc_w", t); v <- Variable("bc_v", t, guess = 1); q <- Parameter("bc_q")
+  cs2 <- mtkcompile(System(list(D(w) ~ v, 0 ~ v^3 - v - (t - 1 + q)), t, name = "bc_live"), inline_nonlinear_sccs = TRUE)
+  p2 <- ODEProblem(cs2, list(w ~ 0, q ~ 0), c(0, 1))
+  i <- init(p2, Tsit5(), dt = 0.01, adaptive = FALSE)
+  s <- solve_integrator(i)
+  expect_equal(s(1, idxs = v), -1, tolerance = 1e-8)
+  expect_equal(unname(s[v][length(s$t)]), -1, tolerance = 1e-8)
+  expect_equal(get_du(i), -1, tolerance = 1e-8)
+  # reinit starts over from the guesses, as a fresh solve
+  reinit(i, u0 = 0, t0 = 0.9, tf = 1)
+  r <- solve_integrator(i)
+  f <- solve(remake(p2, u0 = 0, tspan = c(0.9, 1)), Tsit5(), dt = 0.01, adaptive = FALSE)
+  expect_equal(r(1, idxs = w), f(1, idxs = w), tolerance = 1e-10)
+  # adjoints replay the forward branch: d w(1) / d q = -1 - z(0)
+  truth <- -1 - uniroot(function(z) z^3 - z + 1, c(-2, -1), tol = 1e-13)$root
+  loss <- function(s) tail(as.matrix(s), 1)[1]
+  for (sa in list(ForwardSensitivity(), InterpolatingAdjoint(), InterpolatingAdjoint(checkpointing = TRUE))) {
+    g <- solve_gradient(loss, p2, Tsit5(), sensealg = sa, dt = 0.01, adaptive = FALSE, saveat = 0.1,
+                        reltol = 1e-8, abstol = 1e-10)
+    expect_equal(unname(g$p), truth, tolerance = 1e-5)
+  }
+})
+
+test_that("a problem keeps the registrations it was built with", {
+  t <- t_nounits; D <- D_nounits
+  x <- Variable("rs_x", t)
+  h <- register_symbolic("rs_h", function(x) x, derivatives = list(function(x) 1))
+  cs <- mtkcompile(System(list(D(x) ~ h(x)), t, name = "rs_sys"))
+  p <- ODEProblem(cs, list(x ~ 1), c(0, 1))
+  loss <- function(s) tail(as.matrix(s), 1)[1]
+  h <- register_symbolic("rs_h", function(x) x^2, derivatives = list(function(x) 2 * x))
+  g <- solve_gradient(loss, p, Tsit5(), sensealg = ForwardSensitivity(), saveat = 1, reltol = 1e-9, abstol = 1e-11)
+  expect_equal(c(g$value, unname(g$u0)), rep(exp(1), 2), tolerance = 1e-6)
+  p2 <- ODEProblem(mtkcompile(System(list(D(x) ~ h(x)), t, name = "rs_sys2")), list(x ~ 0.5), c(0, 1))
+  g2 <- solve_gradient(loss, p2, Tsit5(), sensealg = ForwardSensitivity(), saveat = 1, reltol = 1e-10, abstol = 1e-12)
+  expect_equal(c(g2$value, unname(g2$u0)), c(1, 4), tolerance = 1e-6)
+})
+
+test_that("changing and nonfinite mass matrices", {
+  calls <- 0L
+  M <- MatrixOperator(matrix(1), update_func = function(A, u, p, t) { calls <<- calls + 1L; matrix(1 + t) })
+  prob <- ODEProblem(ODEFunction(function(u, p, t) -u, mass_matrix = M), 1, c(0, 1))
+  for (alg in list(Rodas5P(), Tsit5(), FBDF())) {
+    s <- solve(prob, alg, reltol = 1e-10, abstol = 1e-12)
+    expect_equal(tail(as.matrix(s)[, 1], 1), 0.5, tolerance = 1e-7)
+  }
+  expect_gt(calls, 0L)
+  Ms <- MatrixOperator(matrix(c(1, 0, 0, 0), 2), update_func = function(A, u, p, t) A)
+  expect_error(ODEProblem(ODEFunction(function(u, p, t) -u, mass_matrix = Ms), c(1, 1), c(0, 1)), "nonsingular")
+  for (v in c(NA_real_, NaN, Inf))
+    expect_error(ODEProblem(ODEFunction(function(u, p, t) -u, mass_matrix = matrix(v)), 1, c(0, 1)), "non-finite")
+})
+
+test_that("Krylov solves, low rank updates and eigenpairs keep their contracts", {
+  for (alg in list(KrylovJL_GMRES(), KrylovJL_CG(), KrylovJL_BICGSTAB(), KrylovJL_MINRES(), KrylovJL_FGMRES()))
+    for (sc in c(1, 1e-200, 1e200, 1e-300, 1e300)) {
+      A <- matrix(c(4, 1, 0, 1, 3, 1, 0, 1, 2), 3)
+      s <- solve(LinearProblem(A, as.numeric(A %*% c(1, -2, 3)) * sc), alg, abstol = 0, reltol = 1e-10)
+      expect_equal(s$retcode, "Success")
+      expect_equal(s$u / sc, c(1, -2, 3), tolerance = 1e-8)
+    }
+  # a scaled left preconditioner does not stop the inner iteration early
+  A <- diag(c(1, 2, 4)); b <- rep(1, 3)
+  for (sc in c(1, 1e-12, 1e12)) {
+    z <- solve(LinearProblem(A, b), KrylovJL_GMRES(), Pl = function(x) sc * x, maxiters = 3, restart = 3, reltol = 1e-10)
+    expect_equal(z$retcode, "Success")
+    expect_equal(z$u, c(1, 0.5, 0.25), tolerance = 1e-8)
+  }
+  # an ill conditioned base with a well conditioned update
+  A <- matrix(c(1, 1, 1, 1 + 1e-8), 2); U <- matrix(c(0, 1), 2, 1)
+  M <- A + U %*% t(U)
+  s <- solve(LinearProblem(LowRankUpdatedMatrix(A, U, matrix(1), U), as.numeric(M %*% c(1, 1))), LUFactorization())
+  expect_equal(s$u, c(1, 1), tolerance = 1e-8)
+  s <- solve(LinearProblem(LowRankUpdatedMatrix(diag(3), matrix(1, 3, 1), matrix(0), matrix(1, 3, 1)), c(1, 2, 3)))
+  expect_equal(s$u, c(1, 2, 3))
+  # eigenpairs: repeated eigenvalues, the complete count, impossible requests
+  set.seed(1)
+  e <- solve(EigenvalueProblem(diag(10), nev = 2), ArnoldiMethodJL(krylovdim = 2))
+  expect_equal(e$retcode, "Success"); expect_length(e$values, 2L); expect_equal(qr(e$vectors)$rank, 2L)
+  set.seed(2)
+  e <- solve(EigenvalueProblem(diag(c(5, 5, 5, 4, 3, 2, 1, 1, 1, 1, 0.5, 0.2)), nev = 4), ArnoldiMethodJL(krylovdim = 5))
+  expect_equal(e$values, c(5, 5, 5, 4), tolerance = 1e-8)
+  set.seed(3)
+  B <- matrix(rnorm(400), 20)
+  e <- solve(EigenvalueProblem(B, nev = 3), ArnoldiMethodJL(krylovdim = 6))
+  expect_equal(e$retcode, "Success")
+  expect_equal(e$values, eigen(B)$values[1:3], tolerance = 1e-8)
+  e <- solve(EigenvalueProblem(diag(3), nev = 5))
+  expect_equal(c(e$retcode, e$nconverged), c("Failure", "3"))
+})
+
+test_that("regression sensitivity is invariant to shifts, units, order and ties", {
+  set.seed(5)
+  X <- matrix(runif(60), 3); Y <- rbind(X[1, ] + 2 * X[2, ]^2, X[3, ] - X[1, ])
+  a <- gsa(X, Y, RegressionGSA(rank = TRUE))
+  b <- gsa(1e-6 * X + 1e3, 1e6 * Y - 3, RegressionGSA(rank = TRUE))
+  for (k in names(a)) expect_equal(b[[k]], a[[k]], tolerance = 1e-6, info = k)
+  b2 <- gsa(X + 1e8, Y, RegressionGSA())
+  for (k in c("pearson", "standard_regression", "partial_correlation")) expect_equal(b2[[k]], a[[k]], tolerance = 1e-6, info = k)
+  ord <- sample(20)
+  d <- gsa(X[, ord], Y[, ord], RegressionGSA(rank = TRUE))
+  for (k in names(a)) expect_equal(d[[k]], a[[k]], tolerance = 1e-12, info = k)
+  Xt <- matrix(c(1, 1, 2, 2, 3), 1); Yt <- c(2, 1, 3, 5, 4)
+  expect_equal(c(gsa(Xt, Yt, RegressionGSA(rank = TRUE))$pearson_rank),
+               stats::cor(c(Xt), Yt, method = "spearman"))
+  cst <- gsa(rbind(rep(1, 5), 1:5), (1:5)^2, RegressionGSA(rank = TRUE))
+  expect_true(all(is.na(c(cst$pearson[1], cst$standard_regression[1], cst$partial_correlation[1],
+                          cst$pearson_rank[1]))))
+  expect_true(all(is.finite(c(cst$pearson[2], cst$standard_regression[2]))))
+  # collinear inputs: undetermined coefficients are NA
+  col <- gsa(rbind(1:6, 2 * (1:6), c(3, 1, 4, 1, 5, 9)), c(1, 4, 2, 8, 5, 7), RegressionGSA())
+  expect_true(anyNA(col$standard_regression[1:2]))
+})
+
+test_that("Shapley handles one input and keeps its design apart from the model", {
+  D <- SklarDist(IndependentCopula(1), list(univariate_distribution("unif", 0, 1)))
+  m <- Shapley(n_var = 10, n_outer = 3, n_inner = 2)
+  set.seed(1); b <- suppressMessages(gsa(function(X) X[1, ], m, D, batch = TRUE))
+  set.seed(1); a <- suppressMessages(gsa(function(x) x[1], m, D))
+  expect_equal(a$shapley_effects, 1); expect_equal(b$shapley_effects, 1)
+  D3 <- SklarDist(IndependentCopula(3), rep(list(univariate_distribution("unif", 0, 1)), 3))
+  m3 <- Shapley(n_perms = 4, n_var = 50, n_outer = 5, n_inner = 3)
+  set.seed(3); b3 <- suppressMessages(gsa(function(X) X[1, ] + 2 * X[2, ] * X[3, ], m3, D3, batch = TRUE))
+  set.seed(3); a3 <- suppressMessages(gsa(function(x) { stats::runif(1); x[1] + 2 * x[2] * x[3] }, m3, D3))
+  expect_equal(a3$shapley_effects, b3$shapley_effects)
+})
+
+test_that("the end state obeys the event side policy whether or not it is saved", {
+  prob <- ODEProblem(function(u, p, t) 0 * u, 1, c(0, 1))
+  for (sp in list(c(TRUE, TRUE), c(TRUE, FALSE), c(FALSE, FALSE))) for (se in c(TRUE, FALSE)) {
+    cb <- PresetTimeCallback(1, function(i) i$u[] <- 10, save_positions = sp)
+    s <- solve(prob, Tsit5(), callback = cb, dense = TRUE, saveat = c(0, 0.5), save_end = se)
+    expect_equal(s(1), 10)
+    expect_equal(s(1 - 1e-9), 1)
+  }
+})
+
+test_that("ensemble checkpoints are versioned, identified and resume exactly", {
+  base <- ODEProblem(function(u, p, t) -u, 1, c(0, 0.1))
+  flag <- new.env(); flag$abort <- FALSE
+  red <- function(u, batch, I) { if (flag$abort && max(I) > 2) stop("interrupted"); list(c(u, batch), FALSE) }
+  ep <- EnsembleProblem(base, output_func = function(sol, i) list(stats::runif(1), FALSE), reduction = red)
+  for (bs in 1:3) for (streams in c("trajectory", "session")) for (sd in list(NULL, 7L)) {
+    f <- tempfile(fileext = ".rds")
+    set.seed(42); full <- solve(ep, Tsit5(), trajectories = 6, batch_size = bs, rng_streams = streams, seed = sd)
+    set.seed(42); flag$abort <- TRUE
+    expect_error(solve(ep, Tsit5(), trajectories = 6, batch_size = bs, rng_streams = streams, seed = sd, checkpoint = f),
+                 "interrupted")
+    flag$abort <- FALSE
+    set.seed(999)
+    res <- solve(ep, Tsit5(), trajectories = 6, batch_size = bs, rng_streams = streams, seed = sd, checkpoint = f)
+    expect_identical(res$u, full$u)
+    unlink(f)
+  }
+  f <- tempfile(fileext = ".rds")
+  ep2 <- function(rate) EnsembleProblem(ODEProblem(function(u, p, t) -p * u, 1, c(0, 1), rate))
+  solve(ep2(1), Tsit5(), trajectories = 4, batch_size = 2, checkpoint = f)
+  expect_error(solve(ep2(2), Tsit5(), trajectories = 4, batch_size = 2, checkpoint = f), "different run")
+  expect_error(solve(ep2(1), Tsit5(), trajectories = 4, batch_size = 1, checkpoint = f), "batch_size")
+  expect_error(solve(ep2(1), Tsit5(), trajectories = 4, batch_size = 2, checkpoint = f, run_id = "a"), "run_id")
+  writeBin(readBin(f, "raw", 20), f)
+  expect_error(solve(ep2(1), Tsit5(), trajectories = 4, batch_size = 2, checkpoint = f), "truncated")
+  saveRDS(list(a = 1), f)
+  expect_error(solve(ep2(1), Tsit5(), trajectories = 4, batch_size = 2, checkpoint = f), "not an ensemble checkpoint")
+})
+
+test_that("dual means of large finite values stay finite", {
+  r <- .ad_try_jacobian(function(x) mean(x), rep(1e308, 2))
+  expect_equal(r$value, 1e308)
+  expect_equal(c(r$jacobian), c(0.5, 0.5))
 })

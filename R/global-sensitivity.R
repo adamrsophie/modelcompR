@@ -276,7 +276,10 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 
 # .gsa_eval over the designs block(1), ..., block(nb), one at a time
 .gsa_eval_blocks <- function(f, nb, block) {
-  evs <- lapply(seq_len(nb), function(i) .gsa_eval(f, block(i), FALSE))
+  # a block without samples (Shapley of one input) is skipped; the output
+  # shape comes from the first evaluated block
+  evs <- lapply(seq_len(nb), function(i) { B <- block(i); if (ncol(B)) .gsa_eval(f, B, FALSE) })
+  evs <- Filter(Negate(is.null), evs)
   multi <- evs[[1L]]$multi
   Y <- if (multi) do.call(cbind, lapply(evs, `[[`, "Y")) else unlist(lapply(evs, `[[`, "Y"))
   list(Y = Y, multi = multi, y_size = evs[[1L]]$y_size)
@@ -483,30 +486,57 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 
 .gsa_rowsd <- function(M) apply(M, 1L, stats::sd)
 
-# Standardized regression coefficients of a fit with an intercept, so they
-# do not change when inputs or outputs are shifted (GlobalSensitivity fits
-# through the origin). Coefficients that the design does not determine are NA.
-.gsa_reg_coefs <- function(X, Y) {
-  beta <- qr.coef(qr(cbind(1, t(X))), t(Y))[-1L, , drop = FALSE]
-  t(beta * .gsa_rowsd(X) / rep(.gsa_rowsd(Y), each = nrow(X)))
+# Each row of inputs and outputs is centered and scaled to unit standard
+# deviation first, so every statistic is invariant to shifts and positive
+# changes of units, and the decompositions work on well scaled columns.
+# A row with no variation (relative to its magnitude) is a constant: its
+# statistics are NA, and it is left out of the designs of the others.
+.gsa_standardize <- function(M) {
+  mu <- rowMeans(M)
+  s <- .gsa_rowsd(M)
+  const <- !is.finite(s) | s <= 64 * .Machine$double.eps * pmax(abs(mu), .Machine$double.xmin)
+  Z <- (M - mu) / ifelse(const, 1, s)
+  Z[const, ] <- 0
+  list(Z = Z, const = const)
 }
-.gsa_reg_corr <- function(X, Y) t(stats::cov(t(X), t(Y)) / outer(.gsa_rowsd(X), .gsa_rowsd(Y)))
+
+# Standardized regression coefficients: the least squares fit of the
+# standardized outputs on the standardized inputs. Coefficients that the
+# design does not determine (rank deficiency) are NA.
+.gsa_reg_coefs <- function(Sx, Sy) {
+  out <- matrix(NA_real_, nrow(Sy$Z), nrow(Sx$Z))
+  keep <- which(!Sx$const)
+  if (!length(keep)) return(out)
+  q <- qr(t(Sx$Z[keep, , drop = FALSE]), tol = 1e-10)
+  beta <- qr.coef(q, t(Sy$Z))
+  beta[, Sy$const] <- NA
+  out[, keep] <- t(beta)
+  out
+}
+.gsa_reg_corr <- function(Sx, Sy) {
+  r <- Sy$Z %*% t(Sx$Z) / (ncol(Sx$Z) - 1)
+  r[Sy$const, ] <- NA
+  r[, Sx$const] <- NA
+  r
+}
 # Partial correlations as correlations of residuals: input i and each output
-# are regressed on the other inputs with an intercept. GlobalSensitivity's
+# are regressed on the other (nonconstant) inputs. GlobalSensitivity's
 # pseudoinverse of a singular correlation matrix is not a partial
 # correlation (one input with Y = 100 + X gives -1); a residual with no
-# variance gives NA.
-.gsa_reg_partial <- function(X, Y) {
-  nx <- nrow(X); N <- ncol(X)
-  out <- matrix(NA_real_, nrow(Y), nx)
-  tol <- function(v, ref) sum(v^2) <= (1e-12 * max(1, sum((ref - mean(ref))^2)))
-  for (i in seq_len(nx)) {
-    Z <- qr(cbind(rep(1, N), t(X[-i, , drop = FALSE])))
-    rx <- qr.resid(Z, X[i, ])
-    if (tol(rx, X[i, ])) next
-    for (j in seq_len(nrow(Y))) {
-      ry <- qr.resid(Z, Y[j, ])
-      if (tol(ry, Y[j, ])) next
+# variance (relative to the standardized scale) gives NA.
+.gsa_reg_partial <- function(Sx, Sy) {
+  nx <- nrow(Sx$Z); N <- ncol(Sx$Z)
+  out <- matrix(NA_real_, nrow(Sy$Z), nx)
+  tol <- 1e-10 * (N - 1)
+  for (i in which(!Sx$const)) {
+    others <- setdiff(which(!Sx$const), i)
+    Z <- if (length(others)) qr(t(Sx$Z[others, , drop = FALSE]), tol = 1e-10)
+    res <- function(v) if (is.null(Z)) v else qr.resid(Z, v)
+    rx <- res(Sx$Z[i, ])
+    if (sum(rx^2) <= tol) next
+    for (j in which(!Sy$const)) {
+      ry <- res(Sy$Z[j, ])
+      if (sum(ry^2) <= tol) next
       out[j, i] <- sum(rx * ry) / sqrt(sum(rx^2) * sum(ry^2))
     }
   }
@@ -516,19 +546,22 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
 .gsa_regression <- function(X, Y, method) {
   X <- as.matrix(X)
   Y <- if (is.matrix(Y)) Y else matrix(as.numeric(Y), 1L)
-  res <- list(pearson = .gsa_reg_corr(X, Y), standard_regression = .gsa_reg_coefs(X, Y),
-              partial_correlation = .gsa_reg_partial(X, Y),
+  stats3 <- function(X, Y) {
+    Sx <- .gsa_standardize(X); Sy <- .gsa_standardize(Y)
+    list(.gsa_reg_corr(Sx, Sy), .gsa_reg_coefs(Sx, Sy), .gsa_reg_partial(Sx, Sy))
+  }
+  st <- stats3(X, Y)
+  res <- list(pearson = st[[1L]], standard_regression = st[[2L]], partial_correlation = st[[3L]],
               pearson_rank = NULL, standard_rank_regression = NULL, partial_rank_correlation = NULL)
   if (method$rank) {
-    # ranks of the samples (GlobalSensitivity.jl uses sortperm, the inverse
-    # permutation, here; see PORTING.md)
-    rk <- function(M) t(apply(M, 1L, rank, ties.method = "first"))
-    Xr <- rk(X); Yr <- rk(Y)
-    if (nrow(Y) == 1L) Yr <- matrix(Yr, 1L)
-    if (nrow(X) == 1L) Xr <- matrix(Xr, 1L)
-    res$pearson_rank <- .gsa_reg_corr(Xr, Yr)
-    res$standard_rank_regression <- .gsa_reg_coefs(Xr, Yr)
-    res$partial_rank_correlation <- .gsa_reg_partial(Xr, Yr)
+    # average ranks of the samples, as Spearman's correlation, so ties do
+    # not depend on the order of the observations (GlobalSensitivity.jl
+    # uses sortperm, the inverse permutation; see PORTING.md)
+    rk <- function(M) matrix(t(apply(M, 1L, rank, ties.method = "average")), nrow(M))
+    sr <- stats3(rk(X), rk(Y))
+    res$pearson_rank <- sr[[1L]]
+    res$standard_rank_regression <- sr[[2L]]
+    res$partial_rank_correlation <- sr[[3L]]
   }
   structure(res, class = "RegressionGSAResult")
 }
@@ -939,8 +972,29 @@ gsa <- function(f, method, p_range = NULL, B = NULL, samples = NULL, batch = FAL
     }
     Bm
   }
-  ev <- if (batch) .gsa_eval(f, cbind(A, do.call(cbind, lapply(seq_len(m), perm_block))), batch) else
-    .gsa_eval_blocks(f, m + 1L, function(i) if (i == 1L) A else perm_block(i - 1L))
+  # the permutation samples draw from a design stream of their own, seeded
+  # by one draw of the session stream: a model that draws random numbers
+  # between streamed blocks neither changes the design nor replays its
+  # numbers, and streamed and batch designs are the same
+  design_seed <- local({
+    s <- sample.int(.Machine$integer.max, 1L)
+    user <- get(".Random.seed", envir = globalenv())
+    set.seed(s)
+    out <- get(".Random.seed", envir = globalenv())
+    assign(".Random.seed", user, envir = globalenv())
+    out
+  })
+  draw_block <- function(ip) {
+    user <- get(".Random.seed", envir = globalenv())
+    assign(".Random.seed", design_seed, envir = globalenv())
+    on.exit({
+      design_seed <<- get(".Random.seed", envir = globalenv())
+      assign(".Random.seed", user, envir = globalenv())
+    })
+    perm_block(ip)
+  }
+  ev <- if (batch) .gsa_eval(f, cbind(A, do.call(cbind, lapply(seq_len(m), draw_block))), batch) else
+    .gsa_eval_blocks(f, m + 1L, function(i) if (i == 1L) A else draw_block(i - 1L))
   Ym <- if (ev$multi) ev$Y else matrix(ev$Y, 1L)
   nout <- nrow(Ym)
   Sh <- Sh2 <- matrix(0, nout, dim)

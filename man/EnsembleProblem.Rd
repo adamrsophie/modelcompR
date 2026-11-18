@@ -46,7 +46,8 @@ EnsembleSolution(u, elapsed = 0, converged = TRUE)
   on_error = c("stop", "collect"),
   retries = 0L,
   rng_streams = c("session", "trajectory"),
-  checkpoint = NULL
+  checkpoint = NULL,
+  run_id = NULL
 )
 }
 \arguments{
@@ -102,8 +103,19 @@ L'Ecuyer-CMRG stream of \code{seed}, so the results do not depend on the
 ensemble algorithm, the number of cores or \code{batch_size}.}
 
 \item{checkpoint}{Optional file: after each batch the reduced output,
-the retcodes and the random state are saved there, and a solve given
-an existing checkpoint resumes after its last batch.}
+the retcodes and the random state are saved there (written to a
+temporary file and renamed, so an interrupted write leaves the previous
+checkpoint), and a solve given an existing checkpoint resumes after its
+last batch. The checkpoint records its format version, the
+configuration (trajectories, batch size, streams, seed, error policy)
+and an identity of the run; a checkpoint of a different run is an
+error, not a result.}
+
+\item{run_id}{Optional stable identity of the run for \code{checkpoint}.
+Without it the identity is a fingerprint of the problem, the functions
+(by their source text), the algorithm and the options; give a \code{run_id}
+when that text does not identify the run (functions that read changing
+global data, say).}
 }
 \value{
 An \code{EnsembleProblem}.

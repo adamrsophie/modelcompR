@@ -114,13 +114,8 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 .sol_series <- function(env, idx, rows = NULL) {
   U <- env$U
   if (is.null(rows)) rows <- seq_len(nrow(U))
+  col <- function(i) .state_col(env, i)
   red <- env$reduced_idxs
-  col <- function(i) {
-    if (is.null(red)) return(i)
-    j <- match(i, red)
-    if (anyNA(j)) stop("state ", i[is.na(j)][1L], " was not saved (save_idxs_storage = \"reduced\")", call. = FALSE)
-    j
-  }
   if (is.numeric(idx) && !is_sym(idx)) return(U[rows, col(idx)])
   sys <- env$sys
   if (is.null(sys)) stop("symbolic indexing needs a problem built from a system", call. = FALSE)
@@ -139,8 +134,8 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   fn <- env$obs_cache[[k]]
   if (is.null(fn)) {
     sys <- env$sys
-    fn <- .build_closure(list(v), .codegen_args(sys, with_t = !is.null(.f(sys, "iv"))),
-                         observed = .codegen_observed(sys), out = "scalar")
+    fn <- .with_registry(env$prob$registry, .build_closure(list(v), .codegen_args(sys, with_t = !is.null(.f(sys, "iv"))),
+                         observed = .codegen_observed(sys), out = "scalar"))
     assign(k, fn, envir = env$obs_cache)
   }
   fn
@@ -149,8 +144,15 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 .eval_observed <- function(fn, env, U, ts, p = NULL) {
   p <- p %||% .sol_params_at(env, ts)
   has_t <- length(formals(fn)) >= 3L
+  # inline nonlinear blocks start from the branch history of the solution
+  hist <- env$inline_hist
   vapply(seq_len(nrow(U)), function(i) {
     pp <- if (is.matrix(p)) p[i, ] else p
+    if (!is.null(hist)) {
+      old <- .inline_ws$cur
+      .inline_ws$cur <- .inline_replay_ws(hist, ts[i])
+      on.exit(.inline_ws$cur <- old)
+    }
     if (has_t) fn(U[i, ], pp, ts[i]) else fn(U[i, ], pp)
   }, 0)
 }
@@ -270,11 +272,29 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
 }
 
 .series_from <- function(env, idx, U, tq) {
-  if (is.numeric(idx) && !is_sym(idx)) return(U[, idx])
+  if (is.numeric(idx) && !is_sym(idx)) return(U[, .state_col(env, idx)])
+  if (is.null(env$sys)) stop("symbolic indexing needs a problem built from a system", call. = FALSE)
   v <- as_sym(idx)
   ui <- match(.key(v), .keys(unknowns(env$sys)))
-  if (!is.na(ui)) return(unname(U[, ui]))
+  if (!is.na(ui)) return(unname(U[, .state_col(env, ui)]))
+  if (!is.null(env$reduced_idxs)) stop("observed values need every state; solve with save_idxs_storage = \"full\"", call. = FALSE)
   .eval_observed(.sol_observed_fn(env, v), env, U, tq)
+}
+
+# The stored column of the states i (original state numbers): the same
+# column with full storage, its place among the saved states with
+# save_idxs_storage = "reduced", where an unsaved state is an error.
+.state_col <- function(env, i) {
+  i <- as.integer(i)
+  n <- length(env$reduced_idxs %||% seq_len(ncol(env$U)))
+  red <- env$reduced_idxs
+  if (is.null(red)) {
+    if (anyNA(i) || any(i < 1L | i > ncol(env$U))) stop("state index out of range 1:", ncol(env$U), call. = FALSE)
+    return(i)
+  }
+  j <- match(i, red)
+  if (anyNA(j)) stop("state ", i[is.na(j)][1L], " was not saved (save_idxs_storage = \"reduced\")", call. = FALSE)
+  j
 }
 
 .interp_states <- function(env, tq, deriv = 0L) {
@@ -299,12 +319,13 @@ as.data.frame.SciMLSolution <- function(x, row.names = NULL, optional = FALSE, .
   nt <- length(env$t)
   for (q in seq_along(tq)) {
     tt <- tq[q]
-    # the end time of a solve whose last step ended in an event: the saved
-    # state after the event, as inside the span, where the step starting at
-    # an event time gives its right limit
-    if (deriv == 0L && nt && tt == env$t[nt] && tt == ends[length(ends)]) {
-      out[q, ] <- env$U[nt, seq_len(n)]
-      next
+    # the end time of the solve: the state after the events there, as
+    # inside the span, where the step starting at an event time gives its
+    # right limit; it is kept whether or not the end is saved
+    if (deriv == 0L && tt == ends[length(ends)]) {
+      es <- env$end_state
+      if (!is.null(es) && tt == es$t && length(es$u) >= n) { out[q, ] <- .as_num(es$u)[seq_len(n)]; next }
+      if (nt && tt == env$t[nt]) { out[q, ] <- env$U[nt, seq_len(n)]; next }
     }
     # starts increase forward in time and decrease for backward solves
     i <- if (fwd) findInterval(tt, starts, rightmost.closed = TRUE) else

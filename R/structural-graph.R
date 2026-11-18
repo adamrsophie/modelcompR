@@ -189,14 +189,14 @@ print.BipartiteGraph <- function(x, ...) {
 # expression depth; the order is that of the recursive algorithm.
 .tarjan_scc <- function(n, succ) {
   index <- integer(n); low <- integer(n); onstack <- logical(n)
-  stack <- integer(n); sp <- 0L; counter <- 0L
+  stack <- integer(n); pos <- integer(n); sp <- 0L; counter <- 0L
   out <- list()
   cv <- integer(n); cs <- vector("list", n); cp <- integer(n); depth <- 0L
   for (root in seq_len(n)) {
     if (index[root] != 0L) next
     counter <- counter + 1L
     index[root] <- counter; low[root] <- counter
-    sp <- sp + 1L; stack[sp] <- root; onstack[root] <- TRUE
+    sp <- sp + 1L; stack[sp] <- root; pos[root] <- sp; onstack[root] <- TRUE
     depth <- 1L; cv[1L] <- root; cs[[1L]] <- as.integer(succ(root)); cp[1L] <- 0L
     while (depth > 0L) {
       v <- cv[depth]
@@ -208,7 +208,7 @@ print.BipartiteGraph <- function(x, ...) {
         if (index[w] == 0L) {
           counter <- counter + 1L
           index[w] <- counter; low[w] <- counter
-          sp <- sp + 1L; stack[sp] <- w; onstack[w] <- TRUE
+          sp <- sp + 1L; stack[sp] <- w; pos[w] <- sp; onstack[w] <- TRUE
           depth <- depth + 1L; cv[depth] <- w; cs[[depth]] <- as.integer(succ(w)); cp[depth] <- 0L
         } else if (onstack[w] && index[w] < low[v]) {
           low[v] <- index[w]
@@ -216,7 +216,8 @@ print.BipartiteGraph <- function(x, ...) {
         next
       }
       if (low[v] == index[v]) {
-        top <- match(v, stack[seq_len(sp)])
+        # the stack position of the root: each vertex leaves the stack once
+        top <- pos[v]
         comp <- rev(stack[top:sp])
         onstack[comp] <- FALSE
         sp <- top - 1L

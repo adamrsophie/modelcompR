@@ -161,8 +161,18 @@ EnsembleSolution <- function(u, elapsed = 0, converged = TRUE)
 #'   L'Ecuyer-CMRG stream of `seed`, so the results do not depend on the
 #'   ensemble algorithm, the number of cores or `batch_size`.
 #' @param checkpoint Optional file: after each batch the reduced output,
-#'   the retcodes and the random state are saved there, and a solve given
-#'   an existing checkpoint resumes after its last batch.
+#'   the retcodes and the random state are saved there (written to a
+#'   temporary file and renamed, so an interrupted write leaves the previous
+#'   checkpoint), and a solve given an existing checkpoint resumes after its
+#'   last batch. The checkpoint records its format version, the
+#'   configuration (trajectories, batch size, streams, seed, error policy)
+#'   and an identity of the run; a checkpoint of a different run is an
+#'   error, not a result.
+#' @param run_id Optional stable identity of the run for `checkpoint`.
+#'   Without it the identity is a fingerprint of the problem, the functions
+#'   (by their source text), the algorithm and the options; give a `run_id`
+#'   when that text does not identify the run (functions that read changing
+#'   global data, say).
 #' @param ... Solver options for each trajectory.
 #' @return An `EnsembleSolution`: the reduced output `u`, `elapsed`,
 #'   `converged` (whether the reduction stopped the ensemble or every batch
@@ -174,7 +184,7 @@ EnsembleSolution <- function(u, elapsed = 0, converged = TRUE)
 solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), ...,
                                   trajectories, batch_size = trajectories, seed = NULL,
                                   on_error = c("stop", "collect"), retries = 0L,
-                                  rng_streams = c("session", "trajectory"), checkpoint = NULL) {
+                                  rng_streams = c("session", "trajectory"), checkpoint = NULL, run_id = NULL) {
   on_error <- match.arg(on_error)
   rng_streams <- match.arg(rng_streams)
   retries <- as.integer(retries)
@@ -186,10 +196,19 @@ solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), .
   if (missing(trajectories)) stop("give the number of trajectories", call. = FALSE)
   start <- proc.time()[["elapsed"]]
   dots <- list(...)
-  # trajectory streams: the i-th L'Ecuyer-CMRG stream of the seed
+  # the identity and configuration a checkpoint must match
+  ck_config <- list(trajectories = as.integer(trajectories), batch_size = as.integer(batch_size),
+                    rng_streams = rng_streams, seed = seed, on_error = on_error, retries = retries,
+                    ensemblealg = class(ensemblealg)[1L])
+  ck_identity <- if (!is.null(run_id)) list(run_id = run_id) else if (!is.null(checkpoint))
+    list(fingerprint = .fingerprint(list(a, b, dots)))
+  ck <- if (!is.null(checkpoint) && file.exists(checkpoint)) .ensemble_read_checkpoint(checkpoint, ck_config, ck_identity)
+  # trajectory streams: the i-th L'Ecuyer-CMRG stream of the seed; a resumed
+  # run takes the base stream from its checkpoint, so a run without a seed
+  # continues the same streams
   tstreams <- NULL
   if (rng_streams == "trajectory") {
-    tstreams <- .with_seed(seed, {
+    tstreams <- if (!is.null(ck$streams)) ck$streams else .with_seed(seed, {
       old <- RNGkind()[1L]
       RNGkind("L'Ecuyer-CMRG")
       stats::runif(1L)
@@ -256,14 +275,20 @@ solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), .
     on.exit(mapper$close())
     u <- a$u_init
     done <- 0L
-    if (!is.null(checkpoint) && file.exists(checkpoint)) {
-      ck <- readRDS(checkpoint)
-      if (!identical(ck$trajectories, trajectories)) stop("the checkpoint is of an ensemble of ", ck$trajectories,
-                                                          " trajectories", call. = FALSE)
+    if (!is.null(ck)) {
       u <- ck$u; done <- ck$done; retcodes[seq_len(done)] <<- ck$retcodes[seq_len(done)]
+      if (!is.null(ck$rng_kind)) do.call(RNGkind, as.list(ck$rng_kind))
       if (!is.null(ck$seed)) assign(".Random.seed", ck$seed, envir = globalenv())
       if (isTRUE(ck$stopped)) { converged <<- TRUE; return(u) }
     }
+    save_ck <- function(stopped) .ensemble_write_checkpoint(checkpoint, list(
+      format = "modelcompR ensemble checkpoint", version = 1L, config = ck_config, identity = ck_identity,
+      trajectories = trajectories, u = u, done = done, retcodes = retcodes, stopped = stopped,
+      rng_kind = RNGkind(), seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE),
+      streams = tstreams))
+    # the state before the first batch is saved too, so a run interrupted
+    # in its first batch resumes with the same random streams
+    if (!is.null(checkpoint) && is.null(ck)) save_ck(FALSE)
     while (done < trajectories) {
       I <- seq.int(done + 1L, min(trajectories, done + batch_size))
       batch <- unpack(mapper$map(I, one), I)
@@ -271,9 +296,7 @@ solve.EnsembleProblem <- function(a, b = NULL, ensemblealg = EnsembleSerial(), .
       u <- red[[1L]]
       done <- max(I)
       if (batch_size < trajectories) converged <<- isTRUE(red[[2L]])
-      if (!is.null(checkpoint))
-        saveRDS(list(trajectories = trajectories, u = u, done = done, retcodes = retcodes, stopped = isTRUE(red[[2L]]),
-                     seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE)), checkpoint)
+      if (!is.null(checkpoint)) save_ck(isTRUE(red[[2L]]))
       if (isTRUE(red[[2L]])) break
     }
     u
@@ -367,4 +390,63 @@ plot.EnsembleSummary <- function(x, xlab = "t", ylab = "", ylim = range(x$u, x$q
       if (.Platform$OS.type == "windows") "serial (no forked workers on Windows)" else "forked CPU workers",
     EnsembleDistributed = , EnsembleSplitThreads = "socket cluster of CPU workers",
     alg$name)
+}
+
+# A checkpoint is read only when it is a readable checkpoint of this
+# format version, configuration and run identity.
+.ensemble_read_checkpoint <- function(path, config, identity) {
+  ck <- tryCatch(readRDS(path), error = function(e)
+    stop("the checkpoint ", path, " cannot be read (", conditionMessage(e), "); it may be truncated. ",
+         "Remove it to start the ensemble again", call. = FALSE))
+  if (!is.list(ck) || !identical(ck$format, "modelcompR ensemble checkpoint"))
+    stop("the file ", path, " is not an ensemble checkpoint", call. = FALSE)
+  if (!identical(ck$version, 1L))
+    stop("the checkpoint ", path, " has format version ", format(ck$version), "; this version reads version 1",
+         call. = FALSE)
+  bad <- names(config)[!vapply(names(config), function(k) identical(ck$config[[k]], config[[k]]), TRUE)]
+  if (length(bad))
+    stop("the checkpoint ", path, " is of a run with a different ", paste(bad, collapse = ", "),
+         "; remove it or use another file", call. = FALSE)
+  if (!identical(ck$identity, identity))
+    stop("the checkpoint ", path, " is of a different run (", if (!is.null(identity$run_id)) "run_id" else
+      "problem, functions, algorithm or options", "); remove it or use another file", call. = FALSE)
+  ck
+}
+
+# Written to a temporary file in the same directory and renamed over the
+# checkpoint, so an interrupted write never leaves a partial file there.
+.ensemble_write_checkpoint <- function(path, value) {
+  tmp <- tempfile(".ckpt", tmpdir = dirname(path), fileext = ".rds")
+  on.exit(if (file.exists(tmp)) unlink(tmp))
+  saveRDS(value, tmp)
+  if (!file.rename(tmp, path)) {
+    # a rename across devices (or over a file on Windows) is a copy
+    if (!file.copy(tmp, path, overwrite = TRUE)) stop("cannot write the checkpoint ", path, call. = FALSE)
+  }
+  invisible(path)
+}
+
+# A fingerprint of a value: functions by their source text and environments
+# by name, then two polynomial hashes of the serialized bytes.
+.fingerprint <- function(x) {
+  stab <- function(v, depth = 0L) {
+    if (depth > 50L) return("<deep>")
+    if (is.function(v)) return(paste(deparse(v), collapse = "\n"))
+    if (is.environment(v)) return("<environment>")
+    if (is.list(v) && !isS4(v)) {
+      at <- attributes(v)
+      # unclass: the [[ and $ methods of an S3 object (a System) do not
+      # take part
+      v <- lapply(unclass(v), stab, depth = depth + 1L)
+      attributes(v) <- at
+    }
+    v
+  }
+  b <- as.numeric(serialize(stab(x), NULL, version = 3L)) + 1
+  # skip the serialization header, which records the R version
+  b <- b[-seq_len(min(length(b), 14L))]
+  k <- seq_along(b)
+  m <- 2147483647
+  h <- function(a) sum((b * ((k * a) %% m)) %% m) %% m
+  paste(length(b), h(2654435761), h(40503), h(97), sep = ":")
 }

@@ -231,7 +231,7 @@ NULL
 # and getrs): partial pivoting on the first largest entry, multipliers scaled
 # by the reciprocal of the pivot, fma updates and fma triangular solves
 .wr_lu_solve <- function(A, b) {
-  if (.arith$native) return(as.numeric(base::solve(A, b)))
+  if (.arith$native) return(.as_num(base::solve(A, b)))
   n <- nrow(A)
   for (j in seq_len(n)) {
     p <- j - 1L + which.max(abs(A[j:n, j]))

@@ -84,9 +84,14 @@
 # them. The result is a sparse matrix with the pattern of `sparsity`.
 .jac_colored <- function(fn, u, f0, sparsity, central = TRUE) {
   n <- length(u)
-  Tm <- methods::as(methods::as(Matrix::Matrix(sparsity != 0, sparse = TRUE), "generalMatrix"), "TsparseMatrix")
+  if (!identical(dim(sparsity), c(n, n)))
+    stop("the sparsity pattern is ", paste(dim(sparsity), collapse = " by "), " but the state has ", n,
+         " components", call. = FALSE)
+  # the pattern and its coloring are computed once per pattern
+  S <- if (inherits(sparsity, "ngCMatrix")) sparsity else .structure_of(sparsity)
+  colors <- attr(sparsity, "colors") %||% column_coloring(S)
+  Tm <- methods::as(S, "TsparseMatrix")
   i <- Tm@i + 1L; j <- Tm@j + 1L
-  colors <- column_coloring(sparsity)
   x <- numeric(length(i))
   nf <- 0L
   for (cc in seq_len(max(colors, 0L))) {
@@ -137,7 +142,20 @@
 
 .wsolve <- function(Wf, b) .rosen_lusolve(Wf, b)
 
-.mass_mul <- function(M, x) if (is.null(M)) x else .as_num(M %*% x)
+.mass_mul <- function(M, x) {
+  if (is.null(M)) return(x)
+  S <- attr(M, "sparse", exact = TRUE)
+  .as_num(if (!is.null(S) && !is.complex(x)) S %*% x else M %*% x)
+}
+
+# J - s M for the Newton matrix: sparse when both J and the mass are
+.mass_sub <- function(J, M, s) {
+  S <- attr(M, "sparse", exact = TRUE)
+  if (inherits(J, "sparseMatrix") && !is.null(S)) return(J - S * s)
+  if (inherits(J, "sparseMatrix")) J <- as.matrix(J)
+  M <- unclass(M); attr(M, "sparse") <- NULL
+  J - M * s
+}
 
 # ---------------------------------------------------------------------------
 # NLNewton (type.jl): κ = 1/100, max_iter = 10, fast_convergence_cutoff =
@@ -253,7 +271,7 @@
   nl$new_W <- nj[2L]
   if (nj[2L]) {
     W <- if (is.null(dae)) {
-      if (!is.null(ctx$mass)) nl$J - ctx$mass / gdt else if (inherits(nl$J, "sparseMatrix"))
+      if (!is.null(ctx$mass)) .mass_sub(nl$J, ctx$mass, 1 / gdt) else if (inherits(nl$J, "sparseMatrix"))
         nl$J - Matrix::Diagonal(nrow(nl$J), 1 / gdt) else nl$J - diag(1 / gdt, nrow(nl$J))
     } else nl$J + dae$cj * nl$Jdu
     nl$W <- .factorize(W)

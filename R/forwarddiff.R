@@ -150,7 +150,15 @@ mean.fdual <- function(x, trim = 0, na.rm = FALSE, ...) {
     x <- .ad_sorted(x)[lo:hi]
     n <- length(x)
   }
-  sum(x) / n
+  .ad_mean(x)
+}
+
+# the mean of the value and of each partial as base R's mean (accumulated
+# in long double), so a finite mean of large values stays finite as in
+# ordinary R
+.ad_mean <- function(x) {
+  if (!inherits(x, "fdual")) return(mean(x))
+  .ad_new(.ad_mean(.ad_v(x)), lapply(.ad_p(x), .ad_mean), .ad_tag(x))
 }
 
 #' @export

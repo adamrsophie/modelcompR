@@ -319,6 +319,39 @@ When `sensealg` is not given, `solve_gradient()` picks one from the
 problem: forward sensitivities for small ODEs, `GaussAdjoint()` for larger
 ones, `SteadyStateAdjoint()` for nonlinear and steady state problems.
 
+### How the loss is differentiated
+
+The sensitivity methods need the derivative of the loss with respect to
+each saved value. By default `solve_gradient()` takes it by finite
+differences in every saved value: correct for any loss, but one or two
+loss evaluations per saved value. Two options make it cheaper without
+guessing which values the loss reads:
+
+* `loss_rows` declares the saved rows the loss depends on, for example
+  `loss_rows = "last"` for a terminal loss; the other rows get a zero
+  cotangent. A wrong declaration gives a wrong gradient, so declare only
+  what the loss is known to read.
+* `loss_grad = function(sol)` returns the cotangent directly, as a matrix
+  of the shape of `as.matrix(sol)` (or a list with `u` and `p`). It sees
+  the same view of the solution as the loss, `save_idxs` included. Values
+  the loss reads through `sol(t)` at unsaved times are still differenced.
+
+```{r}
+p2 <- ODEProblem(function(u, p, t) -p[1] * u, c(1, 2), c(0, 1), 1)
+terminal <- function(sol) sum(tail(as.matrix(sol), 1)^2)
+a <- solve_gradient(terminal, p2, Tsit5(), saveat = 0.01, reltol = 1e-10, abstol = 1e-12)
+b <- solve_gradient(terminal, p2, Tsit5(), saveat = 0.01, reltol = 1e-10, abstol = 1e-12,
+                    loss_rows = "last")
+c(all_rows = a$p, last_row = b$p, exact = -10 * exp(-2))
+```
+
+Every numerical stage of a gradient is checked: a forward solve, an
+adjoint solve or a checkpoint replay that does not reach the end of its
+interval raises a condition of class `sens_stage_failure` with the
+stage, its retcode and the time it reached. `g$execution` records the
+sensitivity method, the arithmetic, how the loss was differentiated and
+the saved view.
+
 ### Events
 
 Events are differentiated too, including the dependence of the event time

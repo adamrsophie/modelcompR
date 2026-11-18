@@ -116,7 +116,7 @@
       diag(W) <- diag(W) - 1 / dtgamma
       W
     }
-  } else W <- J - M * (1 / dtgamma)
+  } else W <- .mass_sub(J, M, 1 / dtgamma)
   .rosen_lu(W)
 }
 
@@ -141,9 +141,11 @@
   if (!all(is.finite(W))) return(NULL)
   n <- nrow(W)
   if (.arith$native) {
-    # a Householder QR of base R: no S4 dispatch on every solve
-    F <- qr(W)
-    return(if (F$rank < n) NULL else F)
+    # a Householder QR of base R (real or complex): no S4 dispatch on every
+    # solve. Singular means an exact zero on the diagonal of R, as the zero
+    # pivot of the reference LU, not QR's rank tolerance.
+    F <- qr(W, tol = 0)
+    return(if (any(diag(qr.R(F)) == 0)) NULL else F)
   }
   if (n > 16L) {
     F <- Matrix::lu(W, warnSing = FALSE)
@@ -154,7 +156,7 @@
 }
 
 .rosen_lusolve <- function(F, b) {
-  if (inherits(F, "qr")) return(as.numeric(qr.coef(F, b)))
+  if (inherits(F, "qr")) return(.as_num(qr.coef(F, b)))
   if (is.list(F)) .rosen_getrs(F, b) else .as_num(Matrix::solve(F, b))
 }
 

@@ -39,6 +39,36 @@
   methods; `ODEFunction(f, jac = J)` now uses J.
 * Inline linear and nonlinear solves follow the branch of each integrator
   and have implicit derivatives.
-* New options: `loss_grad` of `solve_gradient()`, `save_idxs_storage` of
-  `solve()`, and `retries`, `rng_streams` and `checkpoint` of ensembles;
-  `cache_info()` reports the caches.
+* New options: `loss_grad` and `loss_rows` of `solve_gradient()`,
+  `save_idxs_storage` of `solve()`, and `retries`, `rng_streams`,
+  `checkpoint` and `run_id` of ensembles; `cache_info()` reports the caches.
+* The derivative of a loss is taken in every saved value unless
+  `loss_rows` or `loss_grad` says otherwise; it is never guessed from probes
+  of the loss. Gradients see the `save_idxs` view of the loss, and a failed
+  adjoint or replay stage raises a `sens_stage_failure` condition.
+* Solutions and gradients carry an `execution` record: the algorithm, the
+  arithmetic, the Jacobian and mass routes, tolerances, storage, the saved
+  view, the derivative route of the loss and the registrations in force.
+* Sparse structures: symmetric and unit triangular `Matrix` patterns are
+  mirrored before coloring, `jac_prototype` marks every stored entry
+  structural, the Krylov methods keep `Matrix` inputs and sparse
+  preconditioners sparse, constant sparse masses keep sparse products and
+  Newton matrices, and `generate_jacobian(sparse = TRUE)` builds only the
+  structural nonzeros.
+* Masses given as SciML operators that change with the state or time are
+  supported (nonsingular ones), and non-finite masses are rejected.
+* Krylov methods work at any scale of the right hand side and report
+  Success only for the requested residual of the original system; low rank
+  updates fall back to the assembled matrix when the base is singular;
+  Arnoldi uses thick restarts and Rayleigh Ritz extraction and reports
+  Success only with every requested pair converged.
+* Regression sensitivity standardizes inputs and outputs, ranks ties by
+  their average, and gives NA for constant inputs; Shapley effects keep
+  their sampling design apart from the random numbers of the model.
+* Ensemble checkpoints are versioned and written atomically, record the
+  configuration and an identity of the run, and resume with the stored
+  random streams.
+* Inline nonlinear blocks commit their branch only at accepted states, and
+  sensitivities, observed values and the integrator interface replay it;
+  problems keep the function registrations they were built with.
+* `native` arithmetic keeps complex states in the implicit methods.

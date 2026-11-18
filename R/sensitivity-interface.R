@@ -135,8 +135,24 @@
 #'   solution returning the derivative with respect to the saved values (a
 #'   matrix shaped as `as.matrix(sol)`, or a list with that matrix as `u`
 #'   and the derivative with respect to the final parameters as `p`). It
-#'   replaces the finite differences of the loss in the saved values, which
-#'   otherwise differentiate only the saved rows the loss reads.
+#'   replaces the finite differences of the loss in the saved values. With
+#'   `save_idxs` the matrix has the saved components only, as the loss sees
+#'   them. Values the loss reads by interpolation, `sol(t)`, are not saved
+#'   values: they are still differenced, so `loss_grad` gives the
+#'   derivative in the saved values alone.
+#' @details The `value` is the loss of the solution the gradient
+#'   differentiates: the forward solve itself for the adjoint methods, and
+#'   the solve of the state with its sensitivities for the forward methods,
+#'   whose step sizes also control the error of the sensitivities (as in
+#'   SciMLSensitivity), so it can differ from `loss(solve(...))` within the
+#'   tolerances. A failed numerical stage (the forward solve, the backward
+#'   adjoint solve or a checkpoint replay) is an error naming the stage, its
+#'   retcode and the time where it stopped, unless `allow_failure = TRUE`.
+#' @param loss_rows Optional declaration of the saved rows the loss reads
+#'   (indices of the rows of `as.matrix(sol)`, or `"last"` for a terminal
+#'   loss): the loss is differentiated in those rows only, and treated as
+#'   independent of the others. Without it every saved value is
+#'   differentiated.
 #' @return A list with the gradients `u0` and `p`, the loss value `value`
 #'   and the solution `sol`.
 #' @examples
@@ -148,21 +164,34 @@
 #' c(g1$p, g2$p)
 #' @export
 solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_failure = FALSE,
-                           loss_grad = NULL) {
+                           loss_grad = NULL, loss_rows = NULL) {
   # a loss that interpolates sol(t): solve again saving those times (as
   # `saveat` when it is given, else as stops), hidden from the saved values
   # the loss sees
-  old <- list(.mtk$sens_interp_t, .mtk$sens_hide_t, .mtk$sens_loss_grad)
+  old <- list(.mtk$sens_interp_t, .mtk$sens_hide_t, .mtk$sens_loss_grad, .mtk$sens_loss_rows)
   on.exit({
     .mtk$sens_interp_t <- old[[1L]]
     .mtk$sens_hide_t <- old[[2L]]
     .mtk$sens_loss_grad <- old[[3L]]
+    .mtk$sens_loss_rows <- old[[4L]]
   })
+  .mtk$sens_loss_rows <- loss_rows
+  old_af <- .mtk$sens_allow_failure
+  on.exit(.mtk$sens_allow_failure <- old_af, add = TRUE)
+  .mtk$sens_allow_failure <- allow_failure
   if (!is.null(loss_grad) && !is.function(loss_grad)) stop("`loss_grad` must be a function of the solution", call. = FALSE)
   .mtk$sens_loss_grad <- loss_grad
   dots <- list(...)
-  if (identical(dots$save_idxs_storage, "reduced"))
+  # the options of the solve are those given here over those of the problem
+  if (identical(dots$save_idxs_storage %||% prob$kwargs$save_idxs_storage, "reduced"))
     stop("solve_gradient() needs every state of the solution; use save_idxs_storage = \"full\"", call. = FALSE)
+  # save_idxs: the loss sees the saved components, as in solve(); the
+  # sensitivity solves keep every state and the cotangents are scattered
+  # back to the selected states
+  si <- dots$save_idxs %||% prob$kwargs$save_idxs
+  old_si <- .mtk$sens_save_idxs
+  on.exit(.mtk$sens_save_idxs <- old_si, add = TRUE)
+  .mtk$sens_save_idxs <- if (!is.null(si)) get_save_idxs_and_saved_subsystem(prob, si)$save_idxs
   base_saveat <- dots$saveat %||% prob$kwargs$saveat
   tq <- numeric()
   for (attempt in 1:4) {
@@ -176,6 +205,14 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
         stop("the solve ended with retcode ", rc, " before the end of the time span, so its gradient is not ",
              "the gradient of the loss; pass allow_failure = TRUE to differentiate the partial trajectory",
              call. = FALSE)
+      # what ran: the method, the arithmetic, how the loss was differentiated
+      # and the view it saw
+      r$execution <- list(sensealg = class(sensealg %||% prob$kwargs$sensealg %||% .sens_default_alg(prob))[1L],
+                          arithmetic = if (.arith$native) "native" else "reference",
+                          loss_derivative = if (!is.null(loss_grad)) "loss_grad" else if (!is.null(loss_rows))
+                            "finite differences in loss_rows" else "finite differences in every saved value",
+                          save_idxs = .mtk$sens_save_idxs, forward_retcode = rc,
+                          registrations = prob$registry$version)
       return(r)
     }
     if (attempt == 4L) stop("the loss interpolates the solution at changing times", call. = FALSE)
@@ -341,6 +378,7 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
 # on copies of the solution that hold the perturbed values.
 .sens_loss_cotangent <- function(loss, sol) {
   env <- .sol_env(sol)
+  if (!is.null(.mtk$sens_save_idxs) && is.null(env$save_idxs)) env$save_idxs <- .mtk$sens_save_idxs
   data <- mget(setdiff(ls(env, all.names = TRUE), c("obs_cache", "steps")), envir = env)
   data$steps <- NULL
   data$dense <- FALSE
@@ -389,36 +427,32 @@ solve_gradient <- function(loss, prob, alg = NULL, ..., sensealg = NULL, allow_f
     g <- lg(.new_solution(cls, d))
     gu <- if (is.list(g)) g$u else g
     gu <- as.matrix(gu)
-    if (!identical(dim(gu), dim(d$U))) stop("`loss_grad` must return a ", nrow(d$U), " by ", ncol(d$U),
-                                           " matrix, as as.matrix(sol)", call. = FALSE)
-    dU[!hidden, ] <- gu
+    # the cotangent is in the view of the loss, the saved components
+    cols <- env$save_idxs %||% seq_len(ncol(d$U))
+    if (!identical(dim(gu), c(nrow(d$U), length(cols)))) stop("`loss_grad` must return a ", nrow(d$U), " by ",
+                                                             length(cols), " matrix, as as.matrix(sol)", call. = FALSE)
+    dU[!hidden, cols] <- gu
     gp <- if (is.list(g) && !is.null(g$p)) as.numeric(g$p) else numeric(length(p0))
     if (length(gp) != length(p0)) stop("the `p` of `loss_grad` must have ", length(p0), " values", call. = FALSE)
   }
-  # Only the saved rows the loss reads are differentiated entry by entry.
-  # They are found by group testing: a block of rows is shifted by +-h in a
-  # direction of distinct weights, and a loss whose value stays bitwise the
-  # same both ways does not read them. A terminal loss on 1001 saved times
-  # then costs a few dozen evaluations instead of two per saved value.
-  rows <- if (is.null(lg)) seq_len(nrow(U0)) else integer()
-  if (is.null(lg) && length(U0) > 64L) {
-    wts <- matrix(1 + 0.5 * sin(seq_along(U0) * 0.7548776662), nrow(U0))
-    hm <- matrix(vapply(U0, .sens_h, 0), nrow(U0)) * wts
-    reads <- function(rs) {
-      Up <- U0; Um <- U0
-      Up[rs, ] <- U0[rs, ] + hm[rs, ]
-      Um[rs, ] <- U0[rs, ] - hm[rs, ]
-      !identical(ev(Up, p0), value) || !identical(ev(Um, p0), value)
-    }
-    find <- function(rs) {
-      if (!length(rs) || !reads(rs)) return(integer())
-      if (length(rs) <= 2L) return(rs)
-      h <- length(rs) %/% 2L
-      c(find(rs[seq_len(h)]), find(rs[-seq_len(h)]))
-    }
-    rows <- find(rows)
+  # Every saved value is differentiated unless the caller declares which
+  # saved rows the loss reads (loss_rows of solve_gradient(), rows of the
+  # visible solution); a black box probe cannot prove that a loss ignores
+  # a value.
+  # loss_grad covers the saved values: the rows saved only for sol(t) are
+  # still differentiated
+  rows <- if (!is.null(lg)) which(hidden) else seq_len(nrow(U0))
+  lr <- .mtk$sens_loss_rows
+  if (is.null(lg) && !is.null(lr)) {
+    vis <- which(!hidden)
+    lr <- if (identical(lr, "last")) length(vis) else as.integer(lr)
+    if (anyNA(lr) || any(lr < 1L | lr > length(vis)))
+      stop("`loss_rows` must index the ", length(vis), " saved rows", call. = FALSE)
+    # the rows saved for interpolation only are read through sol(t)
+    rows <- c(vis[lr], which(hidden))
   }
-  for (k in which(row(U0) %in% rows)) {
+  scols <- env$save_idxs %||% seq_len(ncol(U0))
+  for (k in which(row(U0) %in% rows & col(U0) %in% scols)) {
     h <- .sens_h(U0[k])
     Up <- U0; Um <- U0
     Up[k] <- U0[k] + h

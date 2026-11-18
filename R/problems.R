@@ -331,10 +331,18 @@ ODEFunction <- function(sys, jac = FALSE, tgrad = FALSE, ...) {
     jf <- if (is.function(jac)) jac else dots$jac_fn %||% dots$jac_fun
     tf <- if (is.function(tgrad)) tgrad else dots$tgrad_fn
     proto <- dots$jac_prototype
+    # the structural pattern, normalized once: the stored entries of a
+    # prototype (also stored zeros), the nonzeros of an explicit mask
+    sp <- if (!is.null(dots$sparsity)) .structure_of(dots$sparsity) else if (!is.null(proto))
+      .structure_of(proto, stored = TRUE)
+    if (!is.null(sp)) {
+      if (nrow(sp) != ncol(sp)) stop("the Jacobian sparsity pattern must be square", call. = FALSE)
+      attr(sp, "colors") <- column_coloring(sp)
+    }
     return(structure(list(f = sys, jac = jf, tgrad = tf,
                           mass_matrix = dots$mass_matrix, sys = NULL, observed = NULL,
                           analytic = dots$analytic, paramjac = dots$paramjac, jvp = dots$jvp, vjp = dots$vjp,
-                          jac_prototype = proto, sparsity = dots$sparsity %||% proto),
+                          jac_prototype = proto, sparsity = sp),
                      class = c("ODEFunction", "SciMLFunction")))
   }
   .need_complete(sys, "ODEFunction")
@@ -426,11 +434,42 @@ ODEProblem <- function(sys, op = list(), tspan = NULL, ..., jac = FALSE, tgrad =
 
 .new_problem <- function(type, ...) {
   prob <- structure(list(...), class = c(type, "SciMLProblem"))
+  # the registrations its code was generated with (see .registry_snapshot)
+  if (!is.null(prob$sys) && is.null(prob$registry)) prob$registry <- .mtk$reg_active %||% .registry_snapshot()
   M <- if (is.list(prob$f)) prob$f$mass_matrix
   if (!is.null(M)) {
     n <- if ((is.numeric(prob$u0) || is.complex(prob$u0)) && length(prob$u0)) length(prob$u0)
+    if (inherits(M, "AbstractSciMLOperator") && identical(M$constant, FALSE)) return(.changing_mass(prob, M, n))
     prob$f$mass_matrix <- .as_mass(M, n)
   }
+  prob
+}
+
+# A mass operator that changes with (u, p, t), M(u, p, t) u' = f(u, p, t):
+# for a nonsingular M the problem is the ODE u' = M(u, p, t)^-1 f(u, p, t),
+# with M updated (update_coefficients) at every evaluation, so every method
+# and the sensitivities see the changing operator. A singular changing
+# mass matrix (a DAE whose algebraic part moves) is not supported.
+.changing_mass <- function(prob, M, n) {
+  M0 <- .as_mass(M, n)
+  if (rcond(M0) <= .Machine$double.eps)
+    stop("a mass operator that changes with (u, p, t) must be nonsingular (it is solved as ",
+         "u' = M(u, p, t)^-1 f(u, p, t)); a singular changing mass matrix, a DAE with a moving algebraic ",
+         "part, is not supported", call. = FALSE)
+  f0 <- prob$f$f
+  prob$f$f <- function(u, p, t) {
+    Mt <- .as_mass(M$update(u, p, t), length(u))
+    if (rcond(Mt) <= .Machine$double.eps)
+      stop("the mass operator became singular at t = ", format(t), call. = FALSE)
+    .as_num(base::solve(Mt, f0(u, p, t)))
+  }
+  # the Jacobian and the pattern of f are not those of M^-1 f
+  prob$f$jac <- NULL
+  prob$f$jac_prototype <- NULL
+  prob$f$sparsity <- NULL
+  prob$f$paramjac <- prob$f$jvp <- prob$f$vjp <- NULL
+  prob$f$mass_matrix <- NULL
+  prob$f$mass_operator <- M
   prob
 }
 

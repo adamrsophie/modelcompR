@@ -231,21 +231,34 @@ hessian_sparsity <- function(f, x, sd = NULL) {
 # ---------------------------------------------------------------------------
 # Colorings
 
-# column -> sorted rows of the nonzeros (a CSC pattern)
-.col_pattern <- function(M) {
-  m <- nrow(M); n <- ncol(M)
+# The structural entries (row, column) of a matrix as one general pattern
+# (an ngCMatrix), without a dense copy of a sparse matrix. Symmetric storage
+# is mirrored and an implicit unit diagonal made explicit. A prototype
+# (`stored = TRUE`, as jac_prototype) has every stored entry structural,
+# also a stored zero (every entry of a dense prototype); a mask has its
+# nonzero (or NA) entries.
+.structure_of <- function(M, stored = FALSE) {
   if (inherits(M, "sparseMatrix")) {
-    # the stored entries of a sparse matrix, without a dense copy
-    Tm <- methods::as(M, "TsparseMatrix")
-    x <- if (methods::.hasSlot(Tm, "x") && length(Tm@x) == length(Tm@i)) Tm@x else rep(TRUE, length(Tm@i))
-    keep <- is.na(x) | x != 0
+    Tm <- methods::as(methods::as(M, "generalMatrix"), "TsparseMatrix")
+    keep <- if (stored || !methods::.hasSlot(Tm, "x") || length(Tm@x) != length(Tm@i)) TRUE else
+      is.na(Tm@x) | Tm@x != 0
     i <- Tm@i[keep] + 1L; j <- Tm@j[keep] + 1L
   } else {
-    P <- as.matrix(M) != 0
+    P <- as.matrix(M)
+    if (stored) P[] <- TRUE
+    P <- P != 0
     P[is.na(P)] <- TRUE
     w <- which(P, arr.ind = TRUE)
     i <- w[, 1L]; j <- w[, 2L]
   }
+  Matrix::sparseMatrix(i = i, j = j, dims = dim(M), repr = "C")
+}
+
+# column -> sorted rows of the nonzeros (a CSC pattern)
+.col_pattern <- function(M) {
+  m <- nrow(M); n <- ncol(M)
+  Tm <- methods::as(.structure_of(M), "TsparseMatrix")
+  i <- Tm@i + 1L; j <- Tm@j + 1L
   o <- order(j, i)
   cols <- unname(split(i[o], factor(j[o], levels = seq_len(n))))
   o <- order(i, j)

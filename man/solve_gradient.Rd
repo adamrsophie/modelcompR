@@ -11,7 +11,8 @@ solve_gradient(
   ...,
   sensealg = NULL,
   allow_failure = FALSE,
-  loss_grad = NULL
+  loss_grad = NULL,
+  loss_rows = NULL
 )
 }
 \arguments{
@@ -39,8 +40,17 @@ other than \code{Success} or \code{Terminated}, such as \code{MaxIters}) is an e
 solution returning the derivative with respect to the saved values (a
 matrix shaped as \code{as.matrix(sol)}, or a list with that matrix as \code{u}
 and the derivative with respect to the final parameters as \code{p}). It
-replaces the finite differences of the loss in the saved values, which
-otherwise differentiate only the saved rows the loss reads.}
+replaces the finite differences of the loss in the saved values. With
+\code{save_idxs} the matrix has the saved components only, as the loss sees
+them. Values the loss reads by interpolation, \code{sol(t)}, are not saved
+values: they are still differenced, so \code{loss_grad} gives the
+derivative in the saved values alone.}
+
+\item{loss_rows}{Optional declaration of the saved rows the loss reads
+(indices of the rows of \code{as.matrix(sol)}, or \code{"last"} for a terminal
+loss): the loss is differentiated in those rows only, and treated as
+independent of the others. Without it every saved value is
+differentiated.}
 }
 \value{
 A list with the gradients \code{u0} and \code{p}, the loss value \code{value}
@@ -83,6 +93,15 @@ Events are differentiated, including the dependence of event times on
 the parameters. When the problem was built from a System whose initial
 values depend on the parameters through initialization, the gradient
 with respect to \code{p} includes that dependence.
+
+The \code{value} is the loss of the solution the gradient
+differentiates: the forward solve itself for the adjoint methods, and
+the solve of the state with its sensitivities for the forward methods,
+whose step sizes also control the error of the sensitivities (as in
+SciMLSensitivity), so it can differ from \code{loss(solve(...))} within the
+tolerances. A failed numerical stage (the forward solve, the backward
+adjoint solve or a checkpoint replay) is an error naming the stage, its
+retcode and the time where it stopped, unless \code{allow_failure = TRUE}.
 }
 \examples{
 prob <- ODEProblem(function(u, p, t) -p[1] * u, 1, c(0, 1), 2)

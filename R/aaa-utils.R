@@ -185,7 +185,7 @@ print.mtk_symmap <- function(x, ...) {
   nm <- .name(e)
   if (is.null(nm) || !nzchar(nm) || startsWith(nm, ".") || startsWith(nm, "_")) return(NULL)
   if (.type(e) == "Function") {
-    if (exists(nm, envir = .mtk$funs, inherits = FALSE)) return(NULL)
+    if (!is.null(.reg_get(nm))) return(NULL)
     if (nm %in% .math_function_names()) return(NULL)
   }
   "unknown"

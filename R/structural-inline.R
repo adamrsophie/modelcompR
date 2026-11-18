@@ -31,6 +31,118 @@
 .inline_linsolve_memo <- new.env(parent = emptyenv())
 .inline_ws <- new.env(parent = emptyenv())   # workspace of the integrator stepping now
 
+# ---------------------------------------------------------------------------
+# Branch state of inline nonlinear blocks
+#
+# A workspace (one per integrator) holds, for each nonlinear block, the
+# committed root zc: the root at the last accepted state. Every solve during
+# a step attempt (stages, Jacobian probes, rejected steps, event
+# localization) starts Newton from zc and never changes it; the root is
+# committed only by evaluating the right hand side at an accepted state
+# (.inline_commit), before each step attempt and at the end. The committed
+# roots of the accepted states form the branch history of the solution
+# (env$inline_hist): observations at any time, the forward calls of an
+# adjoint and checkpoint replays start from the history root at the nearest
+# accepted time before (.inline_replay_ws), so they follow the branch of the
+# trajectory. A fresh integrator, init and reinit start from the guesses, or
+# from a seed (prob$inline_seed, the history root of a checkpoint).
+
+.inline_ws_new <- function(seed = NULL) {
+  ws <- new.env(parent = emptyenv())
+  ws$.committing <- FALSE
+  ws$.hist_t <- numeric()
+  ws$.hist <- list()
+  for (id in names(seed)) {
+    m <- new.env(parent = emptyenv())
+    m$zc <- seed[[id]]
+    assign(id, m, envir = ws)
+  }
+  ws
+}
+
+# the block ids of a workspace
+.inline_ids <- function(ws) setdiff(ls(ws, all.names = FALSE), character())
+
+# f with the workspace bound while it runs (also outside .integ_step:
+# get_du, init, Jacobian probes)
+.inline_bind <- function(ws, fn) {
+  if (!is.function(fn)) return(fn)
+  force(ws)
+  function(...) {
+    old <- .inline_ws$cur
+    .inline_ws$cur <- ws
+    on.exit(.inline_ws$cur <- old)
+    fn(...)
+  }
+}
+
+# commit the roots at an accepted state by one evaluation of f there, and
+# record them in the history (once per accepted time)
+.inline_commit <- function(ws, f, u, p, t) {
+  # only a workspace that a nonlinear block has used commits: other systems
+  # (and the special right hand sides of SDE and DAE setups) are never
+  # evaluated again; before a block's first solve its start is the guess,
+  # which is what a commit would give
+  if (is.null(ws) || !length(.inline_ids(ws))) return(invisible())
+  ws$.committing <- TRUE
+  on.exit(ws$.committing <- FALSE)
+  old <- .inline_ws$cur
+  .inline_ws$cur <- ws
+  on.exit(.inline_ws$cur <- old, add = TRUE)
+  f(u, p, t)
+  ids <- .inline_ids(ws)
+  if (!length(ids)) return(invisible())
+  snap <- lapply(stats::setNames(ids, ids), function(id) get(id, envir = ws)$zc)
+  nh <- length(ws$.hist_t)
+  if (nh && ws$.hist_t[nh] == t) ws$.hist[[nh]] <- snap else {
+    ws$.hist_t <- c(ws$.hist_t, t)
+    ws$.hist[[nh + 1L]] <- snap
+  }
+  invisible()
+}
+
+# the history of a finished integrator, NULL without nonlinear blocks
+.inline_history <- function(ws) {
+  if (is.null(ws) || !length(ws$.hist)) return(NULL)
+  if (!length(ws$.hist[[1L]]) && !length(.inline_ids(ws))) return(NULL)
+  list(t = ws$.hist_t, roots = ws$.hist, cache = new.env(parent = emptyenv()))
+}
+
+# a read only workspace seeded with the history roots at the last accepted
+# time at or before t (in the direction of the history)
+.inline_replay_ws <- function(hist, t) {
+  ht <- hist$t
+  k <- if (length(ht) > 1L && ht[length(ht)] < ht[1L]) findInterval(-t, -ht) else findInterval(t, ht)
+  k <- max(1L, min(length(ht), k))
+  key <- as.character(k)
+  ws <- hist$cache[[key]]
+  if (is.null(ws)) {
+    ws <- .inline_ws_new(hist$roots[[k]])
+    ws$.replay <- TRUE
+    assign(key, ws, envir = hist$cache)
+  }
+  ws
+}
+
+# the history roots at the last accepted time at or before t, as a seed
+.inline_seed_at <- function(hist, t) {
+  ht <- hist$t
+  k <- if (length(ht) > 1L && ht[length(ht)] < ht[1L]) findInterval(-t, -ht) else findInterval(t, ht)
+  hist$roots[[max(1L, min(length(ht), k))]]
+}
+
+# functions of (..., t) evaluated in the replay workspace at their time t
+.inline_replay_fn <- function(fn, hist) {
+  if (!is.function(fn) || is.null(hist)) return(fn)
+  function(...) {
+    a <- list(...)
+    old <- .inline_ws$cur
+    .inline_ws$cur <- .inline_replay_ws(hist, a[[length(a)]])
+    on.exit(.inline_ws$cur <- old)
+    fn(...)
+  }
+}
+
 .inline_linsolve_fn <- function(j, n, ...) {
   v <- c(...)
   if (!identical(v, .inline_linsolve_memo$args)) {
@@ -45,21 +157,23 @@
 }
 
 # The derivative with respect to argument i, by the implicit function
-# theorem from the same factorization: dx/db_r = A^-1 e_r and dx/dA_rc =
-# -A^-1 e_r x_c, so component j needs row j of A^-1 (one transposed solve).
+# theorem: dx/db_r = A^-1 e_r and dx/dA_rc = -A^-1 e_r x_c, so component j
+# needs row j of A^-1. All rows come from one factorization of t(A) with n
+# right hand sides, kept while the arguments (the values of A and b) stay
+# the same, so the derivatives of every component and argument reuse it.
 .inline_linsolve_deriv <- function(i, j, n, ...) {
   if (i <= 2L) return(0)
   x <- .inline_linsolve_fn(j, n, ...)
   n <- as.integer(n); j <- as.integer(j)
   m <- .inline_linsolve_memo
-  if (!identical(m$wargs, list(m$args, j))) {
+  if (!identical(m$wargs, m$args)) {
     A <- matrix(m$args[seq_len(n * n)], n, n)
-    e <- numeric(n); e[j] <- 1
-    m$w <- tryCatch(solve(t(A), e), error = function(err) rep(NaN, n))
-    m$wargs <- list(m$args, j)
+    m$Ainv_t <- tryCatch(solve(t(A), diag(n)), error = function(err) matrix(NaN, n, n))
+    m$wargs <- m$args
   }
+  w <- m$Ainv_t[, j]
   k <- i - 2L
-  if (k <= n * n) -m$w[(k - 1L) %% n + 1L] * m$x[(k - 1L) %/% n + 1L] else m$w[k - n * n]
+  if (k <= n * n) -w[(k - 1L) %% n + 1L] * m$x[(k - 1L) %/% n + 1L] else w[k - n * n]
 }
 
 .INLINE_LINSOLVE <- register_symbolic("inline_linsolve", .inline_linsolve_fn, derivatives = .inline_linsolve_deriv)
@@ -238,12 +352,13 @@
     gv <- smap_get(gs, z)
     if (is.numeric(gv) && length(gv) == 1L && is.finite(gv)) gv else 0
   }, 0)
-  # Inside a step of an integrator, Newton's method starts from the last
-  # root that integrator found, so a trajectory follows its branch as the
-  # nonlinear solver cache of an integrator does in ModelingToolkit. Each
-  # integrator has its own workspace (.inline_ws$cur, set by
-  # .integ_step()), so integrators of one compiled system never see each
-  # other's history. Outside an integrator the solve starts from the
+  # Inside an integrator (or a replay of a solution's branch history) Newton's
+  # method starts from the committed root of the workspace, so a trajectory
+  # follows its branch as the nonlinear solver cache of an integrator does
+  # in ModelingToolkit; trial evaluations never move it (see
+  # .inline_commit). When the branch ends (a fold: no root near the
+  # committed one) the solve continues from the guesses, the only
+  # continuation there is. Outside an integrator the solve starts from the
   # guesses and is a function of its inputs alone. The one entry memo
   # shares a solve among the components of the block.
   .mtk$inline_nl_counter <- .mtk$inline_nl_counter + 1L
@@ -253,16 +368,19 @@
   root <- function(q) {
     ws <- .inline_ws$cur
     m <- if (is.null(ws)) st else (ws[[id]] %||% (ws[[id]] <- new.env(parent = emptyenv())))
-    if (is.null(m$q) || !identical(q, m$q)) {
-      start <- if (is.null(ws)) z0 else m$z %||% z0
-      sol <- .newton_solve(function(z) F(z, q), start, tol = 1e-13)
-      if ((!sol$converged || any(!is.finite(sol$x))) && !identical(start, z0))
-        sol <- .newton_solve(function(z) F(z, q), z0, tol = 1e-13)
+    start <- if (is.null(ws)) z0 else m$zc %||% z0
+    if (is.null(m$q) || !identical(q, m$q) || !identical(start, m$start)) {
+      # a singular Newton system (at a fold) counts as no convergence
+      newton <- function(x0) tryCatch(.newton_solve(function(z) F(z, q), x0, tol = 1e-13),
+                                       error = function(e) list(x = x0 * NaN, converged = FALSE))
+      sol <- newton(start)
+      if ((!sol$converged || any(!is.finite(sol$x))) && !identical(start, z0)) sol <- newton(z0)
       if (!sol$converged || any(!is.finite(sol$x)))
         stop("the inline nonlinear solve of ", paste(vapply(Z, format, ""), collapse = ", "),
              " did not converge", call. = FALSE)
-      m$q <- q; m$z <- sol$x; m$dz <- NULL
+      m$q <- q; m$z <- sol$x; m$dz <- NULL; m$start <- start
     }
+    if (!is.null(ws) && isTRUE(ws$.committing)) m$zc <- m$z
     m
   }
   fn <- function(j, ...) root(as.numeric(c(...)))$z[as.integer(j)]

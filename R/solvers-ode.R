@@ -577,6 +577,12 @@ RK4 <- function() {
 # representation never stands for the identity.
 .as_mass <- function(M, n = NULL) {
   if (is.null(M)) return(NULL)
+  # a sparse mass keeps its structure as the attribute "sparse" of the dense
+  # matrix: the products of each step and the Newton matrices of a sparse
+  # Jacobian use it (.mass_mul, .mass_sub), every other routine sees the
+  # base R matrix
+  S <- if (inherits(M, "sparseMatrix") && !is.complex(M@x %||% 0))
+    methods::as(methods::as(M, "generalMatrix"), "CsparseMatrix")
   if (inherits(M, "Matrix") || inherits(M, "AbstractSciMLOperator")) M <- as.matrix(M)
   if (is.numeric(M) && is.null(dim(M)) && length(M) == 1L) {
     if (is.null(n)) stop("a scalar mass matrix needs the number of states", call. = FALSE)
@@ -586,9 +592,11 @@ RK4 <- function() {
     stop("unsupported mass matrix of class ", class(M)[1L],
          "; use a base R matrix, a Matrix package matrix or a SciML operator", call. = FALSE)
   if (is.logical(M)) storage.mode(M) <- "double"
+  if (!all(is.finite(M))) stop("the mass matrix has non-finite entries (NA, NaN or Inf)", call. = FALSE)
   if (nrow(M) != ncol(M) || (!is.null(n) && nrow(M) != n))
     stop("the mass matrix is ", nrow(M), " x ", ncol(M), " but the problem has ",
          if (is.null(n)) "a square system" else paste(n, "states"), call. = FALSE)
+  if (!is.null(S)) attr(M, "sparse") <- S
   M
 }
 
@@ -813,9 +821,14 @@ solve.ODEProblem <- function(a, b, ...) {
   if (is_dae) integ$du <- .as_num(prob$du0)
   M <- .as_mass(prob$f$mass_matrix, length(integ$u))
   mm <- !is_dae && !.is_identity_mass(M)
-  ctx <- list(f = if (is_dae) .shape_f(prob$f$f, dim(prob$u0)) else .checked_f(.shape_f(prob$f$f, dim(prob$u0))), fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
-              p = integ$p, mass = if (mm) M else NULL, jac = prob$f$jac, sparsity = prob$f$sparsity,
-              tgrad = prob$f$tgrad, abstol = abstol, reltol = reltol, n = length(integ$u),
+  # the branch workspace of inline nonlinear blocks (R/structural-inline.R):
+  # fresh at every init and reinit, seeded for a checkpoint replay; f and
+  # its derivatives run in it wherever they are called
+  inline_ws <- .inline_ws_new(prob$inline_seed)
+  ctx <- list(f = .inline_bind(inline_ws, if (is_dae) .shape_f(prob$f$f, dim(prob$u0)) else
+                .checked_f(.shape_f(prob$f$f, dim(prob$u0)))), fobj = prob$f, f1 = prob$f$f1, f2 = prob$f$f2, jac1 = prob$f$jac1,
+              p = integ$p, mass = if (mm) M else NULL, jac = .inline_bind(inline_ws, prob$f$jac), sparsity = prob$f$sparsity,
+              tgrad = .inline_bind(inline_ws, prob$f$tgrad), abstol = abstol, reltol = reltol, n = length(integ$u),
               adaptive = adaptive, composite = length(algs) > 1L, dae = is_dae,
               algebraic = if (mm) rowSums(abs(M)) == 0 else NULL,
               differential_vars = if (is_dae) prob$differential_vars else
@@ -847,14 +860,16 @@ solve.ODEProblem <- function(a, b, ...) {
     stats$nf <<- stats$nf + as.integer(cache$nf0 %||% 1L)
     stats$nf2 <<- stats$nf2 + as.integer(cache$nf20 %||% 0L)
   }
+  red_idx <- NULL
   finish <- function(retcode, ts, us, steps, alg_choice = NULL) {
     # a state resized during the integration (addat, deleteat) leaves NA in
     # the components that did not exist yet
-    nmax <- max(c(length(prob$u0), lengths(us)))
+    nmax <- if (is.null(red_idx)) max(c(length(prob$u0), lengths(us))) else length(red_idx)
     if (length(us) && any(lengths(us) != nmax))
       us <- lapply(us, function(v) c(v, rep(NA_real_, nmax - length(v))))
-    U <- if (length(us)) do.call(rbind, us) else matrix(numeric(), 0L, length(prob$u0))
-    if (ncol(U) == length(prob$u0)) colnames(U) <- names(prob$u0)
+    U <- if (length(us)) do.call(rbind, us) else matrix(numeric(), 0L, nmax)
+    if (is.null(red_idx) && ncol(U) == length(prob$u0)) colnames(U) <- names(prob$u0)
+    if (!is.null(red_idx) && !is.null(names(prob$u0))) colnames(U) <- names(prob$u0)[red_idx]
     # stages computed only for interpolation (Verner methods)
     stats$nf <- stats$nf + ctx$lazy_nf$n
     if (!is.null(ctx$counts$nf2)) stats$nf2 <- stats$nf2 + ctx$counts$nf2
@@ -870,19 +885,27 @@ solve.ODEProblem <- function(a, b, ...) {
     # save_idxs in Julia); the solution then interpolates linearly between
     # the saved values, and other variables and observed values are
     # unavailable
-    if (identical(opts$save_idxs_storage %||% "full", "reduced") && !is.null(env$save_idxs)) {
-      env$reduced_idxs <- env$save_idxs
-      env$U <- env$U[, env$save_idxs, drop = FALSE]
+    if (!is.null(red_idx)) {
+      env$reduced_idxs <- red_idx
       env$save_idxs <- seq_len(ncol(env$U))
       env$steps <- NULL
       env$dense <- FALSE
       env$u_dim <- NULL
-    } else if (!identical(opts$save_idxs_storage %||% "full", "full") &&
-               !identical(opts$save_idxs_storage, "reduced"))
-      stop("`save_idxs_storage` must be \"full\" or \"reduced\"", call. = FALSE)
+    }
     if (length(integ$param_p) > 1L)
       env$param_history <- list(t = integ$param_t, p = do.call(rbind, integ$param_p))
     if (!is.null(alg_choice)) env$alg_choice <- alg_choice
+    # what ran: sol$execution
+    ad <- .ctx_autodiff(ctx)
+    env$execution <- list(
+      algorithm = alg$name %||% class(alg)[1L], arithmetic = if (.arith$native) "native" else "reference",
+      reltol = reltol, abstol = abstol,
+      jacobian = if (is.function(prob$f$jac)) "analytic" else
+        if (inherits(ad, "AutoSparse") && !is.null(prob$f$sparsity)) "sparse, colored differences" else class(ad)[1L],
+      mass = if (!is.null(prob$f$mass_operator)) "changing operator, solved as M(u, p, t)^-1 f" else
+        if (mm) "constant" else "identity",
+      storage = if (!is.null(env$reduced_idxs)) "reduced" else "full",
+      save_idxs = opts$save_idxs, registrations = prob$registry$version)
     if (is_dae) class(sol) <- c("DAESolution", class(sol))
     sol
   }
@@ -932,9 +955,15 @@ solve.ODEProblem <- function(a, b, ...) {
   integ$param_p <- list(integ$p)
   ts <- numeric(); us <- list()
   steps <- list()
+  # save_idxs_storage = "reduced" keeps only the saved components from the
+  # first saved value on (no full matrix is built)
+  if (!identical(opts$save_idxs_storage %||% "full", "full") && !identical(opts$save_idxs_storage, "reduced"))
+    stop("`save_idxs_storage` must be \"full\" or \"reduced\"", call. = FALSE)
+  red_idx <- if (identical(opts$save_idxs_storage, "reduced") && !is.null(opts$save_idxs))
+    get_save_idxs_and_saved_subsystem(prob, opts$save_idxs)$save_idxs
   push_save <- function(t, u) {
     ts[length(ts) + 1L] <<- t
-    us[[length(us) + 1L]] <<- u
+    us[[length(us) + 1L]] <<- if (is.null(red_idx)) u else u[red_idx]
   }
   if (save_start) push_save(t0, integ$u)
   u_pre <- integ$u
@@ -1048,17 +1077,24 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
                          "dense", "dtmax", "dtmin", "dtmin_at", "fail_code", "fail_msg", "finish", "is_dae",
                          "maxiters", "mm", "opts", "prob",
                          "push_save", "reltol", "disc_next", "add_init", "save_end", "save_everystep",
-                         "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us"))
+                         "save_start", "saveat", "steps", "t0", "tdir", "tf", "ts", "us", "inline_ws", "red_idx",
+                         "end_state", "senv"))
 
 .integ_step <- function(I) {
   old_norm <- .ode_norm$f
   old_ws <- .inline_ws$cur
   .ode_norm$f <- I$internalnorm
-  if (is.null(I$inline_ws)) I$inline_ws <- new.env(parent = emptyenv())
+  if (is.null(I$inline_ws)) I$inline_ws <- .inline_ws_new()
   .inline_ws$cur <- I$inline_ws
   on.exit({ .ode_norm$f <- old_norm; .inline_ws$cur <- old_ws })
   evalq(repeat {
     if (done) break
+    # commit the branch roots at the accepted state before the next attempt
+    if (!is_dae && exists("inline_ws", inherits = FALSE) &&
+        !(identical(inline_ws$.cu, integ$u) && identical(inline_ws$.ct, integ$t))) {
+      .inline_commit(inline_ws, ctx$f, integ$u, integ$p, integ$t)
+      inline_ws$.cu <- integ$u; inline_ws$.ct <- integ$t
+    }
     if (!(tdir * integ$t < tdir * tf && !integ$terminate)) {
       done <- TRUE
       break
@@ -1400,12 +1436,21 @@ utils::globalVariables(c("AS", "M", "abstol", "force_dtmin", "isoutofdomain", "u
     if (!length(ts) || ts[length(ts)] != integ$t) push_save(integ$t, integ$u)
   }
   if (integ$terminate && retcode == "Success") retcode <- "Terminated"
+  # the terminal state after the events at the final time, kept whether or
+  # not the end is saved, so sol(t_end) obeys the event side policy
+  end_state <- list(t = integ$t, u = integ$u)
   # finalize affects run after the last save; parameter changes are recorded
   for (cb in c(cbs$continuous, cbs$discrete)) if (!is.null(cb$finalize)) cb$finalize(integ)
   if (!identical(integ$p, integ$param_p[[length(integ$param_p)]])) {
     integ$param_t <- c(integ$param_t, integ$t)
     integ$param_p[[length(integ$param_p) + 1L]] <- integ$p
   }
-  finish(retcode, ts, us, steps, alg_choice)
+  if (!is_dae && exists("inline_ws", inherits = FALSE) && !(identical(inline_ws$.cu, end_state$u) && identical(inline_ws$.ct, end_state$t)))
+    .inline_commit(inline_ws, ctx$f, end_state$u, integ$p, end_state$t)
+  sol <- finish(retcode, ts, us, steps, alg_choice)
+  senv <- .sol_env(sol)
+  senv$end_state <- end_state
+  if (exists("inline_ws", inherits = FALSE)) senv$inline_hist <- .inline_history(inline_ws)
+  sol
   }, I)
 }

@@ -438,7 +438,12 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   if (is.null(P)) return(function(x) x)
   if (inherits(P, "InvPreconditioner")) return(function(x) as.numeric(P$P %*% x))
   if (is.function(P)) return(P)
-  # a matrix preconditioner is factorized once per solve
+  # a matrix preconditioner is factorized once per solve (a sparse one
+  # with the sparse LU of the Matrix package)
+  if (inherits(P, "sparseMatrix")) {
+    F <- Matrix::lu(methods::as(methods::as(P, "generalMatrix"), "CsparseMatrix"))
+    return(function(x) as.numeric(Matrix::solve(F, x)))
+  }
   F <- qr(as.matrix(P))
   function(x) as.numeric(qr.coef(F, x))
 }
@@ -497,16 +502,42 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   x
 }
 
-# Krylov methods: x such that A x = b to |r| <= max(abstol, reltol |b|)
+# Krylov methods: x such that A x = b to |r| <= max(abstol, reltol |b|).
+# The system is solved for b / s and x0 / s with s the largest |b_i|, so the
+# norms, dot products and rotations of every method stay in range for
+# finite right hand sides of any scale; abstol is scaled with them.
 .krylov <- function(A, b, method, opts) {
+  s <- max(abs(b))
+  if (is.finite(s) && s > 0 && (s > 2^500 || s < 2^-500)) {
+    opts$abstol <- (opts$abstol %||% 0) / s
+    if (!is.null(opts$u0)) opts$u0 <- as.numeric(opts$u0) / s
+    r <- .krylov_scaled(A, b / s, method, opts)
+    r$u <- r$u * s
+    r$resid <- r$resid * s
+    r$stats$residual_norm <- r$stats$residual_norm * s
+    r$stats$preconditioned_residual_norm <- r$stats$preconditioned_residual_norm * s
+    r$stats$tolerance <- r$stats$tolerance * s
+    return(r)
+  }
+  .krylov_scaled(A, b, method, opts)
+}
+
+.krylov_scaled <- function(A, b, method, opts) {
   mv <- if (is.function(A)) A else function(x) as.numeric(A %*% x)
   n <- length(b)
   nx <- if (is.function(A)) n else ncol(A)
-  tol <- max(opts$abstol %||% 0, (opts$reltol %||% sqrt(.Machine$double.eps)) * sqrt(sum(b^2)))
+  # Euclidean norms scaled by the largest entry, so finite vectors near the
+  # overflow or underflow thresholds keep their size
+  nrm <- function(v) {
+    s <- max(abs(v))
+    if (!is.finite(s) || s == 0) return(s)
+    s * sqrt(sum((v / s)^2))
+  }
+  tol <- max(opts$abstol %||% 0, (opts$reltol %||% sqrt(.Machine$double.eps)) * nrm(b))
   maxit <- opts$maxiters %||% (10L * n)
   Pl <- .precond(opts$Pl); Pr <- .precond(opts$Pr)
   x <- as.numeric(opts$u0 %||% numeric(nx))
-  nrm <- function(v) sqrt(sum(v^2))
+  pl_res <- NA_real_
   it <- 0L
   if (method %in% c("cg")) {
     r <- b - mv(x); z <- Pl(r); p <- z; rz <- sum(r * z)
@@ -545,7 +576,11 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       if (solved || it >= maxit) break
       r <- Pl(r0)
       beta <- nrm(r)
-      if (beta == 0) break
+      if (!is.finite(beta) || beta == 0) break
+      # the inner iteration measures the left preconditioned residual: its
+      # stopping test asks for the reduction the original residual needs,
+      # and the restart test checks the original residual itself
+      ptol <- beta * tol / nrm(r0)
       V <- matrix(0, n, restart + 1L); H <- matrix(0, restart + 1L, restart)
       Z <- matrix(0, n, restart)
       V[, 1L] <- r / beta
@@ -559,6 +594,7 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       for (k in seq_len(restart)) {
         Z[, k] <- Pr(V[, k])
         w <- Pl(mv(Z[, k]))
+        w0 <- nrm(w)
         for (j in seq_len(k)) {
           H[j, k] <- sum(w * V[, j])
           w <- w - H[j, k] * V[, j]
@@ -572,13 +608,16 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
           h[j + 1L] <- -sn[j] * h[j] + cs[j] * h[j + 1L]
           h[j] <- tmp
         }
-        den <- sqrt(h[k]^2 + h[k + 1L]^2)
+        hm <- max(abs(h[k]), abs(h[k + 1L]))
+        den <- if (hm == 0) 0 else hm * sqrt((h[k] / hm)^2 + (h[k + 1L] / hm)^2)
         if (den == 0) { cs[k] <- 1; sn[k] <- 0 } else { cs[k] <- h[k] / den; sn[k] <- h[k + 1L] / den }
         R[seq_len(k), k] <- c(h[seq_len(k - 1L)], cs[k] * h[k] + sn[k] * h[k + 1L])
         g[k + 1L] <- -sn[k] * g[k]
         g[k] <- cs[k] * g[k]
         res <- abs(g[k + 1L])
-        if (H[k + 1L, k] < 1e-14 || res <= tol || it >= maxit) break
+        pl_res <- res
+        # breakdown relative to the size of the new Krylov vector
+        if (!(H[k + 1L, k] > 1e-14 * w0) || res <= ptol || it >= maxit) break
         V[, k + 1L] <- w / H[k + 1L, k]
       }
       Rk <- R[seq_len(k_used), seq_len(k_used), drop = FALSE]
@@ -618,8 +657,14 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
   } else stop("unknown Krylov method ", method, call. = FALSE)
   # the return code of the KrylovJL wrapper of LinearSolve (solve! in
   # iterative_wrappers.jl) from the solved flag and status of Krylov.jl
+  resid <- b - mv(x)
+  # Success is the requested residual of the original system, checked in
+  # the same scale safe norm (nonfinite results are not solutions)
+  # (a least squares method is judged by its normal equations instead)
+  solved <- isTRUE(solved) && all(is.finite(x)) && (method == "lsmr" || nrm(resid) <= tol)
   retcode <- if (solved) "Success" else if (it >= maxit) "MaxIters" else "Failure"
-  list(u = x, iters = it, resid = b - mv(x), retcode = retcode)
+  list(u = x, iters = it, resid = resid, retcode = retcode,
+       stats = list(residual_norm = nrm(resid), preconditioned_residual_norm = pl_res, tolerance = tol))
 }
 
 .lin_solve <- function(prob, alg, opts, cache = new.env(parent = emptyenv())) {
@@ -628,13 +673,27 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
     # Woodbury without the inverse of C: with z = A^-1 b and W = A^-1 U,
     # x = z - W (I + C V' W)^-1 C V' z, from one factorization of A; the
     # residual uses the low rank form, not the full matrix
-    F <- qr(A$A)
-    z <- qr.coef(F, b); W <- qr.coef(F, A$U)
+    # The base is factorized by LU (no rank truncation); when it is singular
+    # or badly conditioned, or the update gives a poor residual, the
+    # assembled matrix A + U C V' is solved instead.
     C <- as.matrix(A$C)
-    cap <- diag(nrow(C)) + C %*% crossprod(A$V, W)
-    u <- tryCatch(as.numeric(z - W %*% solve(cap, C %*% crossprod(A$V, z))),
-                  error = function(e) rep(NaN, length(b)))
-    r <- if (all(is.finite(u))) as.numeric(A$A %*% u + A$U %*% (C %*% crossprod(A$V, u)) - b) else rep(NaN, length(b))
+    full <- function() A$A + A$U %*% C %*% t(A$V)
+    resid_of <- function(u) as.numeric(A$A %*% u + A$U %*% (C %*% crossprod(A$V, u)) - b)
+    sparse <- inherits(A$A, "Matrix")
+    rc <- tryCatch(if (sparse) Matrix::rcond(A$A) else rcond(A$A), error = function(e) 0)
+    u <- if (is.finite(rc) && rc > sqrt(.Machine$double.eps)) tryCatch({
+      F <- if (sparse) Matrix::lu(A$A) else NULL
+      sol <- function(B) if (sparse) as.matrix(Matrix::solve(F, B)) else base::solve(A$A, B)
+      z <- sol(b); W <- sol(A$U)
+      cap <- diag(nrow(C)) + C %*% crossprod(A$V, W)
+      as.numeric(z - W %*% base::solve(cap, C %*% crossprod(A$V, z)))
+    }, error = function(e) NULL)
+    scale <- sum(abs(b)) + 1e-300
+    if (is.null(u) || !all(is.finite(u)) || sum(abs(resid_of(u))) > 1e3 * .Machine$double.eps * scale *
+        max(1, 1 / max(rc, .Machine$double.eps)))
+      u <- tryCatch(as.numeric(if (sparse) Matrix::solve(full(), b) else base::solve(full(), b)),
+                    error = function(e) rep(NaN, length(b)))
+    r <- if (all(is.finite(u))) resid_of(u) else rep(NaN, length(b))
     return(list(u = u, resid = r, iters = 1L, alg = alg %||% LUFactorization()))
   }
   # Matrix package matrices: a sparse LU or Cholesky factorization of the
@@ -648,12 +707,13 @@ LowRankUpdatedMatrix <- function(A, U, C, V) structure(list(A = A, U = as.matrix
       r <- if (all(is.finite(u))) as.numeric(A %*% u - b) else rep(NaN, length(b))
       return(list(u = u, resid = r, iters = 1L, alg = alg %||% KLUFactorization()))
     }
-    A <- as.matrix(A)
+    # the Krylov methods only multiply: the matrix stays sparse
+    if (!identical(alg$method, "krylov")) A <- as.matrix(A)
   }
   # SciMLOpFactorization (R/solvers-amf.R) factorizes the operator part by part
   if (identical(alg$method, "sciml_op")) return(.amf_lin_solve(A, b, alg, cache))
   A <- .lin_prepare_A(A, opts, cache)
-  if (!is.matrix(A) && !is.function(A)) A <- matrix(A, nrow = length(b))
+  if (!is.matrix(A) && !is.function(A) && !inherits(A, "Matrix")) A <- matrix(A, nrow = length(b))
   alg <- alg %||% .lin_default(A, opts$assumptions %||% OperatorAssumptions())
   if (identical(alg$method, "function")) {
     u <- as.numeric(alg$fun(A, b, opts$u0 %||% numeric(length(b)), prob$p))
@@ -779,22 +839,38 @@ solve.EigenvalueProblem <- function(a, b = NULL, ...) {
   A <- as.matrix(a$A)
   M <- if (is.null(a$B)) A else solve(as.matrix(a$B), A)
   n <- nrow(M)
-  if (inherits(b, "ArnoldiMethodJL") && n > 2L * (b$krylovdim %||% 30L)) {
+  # the Arnoldi iteration works in real arithmetic; a complex matrix is
+  # solved by the dense eigendecomposition
+  if (inherits(b, "ArnoldiMethodJL") && !is.complex(M) && n > 2L * (b$krylovdim %||% 30L)) {
     r <- .arnoldi(M, a$nev, a$which, b$krylovdim, tol = opts$tol %||% 1e-10,
                   maxrestarts = opts$maxiters %||% 50L)
-    return(EigenvalueSolution(r$values, r$vectors, r$retcode, r$residuals))
+    out <- EigenvalueSolution(r$values, r$vectors, r$retcode, r$residuals)
+    out$nev <- a$nev; out$nconverged <- r$nconverged
+    return(out)
   }
   e <- eigen(M)
   o <- .eig_order(e$values, a$which)[seq_len(min(a$nev, n))]
-  EigenvalueSolution(e$values[o], e$vectors[, o, drop = FALSE])
+  # more pairs than the dimension cannot be returned: the partial result
+  # says how many were requested and found
+  out <- EigenvalueSolution(e$values[o], e$vectors[, o, drop = FALSE],
+                            retcode = if (a$nev > n) "Failure" else "Success")
+  out$nev <- a$nev; out$nconverged <- length(o)
+  out
 }
 
-# Arnoldi iteration with explicit restarts on the wanted Ritz vectors. The
-# smallest magnitude eigenvalues are found by shift and invert (the largest
-# of M^-1, from one factorization). The retcode is Success only when the
-# residual |M x - lambda x| / |x| of every returned pair is within
-# tol * max(1, |lambda|); otherwise the pairs are returned with MaxIters and
-# their residuals.
+# Arnoldi iteration with thick restarts and Rayleigh-Ritz extraction. Each
+# cycle keeps the wanted Ritz vectors of the last one (as a real orthonormal
+# basis), adds a fresh random direction and extends the basis by Arnoldi
+# steps; a breakdown (an invariant subspace) continues with another random
+# direction. The Ritz pairs come from the projection V' op V, so eigenvalues
+# of any multiplicity get independent vectors. The smallest magnitude
+# eigenvalues are found by shift and invert (the largest of M^-1, from one
+# factorization). The retcode is Success only for the complete result: nev
+# pairs with independent vectors, each with residual |M x - lambda x| / |x|
+# within tol * max(1, |lambda|); otherwise the best pairs are returned with
+# MaxIters, their residuals and the number converged.
+.sort_by_key <- function(v, which) v[.eig_order(v, which)]
+
 .arnoldi <- function(M, nev, which, m, tol = 1e-10, maxrestarts = 50L) {
   n <- nrow(M)
   op <- function(x) as.numeric(M %*% x)
@@ -807,36 +883,62 @@ solve.EigenvalueProblem <- function(a, b = NULL, ...) {
     }
   }
   target <- if (inv) "LM" else which
-  m <- max(as.integer(m), min(n, nev + 1L))
-  v <- stats::rnorm(n)
+  m <- min(n, max(as.integer(m), nev + 1L))
   check <- function(values, X) {
     vapply(seq_along(values), function(j) {
       x <- X[, j]
       sqrt(sum(Mod(M %*% x - values[j] * x)^2)) / sqrt(sum(Mod(x)^2))
     }, 0)
   }
+  # add z to the orthonormal columns of V (two passes of Gram Schmidt); NULL
+  # when z lies in their span
+  extend <- function(V, z) {
+    z0 <- sqrt(sum(z^2))
+    if (ncol(V)) for (pass in 1:2) z <- z - as.numeric(V %*% crossprod(V, z))
+    nz <- sqrt(sum(z^2))
+    if (!is.finite(nz) || nz <= 1e-10 * max(z0, .Machine$double.xmin)) return(NULL)
+    cbind(V, z / nz)
+  }
+  keep <- matrix(0, n, 0L)
+  ok <- FALSE
+  w0 <- stats::rnorm(n)
+  prev <- NULL
   for (restart in seq_len(maxrestarts)) {
-    mk <- m
-    V <- matrix(0, n, mk + 1L); H <- matrix(0, mk + 1L, mk)
-    V[, 1L] <- v / sqrt(sum(v^2))
-    for (k in seq_len(mk)) {
-      w <- op(V[, k])
-      # two passes of Gram Schmidt keep the basis orthogonal
-      for (pass in 1:2) for (j in seq_len(k)) {
-        hjk <- sum(w * V[, j]); H[j, k] <- H[j, k] + hjk; w <- w - hjk * V[, j]
-      }
-      H[k + 1L, k] <- sqrt(sum(w^2))
-      if (H[k + 1L, k] < 1e-14) { mk <- k; break }
-      V[, k + 1L] <- w / H[k + 1L, k]
+    V <- keep
+    mk <- min(n, ncol(keep) + m)
+    w <- w0
+    tries <- 0L
+    while (ncol(V) < mk && tries < 5L * n) {
+      V2 <- extend(V, w)
+      if (is.null(V2)) { w <- stats::rnorm(n); tries <- tries + 1L; next }
+      V <- V2
+      w <- op(V[, ncol(V)])
     }
-    e <- eigen(H[seq_len(mk), seq_len(mk), drop = FALSE])
-    o <- .eig_order(e$values, target)[seq_len(min(nev, mk))]
-    X <- V[, seq_len(mk), drop = FALSE] %*% e$vectors[, o, drop = FALSE]
+    OV <- vapply(seq_len(ncol(V)), function(j) op(V[, j]), numeric(n))
+    H <- crossprod(V, matrix(OV, n))
+    e <- eigen(H)
+    o <- .eig_order(e$values, target)[seq_len(min(nev, ncol(V)))]
+    X <- V %*% e$vectors[, o, drop = FALSE]
     vals <- if (inv) 1 / e$values[o] else e$values[o]
     res <- check(vals, X)
-    if (all(res <= tol * pmax(1, Mod(vals))))
-      return(list(values = vals, vectors = X, retcode = "Success", residuals = res))
-    v <- Re(rowSums(X))
+    ok <- res <= tol * pmax(1, Mod(vals))
+    complete <- length(vals) == nev && all(ok) && qr(X)$rank == nev
+    # a complete set is confirmed by one more cycle from a fresh random
+    # direction: a missed copy of a repeated eigenvalue would appear there
+    if (complete && !is.null(prev) && length(prev) == nev &&
+        all(Mod(.sort_by_key(vals, target) - .sort_by_key(prev, target)) <= tol * pmax(1, Mod(vals)) * 10))
+      return(list(values = vals, vectors = X, retcode = "Success", residuals = res, nconverged = nev))
+    prev <- if (complete) vals
+    # the next cycle continues the Krylov space from the residuals of the
+    # unconverged pairs, or from a fresh random direction to confirm
+    R <- M %*% X - X %*% diag(vals, length(vals))
+    w0 <- if (complete || all(ok)) stats::rnorm(n) else Re(rowSums(R[, !ok, drop = FALSE]))
+    # the next cycle starts from the wanted Ritz vectors (real and imaginary
+    # parts, orthonormalized)
+    B <- cbind(Re(X), if (is.complex(X)) Im(X))
+    keep <- matrix(0, n, 0L)
+    for (j in seq_len(ncol(B))) { K2 <- extend(keep, B[, j]); if (!is.null(K2)) keep <- K2 }
+    if (ncol(keep) >= n - 1L) keep <- keep[, seq_len(max(0L, n - 2L)), drop = FALSE]
   }
-  list(values = vals, vectors = X, retcode = "MaxIters", residuals = res)
+  list(values = vals, vectors = X, retcode = "MaxIters", residuals = res, nconverged = sum(ok))
 }

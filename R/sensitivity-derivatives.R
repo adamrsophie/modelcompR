@@ -34,7 +34,10 @@
 
 # The derivative bundle of an ODE problem: f, the Jacobians and the vector
 # Jacobian product vjp(l, u, p, t) = list(u = J' l, p = fp' l).
-.sens_fns <- function(prob, sensealg = NULL) {
+# the derivatives are generated with the registrations of the problem
+.sens_fns <- function(prob, sensealg = NULL) .with_registry(prob$registry, .sens_fns_impl(prob, sensealg))
+
+.sens_fns_impl <- function(prob, sensealg = NULL) {
   f <- prob$f$f
   sys <- prob$sys
   M <- prob$f$mass_matrix
@@ -92,7 +95,7 @@
   us <- unknowns(sys)
   ps <- .problem_params(sys)
   iv <- .f(sys, "iv")
-  key <- paste(c(.keys(rhs), "|", .keys(us), "|", .keys(ps), "|", .mtk$fun_version %||% 0L), collapse = ";")
+  key <- paste(c(.keys(rhs), "|", .keys(us), "|", .keys(ps), "|", .reg_version()), collapse = ";")
   # ponytail: the cache is dropped as a whole once it holds 64 systems
   if (is.null(.mtk$sens_cache) || length(.mtk$sens_cache) >= 64L) .mtk$sens_cache <- new.env(parent = emptyenv())
   # names are limited to 10000 bytes: a long key is stored under its hash,
@@ -197,7 +200,10 @@
       if (!is.null(ck$pseg)) pr$p <- ck$pseg[[seg_of[k] + 1L]]
       pr$kwargs$callback <- NULL
       pr$kwargs$saveat <- NULL
-      s <- .integrate(pr, ck$alg, c(ck$opts, list(dense = TRUE, save_everystep = TRUE)))
+      # the replay starts on the branch of the forward solve
+      if (!is.null(ck$inline_hist)) pr$inline_seed <- .inline_seed_at(ck$inline_hist, ck$times[k])
+      s <- .sens_stage_ok(.integrate(pr, ck$alg, c(ck$opts, list(dense = TRUE, save_everystep = TRUE))),
+                          "checkpoint replay")
       tr$cache <- list(k = k, steps = .sol_env(s)$steps)
       tr$cache$starts <- vapply(tr$cache$steps, `[[`, 0, "t0")
     }
